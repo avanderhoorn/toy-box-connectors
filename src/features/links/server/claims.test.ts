@@ -295,6 +295,8 @@ describe("admitting who posted the code", () => {
       ["deactivated", slackPerson({ deleted: true })],
       ["other_workspace", slackPerson({ teamId: "T-other" })],
       ["unverified", slackPerson({ id: "U-mallory" })],
+      ["unverified", slackPerson({ isBot: null })],
+      ["unverified", slackPerson({ isRestricted: null })],
       ["user_not_found", null],
     ];
     for (const [problem, person] of refusals) {

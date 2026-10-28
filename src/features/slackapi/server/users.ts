@@ -30,7 +30,7 @@ type UserRow = {
   enterprise_id: string | null;
   display_name: string | null;
   real_name: string | null;
-  is_bot: number;
+  is_bot: number | null;
   deleted: number;
   refreshed_at: number;
 };
@@ -50,7 +50,7 @@ export async function writeSlackPerson(
     enterprise_id: person.enterpriseId,
     display_name: person.displayName,
     real_name: person.realName,
-    is_bot: person.isBot || person.isWorkflowBot ? 1 : 0,
+    is_bot: person.isBot || person.isWorkflowBot ? 1 : person.isBot === null ? null : 0,
     deleted: person.deleted ? 1 : 0,
     refreshed_at: readAt,
   };

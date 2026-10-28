@@ -83,21 +83,22 @@ test("each account flag reads as Slack set it", () => {
   }
 });
 
-test("a flag Slack leaves out reads as unset, as Slack documents for deleted", () => {
+test("a missing deleted or workflow bot flag reads as unset, as Slack leaves them out for a member", () => {
+  const { deleted: _deleted, is_workflow_bot: _isWorkflowBot, ...bare } = member;
+  expect(slackUserSchema.parse(bare)).toMatchObject({ isWorkflowBot: false, deleted: false });
+});
+
+test("a bot or guest flag Slack leaves out stays unknown rather than assumed", () => {
   const {
-    deleted: _deleted,
     is_bot: _isBot,
-    is_workflow_bot: _isWorkflowBot,
     is_restricted: _isRestricted,
     is_ultra_restricted: _isUltraRestricted,
     ...bare
   } = member;
   expect(slackUserSchema.parse(bare)).toMatchObject({
-    isBot: false,
-    isWorkflowBot: false,
-    deleted: false,
-    isRestricted: false,
-    isUltraRestricted: false,
+    isBot: null,
+    isRestricted: null,
+    isUltraRestricted: null,
   });
 });
 

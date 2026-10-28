@@ -70,6 +70,35 @@ describe("admitting a person", () => {
     ).toBeNull();
   });
 
+  test("an answer that leaves out whether they're a bot or a guest is refused", () => {
+    for (const unknown of [{ isBot: null }, { isRestricted: null }, { isUltraRestricted: null }]) {
+      expect(admissionProblem("U-carol", person(unknown), home)).toBe("unverified");
+      expect(admissionProblem("U-carol", person(unknown), orgHome)).toBe("unverified");
+    }
+  });
+
+  test("a definite problem comes before a flag Slack left out, so a recheck can act on it", () => {
+    expect(admissionProblem("U-carol", person({ isBot: null, isRestricted: true }), home)).toBe(
+      "guest",
+    );
+    expect(admissionProblem("U-carol", person({ isRestricted: null, isBot: true }), home)).toBe(
+      "bot",
+    );
+    expect(admissionProblem("U-carol", person({ isBot: null, deleted: true }), home)).toBe(
+      "deactivated",
+    );
+    expect(
+      admissionProblem("U-carol", person({ isUltraRestricted: null, teamId: "T-other" }), home),
+    ).toBe("other_workspace");
+    expect(
+      admissionProblem(
+        "U-carol",
+        person({ isBot: null, teamId: "T-other", enterpriseId: "E-other" }),
+        orgHome,
+      ),
+    ).toBe("other_org");
+  });
+
   test("the account checks come before membership, so a guest of the workspace is still a guest", () => {
     expect(
       admissionProblem("U-carol", person({ isBot: true, teamId: "T-other", deleted: true }), home),

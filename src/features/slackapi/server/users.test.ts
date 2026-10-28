@@ -7,7 +7,20 @@ import { canonicalUserId, fetchSlackPerson, readSlackPersonName, writeSlackPerso
 
 /** What the fake users.info answers for each user ID it's asked about. */
 const answers = new Map<string, unknown>([
-  ["U-carol", { ok: true, user: { id: "U-carol", team_id: "T-home", real_name: "Carol" } }],
+  [
+    "U-carol",
+    {
+      ok: true,
+      user: {
+        id: "U-carol",
+        team_id: "T-home",
+        real_name: "Carol",
+        is_bot: false,
+        is_restricted: false,
+        is_ultra_restricted: false,
+      },
+    },
+  ],
   ["U-gone", { ok: false, error: "user_not_found" }],
   ["U-broken", { ok: false, error: "invalid_auth" }],
   ["U-odd", { ok: true, user: { id: "" } }],
@@ -82,6 +95,14 @@ describe("keeping what Slack said about someone", () => {
     expect(await readUsers(database)).toMatchObject([
       { is_bot: 1, display_name: "new", refreshed_at: 3_000 },
     ]);
+  });
+
+  test("keeps a bot flag Slack left out as unknown", async () => {
+    const database = await openTestDatabase();
+    await database.write((transaction) =>
+      writeSlackPerson(transaction, person({ isBot: null }), 1_000),
+    );
+    expect(await readUsers(database)).toMatchObject([{ is_bot: null }]);
   });
 
   test("a message or click carrying their org-wide ID counts as them", async () => {

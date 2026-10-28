@@ -4,9 +4,10 @@ import { z } from "zod";
 //
 // The bridge keeps what admitting someone as the owner or an allowed person needs: who they are,
 // what kind of account they have, and the workspace and Enterprise org Slack places them in, along
-// with the names it shows them by. Slack adds fields without notice, so unknown keys are dropped. A
-// flag Slack leaves out reads as unset, as it documents for deleted, while a workspace or org it
-// leaves out stays unknown, so the admission check refuses rather than guesses.
+// with the names it shows them by. Slack adds fields without notice, so unknown keys are dropped.
+// Slack documents a missing deleted as active and leaves is_workflow_bot out for a regular member,
+// so those read as unset. A bot or guest flag, workspace or org it leaves out stays unknown, so the
+// admission check refuses rather than guesses.
 
 /** A Slack user, as users.info described them. */
 export type SlackPerson = {
@@ -17,14 +18,15 @@ export type SlackPerson = {
   enterpriseId: string | null;
   /** Their enterprise_user ID, which a message or click from them can carry instead of `id`. */
   enterpriseUserId: string | null;
-  isBot: boolean;
+  /** A bot user, or null when Slack didn't say. */
+  isBot: boolean | null;
   isWorkflowBot: boolean;
   /** Their account is deactivated. */
   deleted: boolean;
-  /** A multi-channel guest. */
-  isRestricted: boolean;
-  /** A single-channel guest. */
-  isUltraRestricted: boolean;
+  /** A multi-channel guest, or null when Slack didn't say. */
+  isRestricted: boolean | null;
+  /** A single-channel guest, or null when Slack didn't say. */
+  isUltraRestricted: boolean | null;
   displayName: string | null;
   realName: string | null;
 };
@@ -61,11 +63,11 @@ export const slackUserSchema = z
     teamId: user.team_id ?? null,
     enterpriseId: user.enterprise_user?.enterprise_id ?? null,
     enterpriseUserId: user.enterprise_user?.id ?? null,
-    isBot: user.is_bot ?? false,
+    isBot: user.is_bot ?? null,
     isWorkflowBot: user.is_workflow_bot ?? false,
     deleted: user.deleted ?? false,
-    isRestricted: user.is_restricted ?? false,
-    isUltraRestricted: user.is_ultra_restricted ?? false,
+    isRestricted: user.is_restricted ?? null,
+    isUltraRestricted: user.is_ultra_restricted ?? null,
     displayName: user.profile?.display_name || null,
     realName: user.real_name || user.profile?.real_name || null,
   }));
