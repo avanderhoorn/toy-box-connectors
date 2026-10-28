@@ -108,8 +108,9 @@ export function startWakeScheduler(
     reconsider,
     async stop() {
       stopped = true;
-      clearTimeout(timer);
+      // A pass in progress arms the next one as it ends, so its timer is cleared once it's done.
       await deciding;
+      clearTimeout(timer);
     },
   };
 }
