@@ -1,6 +1,9 @@
 import { expect, onTestFinished, test } from "bun:test";
+import { gapOverlapMs } from "@activity/model/gaps";
+import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { readApproval, staleApprovals } from "@links/server/approvals";
+import { changeChannelId } from "@links/server/lifecycle";
 import { createStoredApproval, createStoredLink } from "@links/server/testFixtures";
 import { readRequest, saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
@@ -788,7 +791,7 @@ test("unexpected read failures propagate through the caller and shutdown", async
 });
 
 test("a legacy unknown edit without its target stops explicitly rather than guessing a message", async () => {
-  const { database, slack, item, reconcile, read } = await setup();
+  const { database, slack, item, now, reconcile, read } = await setup();
   await database.write(
     (tx) => tx`UPDATE outbox SET attempt_method = 'chat.update' WHERE id = ${item.id}`,
   );
@@ -803,6 +806,12 @@ test("a legacy unknown edit without its target stops explicitly rather than gues
     nextAttemptAt: null,
     reconcilePass: 0,
   });
+  expect(await reconcile(item.id)).toEqual({
+    kind: "waiting",
+    reason: "reconciliation_stopped",
+    until: null,
+  });
+  expect(await database.read((sql) => readDueReconciliations(sql, now() + 86_400_000))).toEqual([]);
   expect(slack.calls).toHaveLength(1);
 });
 
@@ -833,4 +842,99 @@ test("a manual resolution while a page is in flight cannot be overwritten by its
   });
   expect(await read()).toMatchObject({ state: "dropped" });
 });
-import { gapOverlapMs } from "@activity/model/gaps";
+
+test("an exhausted read that was once held for its channel never reads again", async () => {
+  const { database, slack, item, posted, reconcile, advance } = await setup();
+  slack.deleteMessage("C-link", posted.ts);
+  await reconcile(item.id);
+  advance(50_000);
+  await reconcile(item.id);
+  advance(60_000);
+  slack.failNext("conversations.replies", { error: "not_in_channel" });
+  expect(await reconcile(item.id)).toMatchObject({ reason: "not_in_channel", until: null });
+  await database.write((tx) => tx`UPDATE links SET status = 'active', status_reason = NULL`);
+  expect(await reconcile(item.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "delivery_unknown", reconcilePass: 3, nextAttemptAt: null },
+  });
+  const count = slack.calls.length;
+  expect(await reconcile(item.id)).toEqual({
+    kind: "waiting",
+    reason: "reconciliation_stopped",
+    until: null,
+  });
+  expect(slack.calls).toHaveLength(count);
+});
+
+test("a read whose channel moved starts over from its first page with a fresh backoff", async () => {
+  const { database, slack, bot, item, now, advance } = await setup({ pageSize: 1 });
+  let reads = 0;
+  const failing: BotClient = {
+    cooldown: (method) => bot.cooldown(method),
+    call(method, run) {
+      if (method === "conversations.replies" && ++reads >= 2) {
+        slack.failNext(method, { status: 503 });
+      }
+      return bot.call(method, run);
+    },
+  };
+  const service = createReconciliation(database, failing, { now });
+  onTestFinished(() => service.close());
+  expect(await service.reconcile(item.id)).toMatchObject({ until: now() + 5_000 });
+  advance(5_000);
+  expect(await service.reconcile(item.id)).toMatchObject({ until: now() + 10_000 });
+  expect(slack.calls.at(-1)!.args).toHaveProperty("cursor");
+  slack.addChannel({ id: "C-moved", is_private: true, members: ["U-owner", "U-bot"] });
+  await database.write((tx) => changeChannelId(tx, "C-link", "C-moved", now()));
+  advance(10_000);
+  expect(await service.reconcile(item.id)).toEqual({
+    kind: "waiting",
+    reason: "HTTP 503",
+    until: now() + 5_000,
+  });
+  expect(slack.calls.at(-1)!.args).toMatchObject({ channel: "C-moved" });
+  expect(slack.calls.at(-1)!.args).not.toHaveProperty("cursor");
+});
+
+test("an edit whose thread is gone spends its pass rather than retrying the thread", async () => {
+  const { database, slack, item, posted, reconcile } = await setup();
+  await database.write(
+    (tx) => tx`
+      UPDATE outbox SET attempt_method = 'chat.update', payload = json_set(payload, '$.ts', ${posted.ts})
+      WHERE id = ${item.id}
+    `,
+  );
+  slack.failNext("conversations.replies", { error: "thread_not_found" });
+  expect(await reconcile(item.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "delivery_unknown", reconcilePass: 1 },
+  });
+  expect(slack.calls.map((call) => call.method)).toEqual([
+    "chat.postMessage",
+    "conversations.replies",
+  ]);
+});
+
+test("a channel hold stays held when its link is suspended again as it resumes", async () => {
+  const { database, slack, bot, item, now, reconcile, read } = await setup();
+  slack.failNext("conversations.replies", { error: "not_in_channel" });
+  await reconcile(item.id);
+  await database.write((tx) => tx`UPDATE links SET status = 'active', status_reason = NULL`);
+  // Resume is the first write, so the link is suspended after prepare saw it active.
+  const racing: BridgeDatabase = Object.create(database);
+  let raced = false;
+  racing.write = async (operation) => {
+    if (!raced) {
+      raced = true;
+      await database.write(
+        (tx) => tx`UPDATE links SET status = 'suspended', status_reason = 'bot_removed'`,
+      );
+    }
+    return database.write(operation);
+  };
+  const service = createReconciliation(racing, bot, { now });
+  onTestFinished(() => service.close());
+  expect(await service.reconcile(item.id)).toEqual({ kind: "changed" });
+  expect(await read()).toMatchObject({ error: "not_in_channel", nextAttemptAt: null });
+  expect(slack.calls).toHaveLength(2);
+});
