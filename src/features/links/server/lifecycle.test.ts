@@ -10,34 +10,20 @@ function readLinks(database: BridgeDatabase) {
 }
 
 describe("a lifecycle signal about a linked channel", () => {
-  test("suspends only the channel's link", async () => {
-    const database = await openTestDatabase();
-    await createStoredLink(database);
-    await createStoredLink(database, "other");
-
-    const changed = await database.write((transaction) =>
-      suspendChannelLinks(transaction, "C-link", "bot_removed", 60_000),
-    );
-
-    expect(changed).toEqual(["link"]);
-    expect(await readLinks(database)).toEqual([
-      { id: "link", status: "suspended", status_reason: "bot_removed" },
-      { id: "other", status: "active", status_reason: null },
-    ]);
-  });
-
-  test("a channel made public suspends the link only if the owner approved it private", async () => {
+  test("a channel made public suspends the link once, and only if the owner approved it private", async () => {
     const database = await openTestDatabase();
     await createStoredLink(database, "private");
     await createStoredLink(database, "public", {
       approved_audience: { ...privateAudience(), kind: "public" },
     });
 
-    for (const channelId of ["C-private", "C-public"]) {
-      await database.write((transaction) =>
+    const suspend = (channelId: string) =>
+      database.write((transaction) =>
         suspendChannelLinks(transaction, channelId, "channel_made_public", 60_000),
       );
-    }
+    expect(await suspend("C-private")).toEqual(["private"]);
+    expect(await suspend("C-public")).toEqual([]);
+    expect(await suspend("C-private")).toEqual([]);
 
     expect(await readLinks(database)).toEqual([
       { id: "private", status: "suspended", status_reason: "channel_made_public" },

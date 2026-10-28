@@ -1,45 +1,63 @@
-import { describe, expect, test } from "bun:test";
-import type { BridgeDatabase } from "@bridge/server/database";
+import { expect, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import { suspendLink } from "./status";
-import { createStoredLink } from "./testFixtures";
+import { privateAudience } from "@links/model/testFixtures";
+import { allowPerson, denyPeople, readChannelLink } from "./database";
+import { approveLink, deleteLink, pauseLink, suspendLink } from "./status";
+import { countRows, createStoredLink } from "./testFixtures";
 
-function readLink(database: BridgeDatabase) {
-  return database.read((sql) => sql`SELECT status, status_reason, updated_at FROM links`);
-}
+test("approving a link again makes it active with the new audience and settings", async () => {
+  const database = await openTestDatabase();
+  await createStoredLink(database, "link", { status: "suspended", status_reason: "bot_removed" });
+  const approved = { ...privateAudience(), kind: "public" } as const;
+  const link = { toyBoxChannelId: "toybox-link", slackChannelId: "C-link", approved };
+  const settings = { requestMode: "all", observe: "channel" } as const;
+  await database.write((transaction) => approveLink(transaction, { ...link, ...settings }, 60_000));
 
-describe("suspending a link", () => {
-  test("records the reason once, so a signal delivered again changes nothing", async () => {
-    const database = await openTestDatabase();
-    await createStoredLink(database);
+  const stored = await database.read((sql) => readChannelLink(sql, "C-link"));
+  expect(stored).toMatchObject({ id: "link", status: "active", ...settings, approved });
+});
 
-    const changes = [];
-    for (const now of [60_000, 120_000]) {
-      changes.push(
-        await database.write((transaction) => suspendLink(transaction, "link", "bot_removed", now)),
-      );
-    }
-
-    expect(changes).toEqual([true, false]);
-    expect(await readLink(database)).toEqual([
-      { status: "suspended", status_reason: "bot_removed", updated_at: 60_000 },
-    ]);
+test("a link whose Toy Box channel was deleted stays suspended for that until unlink", async () => {
+  const database = await openTestDatabase();
+  await createStoredLink(database, "link", {
+    status: "suspended",
+    status_reason: "toybox_channel_deleted",
   });
 
-  test("a link whose Toy Box channel was deleted keeps that reason, which only unlink ends", async () => {
-    const database = await openTestDatabase();
-    await createStoredLink(database, "link", {
-      status: "suspended",
-      status_reason: "toybox_channel_deleted",
+  const changed = await database.write(async (transaction) => {
+    await pauseLink(transaction, "link", 60_000);
+    return suspendLink(transaction, "link", "bot_removed", 60_000);
+  });
+
+  expect(changed).toBe(false);
+  expect(await database.read((sql) => sql`SELECT status, status_reason FROM links`)).toEqual([
+    { status: "suspended", status_reason: "toybox_channel_deleted" },
+  ]);
+});
+
+test("deny, pause and unlink change only their link, and unlink deletes what it kept", async () => {
+  const database = await openTestDatabase();
+  for (const [id, people] of [
+    ["gone", ["U-carol", "U-dave"]],
+    ["kept", ["U-carol"]],
+  ] as const) {
+    await createStoredLink(database, id);
+    await database.write(async (transaction) => {
+      for (const userId of people) await allowPerson(transaction, id, userId, 0);
+      await transaction`INSERT INTO cursors ${transaction({ link_id: id })}`;
+      await transaction`INSERT INTO wakes ${transaction({ link_id: id, at: 0, outcome: "ran" })}`;
     });
+  }
 
-    const changed = await database.write((transaction) =>
-      suspendLink(transaction, "link", "bot_removed", 60_000),
-    );
-
-    expect(changed).toBe(false);
-    expect(await readLink(database)).toEqual([
-      { status: "suspended", status_reason: "toybox_channel_deleted", updated_at: 0 },
-    ]);
+  await database.write(async (transaction) => {
+    await denyPeople(transaction, "gone", ["U-carol"]);
+    await pauseLink(transaction, "gone", 60_000);
   });
+  const kept = await database.read((sql) => readChannelLink(sql, "C-kept"));
+  await database.write((transaction) => deleteLink(transaction, "gone"));
+
+  expect(kept?.status).toBe("active");
+  expect(kept?.allowlist).toEqual(new Set(["U-carol"]));
+  const counts = await countRows(database);
+  expect(counts).toMatchObject({ allowlist: 1, cursors: 1, links: 1, wakes: 1 });
 });
