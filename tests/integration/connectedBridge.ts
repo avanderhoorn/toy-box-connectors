@@ -3,6 +3,7 @@
 import { expect } from "bun:test";
 import { tsAt, type SlackTs } from "@slackapi/model/ts";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
+import type { WakeTimings } from "@wakes/model";
 import type { FakeEventOptions, FakeSlackMessage } from "../fakes/slack";
 import { startSlackForBridge } from "./bridgeProcess";
 import { startLinkedBridge, type LinkColumns } from "./linkedBridge";
@@ -15,12 +16,21 @@ export const ALICE = "U0ALICE";
 /** A person in the channel whom the link doesn't allow. */
 export const MALLORY = "U0MALLORY";
 
+/** Wakes the lead 50 ms after a request changes, so no test waits out the real debounce. */
+const PROMPTLY: Partial<WakeTimings> = { debounce: 50, debounceLimit: 200 };
+
 /**
  * A bridge connected to a fake Slack whose workspace and app are its installation's, once Slack
  * said hello. Its link watches C-link, a private channel Alice, Mallory and the bot are in, and
- * allows Alice, and `link` changes its settings. The lead wakes 50 ms after a request changes.
+ * allows Alice, and `link` changes its settings. `wakes` says how soon it wakes the lead.
  */
-export async function connectedBridge({ link }: { link?: LinkColumns } = {}) {
+export async function connectedBridge({
+  link,
+  wakes = PROMPTLY,
+}: {
+  link?: LinkColumns;
+  wakes?: Partial<WakeTimings>;
+} = {}) {
   const { slack, env } = startSlackForBridge({
     teamId: "T-home",
     appId: "A-app",
@@ -33,18 +43,25 @@ export async function connectedBridge({ link }: { link?: LinkColumns } = {}) {
     is_private: true,
     members: [BOT, ALICE, MALLORY],
   });
-  const linked = await startLinkedBridge({
-    env: {
-      ...env,
-      TOY_BOX_SLACK_WAKE_TIMINGS: JSON.stringify({ debounce: 50, debounceLimit: 200 }),
-    },
+  const waking = (timings: Partial<WakeTimings>) => ({
+    ...env,
+    TOY_BOX_SLACK_WAKE_TIMINGS: JSON.stringify(timings),
+  });
+  const { bridge: first, ...linked } = await startLinkedBridge({
+    env: waking(wakes),
     link,
     allowed: [ALICE],
     prepare: (database) => createStoredInstallation(database, { bot_user_id: BOT }),
   });
-  // Slack says hello as a connection opens, so what it sends next reaches the bridge after it.
-  await waitFor(() => expect(slack.activeConnections).toBe(1), 5_000);
-  const { bridge, dataFolder } = linked;
+  let bridge = first;
+  // Slack says hello as a connection opens, so what it sends next reaches the bridge after it. A
+  // killed bridge's connection can stay open for a moment, so the newest must be the only one.
+  const connected = (count: number) =>
+    waitFor(() => {
+      expect(slack.connections).toHaveLength(count);
+      expect(slack.activeConnections).toBe(1);
+    }, 5_000);
+  await connected(1);
 
   /** Sends `event` the way Slack does, and waits for the bridge to ack it, once it's stored. */
   const deliver = async (event: Record<string, unknown>, options?: FakeEventOptions) => {
@@ -76,6 +93,17 @@ export async function connectedBridge({ link }: { link?: LinkColumns } = {}) {
         ts: editedTs,
       });
     },
+    /**
+     * Kills the bridge the way a crash does, and starts another over the same data folder that
+     * wakes the lead promptly, once Slack says hello to it.
+     */
+    crash: async () => {
+      bridge.child.kill("SIGKILL");
+      await bridge.exit();
+      const count = slack.connections.length + 1;
+      bridge = await linked.serve(waking(PROMPTLY));
+      await connected(count);
+    },
     /** Stops the bridge, and resolves to how it exited. */
     stop: () => {
       bridge.child.kill("SIGTERM");
@@ -84,7 +112,7 @@ export async function connectedBridge({ link }: { link?: LinkColumns } = {}) {
     /** What the bridge writes to stderr from starting to stopping when it says only `lines`. */
     saying: (...lines: string[]) =>
       [
-        `toy-box-slack is running for ${dataFolder}`,
+        `toy-box-slack is running for ${linked.dataFolder}`,
         ...lines,
         "toy-box-slack is stopping after SIGTERM\n",
       ].join("\n"),

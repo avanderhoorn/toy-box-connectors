@@ -25,7 +25,8 @@ export type LinkColumns = NonNullable<Parameters<typeof createStoredLink>[2]>;
  * A bridge running for a data folder whose link follows a fake Toy Box channel and watches C-link,
  * with `env` added to its environment. The channel's requests routine is the template. The link
  * allows the people in `allowed`, and `link` changes its settings. `prepare` changes the data
- * folder and its database before the bridge opens them.
+ * folder and its database before the bridge opens them. Once the bridge stops, `serve` starts
+ * another over the same data folder.
  */
 export async function startLinkedBridge({
   env = {},
@@ -63,10 +64,16 @@ export async function startLinkedBridge({
   } finally {
     await database.close();
   }
-  const bridge = spawnBridge(home, { TOY_BOX_URL: toyBox.url, ...env });
-  await bridge.running();
+  const bridge = await serve(env);
   const socket = commandSocketPath(dataFolder);
   const port = Number(new URL(toyBox.url).port);
+
+  /** Runs a bridge for the data folder with `added` in its environment, once it says it's running. */
+  async function serve(added: Record<string, string>) {
+    const started = spawnBridge(home, { TOY_BOX_URL: toyBox.url, ...added });
+    await started.running();
+    return started;
+  }
 
   /**
    * Calls `status` the way the CLI does for `sessionId`, which runs in the fake Toy Box like
@@ -97,5 +104,17 @@ export async function startLinkedBridge({
     return commandResultSchema(inboxResultSchema).parse(await response.json()).result;
   }
 
-  return { toyBox, channelId, routine, bridge, home, dataFolder, socket, port, status, inbox };
+  return {
+    toyBox,
+    channelId,
+    routine,
+    bridge,
+    home,
+    dataFolder,
+    socket,
+    port,
+    serve,
+    status,
+    inbox,
+  };
 }
