@@ -116,7 +116,7 @@ Publish release notes in Slack: draft notes for readers outside this channel on 
 `toy-box-slack status` shows the link, the allowlist, Slack's connection, the requests, posts Slack hasn't confirmed and the wakes, and says how to fix what's wrong.
 
 - A paused link answers and posts nothing. The bridge pauses it when something in Slack needs the owner, such as the channel being archived or shared outside the workspace, and wakes you once. Tell the owner what status says, and once it's fixed, give them `toy-box-slack resume --channel <this channel's ID>` to run.
-- A post Slack never confirmed may have landed, so the bridge never sends it again, and wakes you once. Tell the owner, with the request's link, so they can check. If the person didn't get it, their follow-up comes back as a new request.
+- A post Slack never confirmed may have landed, so the bridge never sends it again. Tell the owner, with the request's link, so they can check. If the person didn't get it, their follow-up comes back as a new request.
 - If status says no routine runs `toy-box-slack inbox`, create the Slack requests routine again.
 - The bridge never deletes a routine, so after the link is removed, the routines that run toy-box-slack keep waking you. Unless the owner means to link this channel again, delete them with delete_routine.
 

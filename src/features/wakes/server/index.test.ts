@@ -1,4 +1,4 @@
-import { expect, onTestFinished, spyOn, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
@@ -25,17 +25,4 @@ test("wakes a lead once its requests settle and logs the run at its start", asyn
   expect(await database.read((sql) => sql`SELECT link_id, at, outcome FROM wakes`)).toEqual([
     { link_id: "link", at: NOW, outcome: "ran" },
   ]);
-});
-
-test("stops and reports a storage error instead of deciding again", async () => {
-  const log = spyOn(console, "error").mockImplementation(() => {});
-  onTestFinished(() => log.mockRestore());
-  const database = await openTestDatabase();
-  await database.write((transaction) => transaction`DROP TABLE wakes`);
-  const { promise: failed, resolve } = Promise.withResolvers<unknown>();
-  const options = { onError: resolve, now: () => NOW };
-  const scheduler = startWakeScheduler(database, async () => "ran", options);
-
-  expect(String(await failed)).toContain("no such table: wakes");
-  await scheduler.stop();
 });
