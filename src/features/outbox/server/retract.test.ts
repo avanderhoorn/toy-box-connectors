@@ -657,10 +657,33 @@ test("a locally refused orphan withdrawal audits its proved target without sendi
   expect(await read()).toBeNull();
   expect(await readOriginal()).toBeNull();
   expect(slack.calls.map((call) => call.method)).toEqual(["chat.postMessage"]);
+  expect(slack.getMessages("C-link").some((message) => message.ts === original.slackTs)).toBe(true);
   expect(await database.read((sql) => sql`SELECT action, subject FROM audit`)).toEqual([
     { action: "abandon_post", subject: `${original.channelId}/${original.slackTs}` },
   ]);
 });
+
+test.each(["queued", "delivery_unknown"])(
+  "an interrupted orphan withdrawal missing its frozen ts is audited without another call: %s",
+  async (state) => {
+    const { database, slack, original, operation, retract, readOriginal, read } = await setup();
+    await database.write(async (tx) => {
+      await tx`DELETE FROM links`;
+      await tx`UPDATE outbox SET state = ${state}, attempts = 1, attempt_method = 'chat.delete'
+        WHERE id = ${operation.id}`;
+    });
+    expect(await retract(operation.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "failed", error: "invalid_retract_payload", attempts: 1 },
+    });
+    expect(await read()).toBeNull();
+    expect(await readOriginal()).toBeNull();
+    expect(slack.calls.map((call) => call.method)).toEqual(["chat.postMessage"]);
+    expect(await database.read((sql) => sql`SELECT action, subject FROM audit`)).toEqual([
+      { action: "abandon_post", subject: `${original.channelId}/${original.slackTs}` },
+    ]);
+  },
+);
 
 test("a failed orphan card withdrawal is audited even when its original link ID was null", async () => {
   const { database, slack, original, operation, retract, readOriginal, read } = await setup();

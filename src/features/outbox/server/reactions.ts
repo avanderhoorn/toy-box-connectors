@@ -70,46 +70,46 @@ export function createReactionDelivery(
     return database.write(async (tx) => {
       const at = now();
       const channelRefusal = outcome.kind === "failed" && outcome.suspend !== null;
-      const settlement: OutboxSettlement = complete
-        ? {
-            state: "sent",
-            slackTs: timestamp,
-            evidence: "response",
-            metadataOk: null,
-          }
-        : outcome.kind === "failed" && (!channelRefusal || item.linkId === null)
-          ? { state: "failed", error: outcome.error }
-          : {
-              state:
-                outcome.kind === "accepted" || outcome.kind === "delivery_unknown" || uncertain
-                  ? "delivery_unknown"
-                  : "queued",
-              error: outcome.kind === "accepted" ? "invalid_reaction_response" : outcome.error,
-              nextAttemptAt: channelRefusal
-                ? null
-                : outcome.kind === "queued"
-                  ? outcome.nextAttemptAt
-                  : at + Math.min(5_000 * 2 ** (item.attempts - 1), 120_000),
-            };
+      const permission =
+        reaction.action === "add" ? await additionPermission(tx, item, reaction) : null;
+      const settlement: OutboxSettlement =
+        permission?.kind === "refused" && !needsCompensation(reaction, permission.error)
+          ? { state: "dropped", error: permission.error }
+          : complete
+            ? {
+                state: "sent",
+                slackTs: timestamp,
+                evidence: "response",
+                metadataOk: null,
+              }
+            : outcome.kind === "failed" && (!channelRefusal || item.linkId === null)
+              ? { state: "failed", error: outcome.error }
+              : {
+                  state:
+                    outcome.kind === "accepted" || outcome.kind === "delivery_unknown" || uncertain
+                      ? "delivery_unknown"
+                      : "queued",
+                  error: outcome.kind === "accepted" ? "invalid_reaction_response" : outcome.error,
+                  nextAttemptAt: channelRefusal
+                    ? null
+                    : outcome.kind === "queued"
+                      ? outcome.nextAttemptAt
+                      : at + Math.min(5_000 * 2 ** (item.attempts - 1), 120_000),
+                };
       const settled = await settleOutboxAttempt(tx, item, settlement, at);
       if (!settled) return { kind: "changed" };
       if (outcome.kind === "failed" && outcome.suspend !== null) {
         await suspendChannelLinks(tx, item.channelId, outcome.suspend, at);
       }
-      if (reaction.action === "add") {
-        const permission = await additionPermission(tx, item, reaction);
-        if (permission.kind === "refused") {
-          if (
-            !channelRefusal &&
-            (outcome.kind === "accepted" ||
-              outcome.kind === "delivery_unknown" ||
-              item.attempts > 1)
-          ) {
-            await compensate(tx, item, reaction, at);
-          }
-          if (settled.state === "queued" || settled.state === "delivery_unknown") {
-            return refuse(tx, settled, permission.state, permission.error, at);
-          }
+      if (permission?.kind === "refused") {
+        if (
+          !channelRefusal &&
+          (outcome.kind === "accepted" || outcome.kind === "delivery_unknown" || item.attempts > 1)
+        ) {
+          await compensate(tx, item, reaction, permission.error, at);
+        }
+        if (settled.state === "queued" || settled.state === "delivery_unknown") {
+          return refuse(tx, settled, permission.state, permission.error, at);
         }
       }
       if (
@@ -155,7 +155,7 @@ export function createReactionDelivery(
     if (reaction.action === "add") {
       const permission = await additionPermission(tx, item, reaction);
       if (permission.kind === "refused") {
-        if (item.attempts > 0) await compensate(tx, item, reaction, at);
+        if (item.attempts > 0) await compensate(tx, item, reaction, permission.error, at);
         return refuse(tx, item, permission.state, permission.error, at);
       }
       if (permission.kind === "waiting") return permission;
@@ -267,12 +267,18 @@ async function additionPermission(
   return { kind: "allowed" };
 }
 
+function needsCompensation(reaction: Reaction, reason: string): boolean {
+  return reaction.name === "eyes" || (reason !== "link_removed" && reason !== "request_missing");
+}
+
 async function compensate(
   tx: Bun.SQL,
   item: OutboxItem,
   reaction: Reaction,
+  reason: string,
   now: number,
 ): Promise<void> {
+  if (!needsCompensation(reaction, reason)) return;
   await queueReaction(
     tx,
     {
@@ -313,7 +319,8 @@ async function refuse(
 async function forgetSettledOrphan(tx: Bun.SQL, item: OutboxItem): Promise<void> {
   if (
     !["queued", "sending", "delivery_unknown"].includes(item.state) &&
-    (await linkWasRemoved(tx, item.linkId))
+    ((await linkWasRemoved(tx, item.linkId)) ||
+      (item.requestId !== null && (await readRequest(tx, item.requestId)) === null))
   ) {
     await tx`DELETE FROM outbox WHERE id = ${item.id}`;
   }

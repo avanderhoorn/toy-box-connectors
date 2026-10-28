@@ -133,7 +133,7 @@ test.each(["paused", "suspended", "removed"])(
       item: { state: "sent" },
     });
     expect(reactions()).toEqual([]);
-    expect((await read(item.id)) === null).toBe(status === "removed");
+    expect(await read(item.id)).toBeNull();
     expect(slack.calls.map((call) => call.method)).toEqual(["reactions.remove"]);
   },
 );
@@ -492,9 +492,63 @@ test.each(["add", "remove"])(
   },
 );
 
-test.each(["eyes", "white_check_mark"])(
-  "an already-unknown %s add compensates after unlink instead of being retried or forgotten",
-  async (name) => {
+test.each([false, true])(
+  "a channel refusal after unlink immediately purges a removal, even after uncertainty=%s",
+  async (uncertain) => {
+    const { database, slack, bot, delivery, queue, payload, read, request, now, advance } =
+      await setup({ timeoutMs: 100 });
+    slack.setMessage("C-link", {
+      ts: request.sourceTs,
+      reactions: [{ name: "eyes", count: 1, users: ["U-bot"] }],
+    });
+    const item = await queue({ payload: { ...payload, action: "remove" } });
+    if (uncertain) {
+      slack.failNext("reactions.remove", { lostResponse: true });
+      expect(await delivery.react(item.id)).toMatchObject({
+        kind: "settled",
+        item: { state: "delivery_unknown" },
+      });
+      advance(5_000);
+    }
+    const received = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const held: BotClient = {
+      cooldown: (method) => bot.cooldown(method),
+      async call(method, run) {
+        const result = await bot.call(method, run);
+        received.resolve();
+        await release.promise;
+        return result;
+      },
+    };
+    slack.failNext("reactions.remove", { error: "not_in_channel" });
+    const pending = createReactionDelivery(database, held, { now }).react(item.id);
+    await received.promise;
+    try {
+      await database.write(async (tx) => {
+        await tx`DELETE FROM requests`;
+        await tx`DELETE FROM links`;
+      });
+    } finally {
+      release.resolve();
+      expect(await pending).toMatchObject({
+        kind: "settled",
+        item: { state: "dropped", error: "not_in_channel" },
+      });
+    }
+    expect(await read(item.id)).toBeNull();
+    expect(await database.read((sql) => sql`SELECT id FROM outbox`)).toEqual([]);
+    expect(slack.calls.map((call) => call.method)).toEqual(
+      uncertain ? ["reactions.remove", "reactions.remove"] : ["reactions.remove"],
+    );
+  },
+);
+
+test.each(
+  ["eyes", "white_check_mark"].flatMap((name) => [false, true].map((unlink) => ({ name, unlink }))),
+)(
+  "an unknown add stops after its parent is gone, removing eyes but keeping a checkmark: %j",
+  async ({ name, unlink }) => {
     const { database, slack, delivery, queue, payload, read, reactions, now } = await setup({
       timeoutMs: 100,
     });
@@ -509,13 +563,19 @@ test.each(["eyes", "white_check_mark"])(
     });
     await database.write(async (tx) => {
       await tx`DELETE FROM requests`;
-      await tx`DELETE FROM links`;
+      if (unlink) await tx`DELETE FROM links`;
     });
     expect(await delivery.react(item.id)).toMatchObject({
       kind: "settled",
-      item: { state: "dropped", error: "link_removed" },
+      item: { state: "dropped", error: unlink ? "link_removed" : "request_missing" },
     });
     expect(await read(item.id)).toBeNull();
+    if (name === "white_check_mark") {
+      expect(await database.read((sql) => readReadyOutbox(sql, now()))).toEqual([]);
+      expect(reactions()).toEqual([{ name, count: 1, users: ["U-bot"] }]);
+      expect(slack.calls.map((call) => call.method)).toEqual(["reactions.add"]);
+      return;
+    }
     const [removal] = await database.read((sql) => readReadyOutbox(sql, now()));
     if (!removal) throw new Error("The unlinked uncertain add needs its compensating removal.");
     expect(await delivery.react(removal.id)).toMatchObject({
@@ -623,16 +683,17 @@ test("an interrupted reaction cannot change from remove to add", async () => {
   expect(slack.calls).toEqual([]);
 });
 
-test.each([
-  { unlink: false, lost: false },
-  { unlink: false, lost: true },
-  { unlink: true, lost: false },
-  { unlink: true, lost: true },
-  { unlink: true, lost: false, name: "white_check_mark" },
-  { unlink: true, lost: true, name: "white_check_mark" },
-])(
-  "an add finishing after its request goes away queues one compensating removal: %j",
-  async ({ unlink, lost, name = "eyes" }) => {
+test.each(
+  ["eyes", "white_check_mark"].flatMap((name) =>
+    ["no_longer_needed", "request_missing", "link_removed", "target_mismatch"].flatMap((change) =>
+      [false, true].map((lost) => ({ name, change, lost })),
+    ),
+  ),
+)(
+  "an add finishing after its request changes removes only unwanted feedback: %j",
+  async ({ name, change, lost }) => {
+    const keepCheckmark =
+      name === "white_check_mark" && (change === "link_removed" || change === "request_missing");
     const { database, slack, bot, delivery, queue, payload, read, request, now, reactions } =
       await setup({
         timeoutMs: 100,
@@ -657,9 +718,15 @@ test.each([
     await received.promise;
     try {
       await database.write(async (tx) => {
-        if (unlink) {
+        if (change === "link_removed") {
           await tx`DELETE FROM requests`;
           await tx`DELETE FROM links`;
+        } else if (change === "request_missing") {
+          await tx`DELETE FROM requests`;
+        } else if (change === "target_mismatch") {
+          await tx`UPDATE requests SET source_ts = '1700000100.000200'`;
+        } else if (name === "white_check_mark") {
+          await tx`UPDATE requests SET state = 'in_progress'`;
         } else {
           await cancelStoredRequest(tx, request, "thread_gone", now());
         }
@@ -668,20 +735,34 @@ test.each([
       release.resolve();
       expect(await pending).toMatchObject({
         kind: "settled",
-        item: { state: lost ? "dropped" : "sent" },
+        item: {
+          state: lost
+            ? change === "target_mismatch"
+              ? "failed"
+              : "dropped"
+            : keepCheckmark
+              ? "dropped"
+              : "sent",
+        },
       });
     }
     const removals = (await database.read((sql) => readReadyOutbox(sql, now()))).filter(
       (row) => row.kind === "reaction" && row.payload.action === "remove",
     );
-    expect(removals).toHaveLength(1);
     expect(reactions()).toEqual([{ name, count: 1, users: ["U-bot"] }]);
+    if (keepCheckmark) {
+      expect(removals).toEqual([]);
+      expect(await read(item.id)).toBeNull();
+      expect(slack.calls.map((call) => call.method)).toEqual(["reactions.add"]);
+      return;
+    }
+    expect(removals).toHaveLength(1);
     expect(await delivery.react(removals[0]!.id)).toMatchObject({
       kind: "settled",
       item: { state: "sent" },
     });
     expect(reactions()).toEqual([]);
-    if (unlink) {
+    if (change === "link_removed" || change === "request_missing") {
       expect(await read(item.id)).toBeNull();
       expect(await read(removals[0]!.id)).toBeNull();
     }

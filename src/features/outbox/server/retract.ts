@@ -214,7 +214,6 @@ async function refuse(
     const target = parsed.success ? await readOutboxItem(tx, parsed.data.target) : null;
     if (
       parsed.success &&
-      (item.attempts === 0 || parsed.data.ts !== undefined) &&
       target &&
       sameTarget(item, target, parsed.data.ts) &&
       canRetract(target)

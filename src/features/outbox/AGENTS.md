@@ -84,6 +84,8 @@ gone, not merely when its original link ID is null. A permanent orphan withdrawa
 abandon_post with only the post's channel and ts, then purges the target and operation in that
 transaction. The same applies to a locally refused withdrawal that still identifies its proved,
 matching target. A changed target is never abandoned on the authority of an older operation.
+A corrupted interrupted withdrawal with no frozen ts is still refused before Slack. Its proved,
+matching orphan is audited and retired locally, never sent using a guessed timestamp.
 Cleanup settles a final's request only if its link, channel and thread
 still match, and a local cleanup refusal never settles a reply merely by its numeric request ID.
 `forgetUnlinkedApprovals` in links owns card retirement and runs after delivery, stopped reads
@@ -107,11 +109,14 @@ Unknown operations retain their method and payload and retry at five-to-120-seco
 including across installation holds and cooldowns. The ready reader selects idempotent
 cleanup and feedback separately from unknown message reads. A later token rejection or
 rate limit cannot erase an earlier uncertain add before unlink can keep it.
-An add finishing after cancellation or unlink queues a compensating removal in its settlement
-transaction. Only queued removals coalesce, never an in-flight one that may precede the late add.
+A late eyes addition after cancellation, request removal or unlink queues a compensating removal
+in its settlement transaction. An in-flight or unknown checkmark is dropped and purged when its
+request or link is gone, without retrying it or removing a checkmark that may already be visible.
+It still gets a compensating removal if its answer is no longer confirmed or its target mismatches.
+Only queued removals coalesce, never an in-flight one that may precede the late add.
 Calls to the same channel, message and emoji serialize while one is sending. Remote operations
 whose responses were lost can still reorder, so feedback is best effort and never holds an answer.
-Terminal orphan reactions are purged.
+Terminal reactions are purged when their link or non-null request no longer exists.
 
 `model/posting.ts` checks the current installation, link, destination, requester and request
 revision. Only explicit follow-ups reach answered, dismissed or expired requests, and none

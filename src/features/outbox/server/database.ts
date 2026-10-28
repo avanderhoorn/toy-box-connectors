@@ -109,7 +109,7 @@ export type OutboxSettlement =
       metadataOk: boolean | null;
     }
   | { state: "queued" | "delivery_unknown"; error: string; nextAttemptAt: number | null }
-  | { state: "failed"; error: string }
+  | { state: "failed" | "dropped"; error: string }
   | {
       state: "stray";
       slackTs: SlackTs;

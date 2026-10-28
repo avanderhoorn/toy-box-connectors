@@ -781,6 +781,14 @@ audit-and-purge rule above, rather than retaining an unreachable operation.
 [card cleanup](../../src/features/outbox/server/database.ts),
 [delivery and withdrawal cases](../../src/features/outbox/server/posts.test.ts).
 
+A confirmed answer's checkmark stays after unlink, like the answer it marks.
+Queued additions are dropped, and in-flight or unknown checkmarks whose request
+or link disappeared are retired without retrying or removing them. Eyes still
+need removal. A checkmark whose existing request no longer has a confirmed
+answer, or whose target mismatches, still gets compensating cleanup.
+[Reaction delivery](../../src/features/outbox/server/reactions.ts),
+[protocol cases](../../src/features/outbox/server/reactions.test.ts).
+
 ### Daily and weekly releases
 
 Use a durable local occurrence key such as `(binding, schedule, intended_time)`.
