@@ -1,0 +1,83 @@
+/** Install the tables whose meaning is owned by Links. */
+export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
+  await db.unsafe(`
+    CREATE TABLE claims (
+      id              INTEGER PRIMARY KEY,
+      code_hash       TEXT NOT NULL,
+      created_at      INTEGER NOT NULL,
+      expires_at      INTEGER NOT NULL,
+      failed_attempts INTEGER NOT NULL DEFAULT 0
+        CHECK (typeof(failed_attempts) = 'integer' AND failed_attempts >= 0),
+      used_at         INTEGER,
+      used_by         TEXT
+    );
+
+    CREATE TABLE links (
+      id                  TEXT PRIMARY KEY,
+      toybox_channel_id   TEXT NOT NULL UNIQUE,
+      slack_channel_id    TEXT NOT NULL UNIQUE,
+      publish_channel_id  TEXT NOT NULL,
+      request_mode        TEXT NOT NULL DEFAULT 'mention' CHECK (request_mode IN ('mention', 'all')),
+      observe             TEXT NOT NULL DEFAULT 'requesters'
+        CHECK (observe IN ('requesters', 'channel')),
+      status              TEXT NOT NULL CHECK (status IN ('active', 'paused', 'suspended')),
+      status_reason       TEXT,
+      requests_routine_id TEXT NOT NULL,
+      routine_state       TEXT NOT NULL CHECK (routine_state IN ('present', 'drifted', 'missing')),
+      linked_at_ts        TEXT NOT NULL,
+      created_at          INTEGER NOT NULL,
+      updated_at          INTEGER NOT NULL
+    );
+
+    CREATE TABLE link_routines (
+      link_id       TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE,
+      series        TEXT NOT NULL,
+      routine_id    TEXT NOT NULL,
+      routine_state TEXT NOT NULL CHECK (routine_state IN ('present', 'drifted', 'missing')),
+      period        TEXT NOT NULL CHECK (period IN ('day', 'week')),
+      schedule      TEXT NOT NULL,
+      PRIMARY KEY (link_id, series)
+    );
+
+    -- The owner is implicit.
+    CREATE TABLE allowlist (
+      link_id  TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE,
+      user_id  TEXT NOT NULL,
+      label    TEXT,
+      added_at INTEGER NOT NULL,
+      PRIMARY KEY (link_id, user_id)
+    );
+
+    -- id is opaque and the only value a button carries. link_id is NULL for a new link.
+    CREATE TABLE approvals (
+      id                TEXT PRIMARY KEY,
+      number            INTEGER NOT NULL UNIQUE CHECK (typeof(number) = 'integer' AND number > 0),
+      toybox_channel_id TEXT NOT NULL,
+      link_id           TEXT,
+      action            TEXT NOT NULL CHECK (action IN ('link', 'allow', 'set', 'resume', 'owner')),
+      changes           TEXT NOT NULL CHECK (json_valid(changes)),
+      owner_user_id     TEXT NOT NULL,
+      card_channel_id   TEXT NOT NULL,
+      card_ts           TEXT,
+      state             TEXT NOT NULL
+        CHECK (state IN ('pending', 'applied', 'rejected', 'expired', 'stale')),
+      decided_by        TEXT,
+      decided_at        INTEGER,
+      reported_at       INTEGER,
+      created_by        TEXT NOT NULL,
+      created_at        INTEGER NOT NULL,
+      expires_at        INTEGER NOT NULL
+    );
+
+    -- IDs only, never message text.
+    CREATE TABLE audit (
+      id          INTEGER PRIMARY KEY,
+      at          INTEGER NOT NULL,
+      actor       TEXT NOT NULL CHECK (actor IN ('lead', 'member', 'operator', 'owner', 'bridge')),
+      action      TEXT NOT NULL,
+      link_id     TEXT,
+      approval_id TEXT,
+      subject     TEXT
+    );
+  `);
+}
