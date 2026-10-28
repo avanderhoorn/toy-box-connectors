@@ -1,6 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, onTestFinished, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { prepareDataFolder } from "@bridge/server/dataFolder";
+import { acquireBridgeLock } from "@bridge/server/lock";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { spawnBridge } from "./bridgeProcess";
 
@@ -39,6 +41,23 @@ test("a second bridge exits with a clear message and touches nothing", async () 
     code: 0,
     stderr: `toy-box-slack is running for ${dataFolder}\ntoy-box-slack is stopping after SIGTERM\n`,
   });
+}, 15_000);
+
+test("a bridge that finds the lock taken stops before it creates bridge.db", async () => {
+  const home = createTestFolder();
+  const dataFolder = join(home, ".toy-box-slack");
+  prepareDataFolder(dataFolder);
+  const lock = await acquireBridgeLock(join(dataFolder, "bridge.lock"));
+  onTestFinished(() => lock.release());
+  const before = snapshot(dataFolder);
+
+  const refused = await spawnBridge(home).exit();
+
+  expect(refused).toEqual({
+    code: 1,
+    stderr: `Another toy-box-slack bridge is already running for ${dataFolder}. Stop it before starting a new one.\n`,
+  });
+  expect(snapshot(dataFolder)).toEqual(before);
 }, 15_000);
 
 test("a bridge that was killed leaves no lock behind", async () => {
