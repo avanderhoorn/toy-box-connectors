@@ -1,7 +1,14 @@
 import type { BridgeDatabase } from "@bridge/server/database";
 
-/** Persist an active Link fixture so rows that belong to a Link can be stored. */
-export function createStoredLink(database: BridgeDatabase, id = "link") {
+/**
+ * Persist an active Link fixture so rows that belong to a Link can be stored. `columns` replace
+ * the fixture's, such as a Toy Box channel and routine a fake serves.
+ */
+export function createStoredLink(
+  database: BridgeDatabase,
+  id = "link",
+  columns: { toybox_channel_id?: string; requests_routine_id?: string } = {},
+) {
   const link = {
     id,
     toybox_channel_id: `toybox-${id}`,
@@ -13,6 +20,7 @@ export function createStoredLink(database: BridgeDatabase, id = "link") {
     linked_at_ts: "1700000000.000100",
     created_at: 0,
     updated_at: 0,
+    ...columns,
   };
   return database.write((transaction) => transaction`INSERT INTO links ${transaction(link)}`);
 }

@@ -36,6 +36,14 @@ export type ToyBoxStream = {
   lead: LeadPresence | null;
 };
 
+/** A stream the bridge has never read, which its first connection fills from a snapshot. */
+export const UNREAD_TOYBOX_STREAM: ToyBoxStream = {
+  revision: null,
+  ownerSpokeAt: null,
+  provider: null,
+  lead: null,
+};
+
 /** A publication series' routine as its link registered it. */
 export type SeriesRoutine = {
   series: string;
