@@ -50,10 +50,7 @@ const frameSchema = z.discriminatedUnion("type", [
 /** One frame of a channel's event stream. */
 export type Frame = z.output<typeof frameSchema>;
 
-const catalogSchema = z.object({
-  channels: z.array(z.object({ id: z.string() })),
-  members: z.array(z.object({ id: z.string() })),
-});
+const catalogSchema = z.object({ channels: z.array(z.object({ id: z.string() })) });
 
 /** Calls `path` under /api/v1, and resolves with Toy Box's answer once it has `expected` status. */
 export async function callToyBox(
@@ -77,7 +74,7 @@ export async function callToyBox(
   return response;
 }
 
-/** The channels and members Toy Box has. */
+/** The channels Toy Box has. */
 export async function readCatalog(origin: URL) {
   return catalogSchema.parse(await (await callToyBox(origin, "channels")).json());
 }
