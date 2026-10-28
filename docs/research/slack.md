@@ -1526,3 +1526,503 @@ Manual text evidence remains weaker than an outbox-metadata match, and terminal
 checks do not isolate the bridge from arbitrary same-UID code. Both are now
 explicit instead of being presented as stronger guarantees. This closes the
 design review, not the implementation, protocol-fake or live-Slack proof.
+
+## Enterprise deployment, verified 2026-10-28
+
+This answers channel messages 79 and 85. **Recommend a dedicated, internally
+created, workspace-installed app inside the Enterprise org, with same-org
+multi-workspace channels supported and Slack Connect still refused.** Enterprise
+membership and workspace installation are separate concepts. An org does not
+force org-wide installation, and Socket Mode does not force a public endpoint.
+GitHub's actual Slack topology, app policies, approved AI processing terms and
+review process are **not verified** here. No credentials or real workspace were
+used for this research.
+[Installation options](https://docs.slack.dev/enterprise/organization-ready-apps/#why_prepare_for_enterprise),
+[Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/).
+
+### E1. Separate installation, delivery, account and audience identity
+
+The current code uses `payload.user_team ?? payload.team ?? context.teamId`
+as `SlackMessage.teamId`, then compares it to the installation in both
+`classify` and `authorRole`. This rejects an admitted colleague from another
+workspace in the same Enterprise org. Changing `user_team` to `source_team`
+would not fix it. Those are different kinds of context, not company-membership
+credentials.
+
+| Surface | Verified meaning and recommended handling |
+|---|---|
+| `auth.test` | Bot responses identify `team_id`, `user_id` and `bot_id`; an Enterprise workspace also returns `enterprise_id`. Persist the latter as nullable installation identity, not as evidence about each author. The pinned SDK also models optional `is_enterprise_install`, `expires_in` and `app_id`. Do not require `app_id` from this response because its documented ordinary-bot example omits it. |
+| `bots.info` | `bot.app_id` establishes the bot's app, and `bot.user_id` the bot user. `bot_id` is workspace-specific. A workspace token ignores `team_id`; an org token requires workspace/enterprise context. The existing `users:read` covers this method. |
+| Socket Mode `hello` | `connection_info.app_id` identifies the app-level connection. The documented hello contains no workspace or enterprise identity. It checks the xapp/bot-app pairing, not which installation or person an event represents. |
+| Events wrapper | `api_app_id` identifies the intended app. Outer `team_id` is event context and can differ from an installation's workspace in a shared-channel delivery. Preserve `context_team_id`, `context_enterprise_id`, optional outer `enterprise_id`, `is_ext_shared_channel`, `event_context` and the authorization tuple instead of treating outer team as the author's employer. |
+| `authorizations` | Each entry describes an **app installation**, not the message author: nullable enterprise/workspace, authorized user/bot, `is_bot`, `is_enterprise_install`. `false` is normal for a workspace install inside an Enterprise org. Only one installation is included, not an exhaustive authorization list. A true `is_enterprise_install` means org installation, not merely an Enterprise customer. |
+| Message `user` | The acting account. Resolve/store this independently from all team fields. An edit's actor/content belongs to the nested message, not a wrapper's user. |
+| Message `team`, `user_team`, `source_team` | Slack describes `team` as the workspace where the event happens, `user_team` as the sending user's workspace, and `source_team` as the workspace from which the message originates. These may differ within one company, are not uniformly present, and do not establish Enterprise membership. Keep optional provenance separate, without inventing an author team when absent. |
+| `block_actions.team` | The app's installation workspace. It is **null for an org-installed app**. Keep exact installation-team checking for the recommended workspace install. |
+| `block_actions.enterprise` | The enterprise the installed app belongs to, whether workspace-installed in that org or org-installed. It is not proof the clicking account belongs to it. |
+| `block_actions.user.id`, `user.team_id` | The human account and its workspace context. Do not equate that context with the installation workspace. A sibling-workspace owner can legitimately click. Approve only the exact pinned owner account, app, proposal, card and known action, as before. |
+
+Sources for the table:
+[auth.test](https://docs.slack.dev/reference/methods/auth.test/#response),
+[pinned SDK response type](https://github.com/slackapi/node-slack-sdk/blob/a98047a7f27149812664c78e2dccfe4155b0e145/packages/web-api/src/types/response/AuthTestResponse.ts),
+[bots.info](https://docs.slack.dev/reference/methods/bots.info/#usage-info),
+[hello](https://docs.slack.dev/apis/events-api/using-socket-mode/#connect),
+[event wrapper](https://docs.slack.dev/apis/events-api/#callback-field),
+[Enterprise event examples and field meanings](https://docs.slack.dev/enterprise/developing-for-enterprise-orgs/#events_api),
+[block_actions](https://docs.slack.dev/reference/interaction-payloads/block_actions-payload/#fields).
+
+**Receiver routing needs a correction too.** The current
+`eventCallbackSchema.team_id` description says "the installation's team, even in
+a shared channel". Slack's own Enterprise example has outer team T1 but an
+authorization for T2. A maintainer also documents this exact distinction.
+For a dedicated app with only one supported workspace bot installation, match
+the app plus its `is_bot:true`, workspace-level authorization tuple against the
+pinned team/bot user and enterprise, rather than filtering exclusively on outer
+team. Never use `authorizations.user_id` as the human actor. On event types with
+no authorizations, retain the documented event-specific workspace check.
+[Enterprise example](https://docs.slack.dev/enterprise/developing-for-enterprise-orgs/#events_api),
+[Slack maintainer explanation](https://github.com/slackapi/bolt-python/issues/1107),
+[revocation is one event with its own wrapper-team contract](https://docs.slack.dev/reference/events/tokens_revoked/).
+
+If the same app is installed in additional workspaces, a single nonmatching
+authorization is not proof our pinned installation lacks access, because the
+list is truncated. Either make that multi-install topology explicitly
+unsupported with a visible diagnostic, or resolve the full installation list
+using `apps.event.authorizations.list` **after** durable receipt/ack. That
+requires app-level `authorizations:read`, in addition to `connections:write`,
+not a new bot scope. Do not add a remote authorization request inside the ack
+transaction. The method is cursor-paginated and not every event has
+`event_context`.
+[Authorization enumeration and scope](https://docs.slack.dev/reference/methods/apps.event.authorizations.list/).
+
+**Receiver handoff clarification (message 91).** Match `api_app_id` on every
+callback. Route `app_uninstalled` and `tokens_revoked` by their documented outer
+`team_id` contracts before the generic authorization rule. The uninstall
+reference explicitly includes an `is_bot:false` authorization, so requiring our
+bot tuple there would lose a real uninstall.
+[Uninstall payload and workspace meaning](https://docs.slack.dev/reference/events/app_uninstalled/),
+[revocation payload and workspace meaning](https://docs.slack.dev/reference/events/tokens_revoked/).
+
+For ordinary authorized events, the proposed `is_bot:true`, pinned team and
+pinned bot-user match is correct for the declared single-install deployment.
+Also refuse an explicit `is_enterprise_install:true`, and reject any supplied
+enterprise identity that contradicts the pinned installation. Do not require
+optional fields merely because the newest example includes them. An explicitly
+empty, nonmatching or malformed authorization array must never become the
+"authorizations absent" wrapper-team fallback. Limit that fallback to supported
+event types whose reference establishes the relevant workspace contract, not
+unknown events. Test absence separately from empty/nonmatching arrays.
+[Installation tuple and forward-compatible fields](https://docs.slack.dev/apis/events-api/#callback-field).
+
+Make "dedicated app installed in exactly one workspace" an explicit deployment
+prerequisite, not a conclusion drawn from a nonmatching tuple. Persist/ack the
+receipt and log an authorization mismatch as a possible unsupported topology,
+not proof that our install lacks access or that a second install exists. Clicks
+retain exact app and `team.id` checks; a null team is explicitly unsupported
+org-installation input, not a reason to compare the clicking person's team.
+[Truncated authorizations](https://docs.slack.dev/apis/events-api/#event-type-structure),
+[interaction installation team](https://docs.slack.dev/reference/interaction-payloads/block_actions-payload/#fields).
+
+#### Admission-time checks, then exact IDs on the message path
+
+The lead's message 85 is the simpler recommendation. The official
+`users.identity` reference explicitly says **"User IDs are now globally
+unique"**, and that the same person in unrelated workspaces has different IDs.
+Enterprise documentation says one global U/W ID identifies a person across
+the Enterprise org. **I did not find an explicit promise that IDs are never
+reassigned over all time**, so do not claim that stronger lifetime guarantee.
+The general user-object page still recommends storing workspace and ID
+together. Partition cached identities and grants by our pinned installation,
+while treating a Slack-supplied Enterprise alias as the same account only when
+Slack establishes the mapping.
+[Global uniqueness](https://docs.slack.dev/reference/methods/users.identity/#response),
+[Enterprise global IDs](https://docs.slack.dev/enterprise/developing-for-enterprise-orgs/#user_ids),
+[user ID and enterprise_user fields](https://docs.slack.dev/reference/objects/user-object/#fields).
+
+Recommended admission contract:
+
+1. At terminal claim confirmation, `allow` apply and owner transfer, fetch
+   `users.info` outside the database queue. `users.list` is insufficient: Slack
+   explicitly says it may omit sibling-workspace users. Resolve the name for
+   display, but authorize with IDs. Reject unknown, deactivated and bot accounts,
+   including special Slackbot.
+2. With a pinned Enterprise ID, require
+   `user.enterprise_user.enterprise_id === installation.enterpriseId`. With a
+   standalone workspace, require the resolved account's `team_id` to equal the
+   installation's team. Missing affiliation is unverified, not local by default.
+   If a legitimate Enterprise response lacks the required fields, refuse with
+   a clear diagnostic instead of guessing. `is_stranger:false` is not proof of
+   local membership.
+3. Store the resolved canonical user ID, any returned root-ID alias, verified
+   enterprise/workspace affiliation, bot/deactivated state and verification
+   time. Prefer `enterprise_user.id` when present. Migration aliases must come
+   from Slack, never matching names or email.
+4. On messages, match owner/allowlist by those exact admitted IDs. Remove
+   `other_team` as an authorization rule and the team-equality early return in
+   `authorRole`. Preserve optional message-team fields only as provenance.
+   Unknown people remain observed and never become requesters from a missing
+   team field. No per-message `users.info` or new-user lookup is needed.
+5. Claim interception still consumes every code-shaped message before content
+   storage. It may record the raw candidate ID from an eligible live human
+   message without requiring the author's team to equal the installation.
+   **The terminal must verify affiliation before offering confirmation/pinning.**
+   A correct bearer code from an external account must not establish ownership.
+6. Exact-ID matching does not prove current membership forever. Reverify the
+   small admitted-user set at startup/reconnect and periodically outside the
+   queue. `user_change` can invalidate cached membership/deactivation evidence
+   using existing `users:read`, with startup/periodic refresh covering missed
+   events. A changed installation Enterprise ID or ID-translation/migration
+   signal should hold execution for explicit revalidation, not silently rewrite
+   grants. Choose and document the bounded-staleness interval. This is not a
+   lookup on each message.
+
+[Cross-workspace lookup and actions](https://docs.slack.dev/enterprise/developing-for-enterprise-orgs/#handling_unknown_users),
+[users.info and scope](https://docs.slack.dev/reference/methods/users.info/),
+[user fields and is_stranger meaning](https://docs.slack.dev/reference/objects/user-object/#fields),
+[user_change](https://docs.slack.dev/reference/events/user_change/),
+[migration.exchange](https://docs.slack.dev/reference/methods/migration.exchange/),
+[migration outages](https://docs.slack.dev/enterprise/developing-for-enterprise-orgs/#migration).
+
+An Enterprise member or workspace guest is not necessarily a company employee.
+Slack exposes guest flags, not an HR employment attestation. Recommend full
+members only for initial owner/admission unless the product explicitly supports
+owner-approved guests. The reviewer must decide this policy. The same-company
+test must not be a claim that contractors are employees.
+[Guest flags](https://docs.slack.dev/reference/objects/user-object/#fields).
+
+**Does the current code accept outsiders?** Missing team provenance alone does
+not let an arbitrary stranger open a request: exact owner/allowlist checks still
+apply. It does mean the fallback cannot prove the asserted affiliation, and a
+claim must not rely on it. Observed text from unapproved people inside a request
+thread is intentionally retained under the existing policy, so it can still
+reach the model as context. Bot/channel membership and approved-channel policy
+remain independent gates. Admission checks must apply equally to owner, allow
+and transfer, not only to `allow`.
+
+### E2. Org-shared is internal, not Slack Connect
+
+**Change the current blanket ban on `is_org_shared`.** Slack distinguishes:
+
+| Current channel facts | Recommended v1 outcome |
+|---|---|
+| `is_ext_shared` or `is_pending_ext_shared` | Refuse link/resume and hold existing output. External or pending external sharing remains unsupported. |
+| `is_org_shared`, no external/pending flag | Permit within the pinned Enterprise org, with explicit audience shown on the approval card. Do not infer external sharing from `is_shared`. |
+| A linked channel gains another internal workspace or changes private/public kind | Hold and require fresh owner approval because audience widened, even though it remains in-company. |
+| Sharing state or audience cannot be established | Hold with an explained unverified state, not an implicit internal classification. |
+
+`is_shared` deliberately includes both internal multi-workspace and external
+sharing. Store separate external, pending and org flags. Add the sorted
+`shared_team_ids`/available internal-workspace set, `enterprise_id` and
+`context_team_id` to cached channel facts and the approval audience fingerprint.
+A boolean org flag alone cannot detect another internal workspace being added
+to an already org-shared channel. These sets describe workspace topology, not a
+complete frozen roster of individual readers.
+[Conversation booleans and attributes](https://docs.slack.dev/reference/objects/conversation-object/#booleans),
+[Slack Connect's explicit is_shared warning](https://docs.slack.dev/apis/slack-connect/#is_shared).
+
+Keep the initial safety hold on `channel_shared`, invalidate cached facts and
+refresh before resuming. Its current event reference describes an **external**
+workspace join, and `connected_team_id` may even be an Enterprise E ID. Do not
+decide company membership from that ID's prefix or assume the event is a
+complete feed of internal audience changes. Periodic/reconnect channel refresh
+must detect the latter. If refreshed facts prove the audience exactly unchanged,
+the temporary verification hold can clear. A real audience change requires the
+normal approval path. No auto-resume just because sharing is internal.
+[channel_shared](https://docs.slack.dev/reference/events/channel_shared/),
+[Enterprise shared-channel types](https://docs.slack.dev/enterprise/#shared-channels).
+
+**Brief/code surfaces:** `fx-shared`, `px-approval.Audience`, `channel_info`,
+startup/link/resume capability checks, `audienceChange`, send-time checks and
+the corresponding channel/parser fixtures. This changes no bot OAuth scope.
+
+### E3. Installation and approval
+
+**Ordinary app approval still applies to an internal Socket Mode app.** An Org
+Owner can enforce approval across workspaces. Workspace Owners/app managers
+handle their requests unless org policy resolves the app. Approval reviews the
+requested scopes. Later scope increases can require new approval. Being an app
+collaborator or a channel owner is not equivalent to being an app approver.
+[Workspace approval](https://slack.com/help/articles/222386767-Manage-app-approval-for-your-workspace),
+[org policies](https://slack.com/help/articles/360038559694-Set-organization-level-policies-for-apps),
+[org app management](https://slack.com/help/articles/360000281563-Manage-apps-in-an-Enterprise-organization).
+
+**Correction to channel message 78:** Marketplace-only is not automatically a
+blocker. Slack's settings documentation explicitly says this setting **"will
+not prevent members from creating and installing internal apps."** Socket Mode
+apps cannot currently list publicly in the Marketplace, but a genuinely
+internally created app has this documented path. Create a separate
+company-owned app inside the target work workspace rather than distribute the
+personal test app into it. Confirm how GitHub classifies/approves that app.
+The org-policy article does not separately spell out every internal-app
+exception, so do not promise an org administrator's exact UI or GitHub-specific
+override from the workspace-setting article alone.
+[Internal-app exception](https://slack.com/help/articles/1500009181142-Manage-app-settings-and-permissions),
+[Socket Mode restriction](https://docs.slack.dev/apis/events-api/using-socket-mode/),
+[Internal versus Distributed source](https://slack.com/help/articles/360000281563-Manage-apps-in-an-Enterprise-organization).
+
+**Keep `org_deploy_enabled:false` for v1.** Workspace installation within an
+Enterprise org is officially supported for this app class. Org-wide deployment
+is a different product scope: one token can represent several granted
+workspaces, installation may return `team:null`, some methods need explicit
+team selection, and workspace grants/revocations have their own events.
+It is not necessary to add admin/SCIM/Discovery scopes for our use case.
+Reject `is_enterprise_install:true` credentials with an actionable diagnostic
+rather than accidentally interpreting them as a normal workspace installation.
+If GitHub requires org-only deployment, that is a real additional implementation
+requirement, not a manifest toggle to turn on before testing.
+[Installation options and token model](https://docs.slack.dev/enterprise/organization-ready-apps/),
+[org OAuth payload and method context](https://docs.slack.dev/enterprise/developing-for-enterprise-orgs/#oauth),
+[grant/revocation events](https://docs.slack.dev/enterprise/developing-for-enterprise-orgs/#new).
+
+Admin policy can also restrict **who can use an app** and **which channels the
+app may enter**. Slack currently labels the channel-access control as rolling
+out gradually. Approval and bot invitation therefore do not alone prove every
+intended channel is usable. Treat refusals as policy/access errors and never
+attempt another credential or alternate transport to bypass them.
+[Member and channel app permissions](https://slack.com/help/articles/360000281563-Manage-apps-in-an-Enterprise-organization).
+
+Corporate egress proxies/VPNs and token IP allowlists can affect a laptop bridge.
+Slack documents IP policy rejection as `invalid_auth`, another reason not to
+purge on that error. Validate WebSocket/API access through approved networking,
+without disabling TLS validation or exposing Toy Box publicly.
+[Token network restrictions](https://docs.slack.dev/concepts/security/#restrict-ip-addresses).
+
+### E4. Rotation is supportable, but not transparently crash-proof
+
+**If token rotation is required, the current static-token bridge is not ready
+for that installation.** Enterprise policy can require OAuth token rotation
+and expire unused refresh tokens after **30 days**. Slack says these policy
+changes apply to installations/updates after the setting is enabled, not
+retroactively to all existing apps.
+[Org token-rotation policy](https://slack.com/help/articles/360038559694-Set-organization-level-policies-for-apps).
+
+Verified protocol:
+
+- Turning on bot/user token rotation cannot be undone. Access tokens expire in
+  43,200 seconds (12 hours); honor each response's `expires_in`.
+- Provision an access/refresh pair through OAuth. Existing long-lived tokens
+  can be exchanged **once** with `oauth.v2.exchange`, supplying the app's client
+  ID and client secret. Do not revoke the old long-lived token yourself as an
+  exchange cleanup step.
+- Refresh with `POST https://slack.com/api/oauth.v2.access`,
+  `grant_type=refresh_token` and the current refresh token. Client ID and secret
+  authenticate the app; the method recommends HTTP Basic authentication rather
+  than logging them as ordinary request parameters.
+- Every successful refresh returns a **new access token and new refresh token**.
+  Persist both together. Refresh tokens are one-use. The guide mentions a
+  **short grace period** before revocation, but gives no duration or recovery/
+  idempotency guarantee. Do not promise that retrying an old token returns the
+  same replacement pair.
+- An existing access token is not immediately invalidated by refresh, but at
+  most two access tokens may remain active. Repeated refreshes can revoke the
+  oldest. This is not a license to run parallel refresh loops.
+
+[Rotation lifecycle](https://docs.slack.dev/authentication/using-token-rotation/),
+[exchange and token_already_exchanged](https://docs.slack.dev/reference/methods/oauth.v2.exchange/),
+[refresh arguments and client authentication](https://docs.slack.dev/reference/methods/oauth.v2.access/).
+
+**Current app-level token nuance:** docs now also support separately opted-in
+rotation for Socket Mode app-level tokens. Manifest
+`settings.app_level_token_rotation_enabled:true` controls this separately from
+`token_rotation_enabled`. New rotating tokens use `xoxe.xapp-`, expire in 12
+hours and use their own refresh chain; existing app-level tokens created before
+opting in remain non-expiring. A lost app-level token pair requires creation of
+a new app-level token. Do not assume bot rotation automatically rotates the
+existing xapp, or that every Enterprise policy requires both settings. No
+effective date for this app-level addition was found on the current reference.
+[App-level rotation](https://docs.slack.dev/authentication/tokens/#app-level-rotation),
+[manifest setting](https://docs.slack.dev/reference/app-manifest/#settings).
+
+Recommended minimal credential manager:
+
+1. Provision client ID, client secret, token kind, app/workspace/enterprise and
+   bot identity, access token, refresh token, acquired time, expiry and a local
+   generation. Keep secrets in a bridge-owned secure store, never in CLI
+   results, ordinary audit/log payloads, the model environment or the repo.
+   Protect the response pair and rotation state with the same full-durability
+   storage contract. A Mac Keychain-held encryption key can protect a dedicated
+   credential record, but encryption does not isolate a same-UID agent.
+2. Exactly one worker may refresh a token chain. The exclusive bridge lock
+   provides one-process ownership; an in-process single-flight/generation check
+   prevents concurrent callers from starting another refresh. Bot and optional
+   app-level chains are separate. Disable SDK transport retries for refresh.
+3. Refresh conservatively before expiry, for example one hour early with
+   jitter. First commit a non-secret `refreshing` intent naming the generation.
+   Make the HTTP request outside the database queue. On a validated success,
+   durably replace access token, refresh token, expiry and generation in one
+   transaction **before publishing the new token to callers**. Never save only
+   the access half.
+4. Web API calls obtain the current committed bot token, not a constructor's
+   forever-static original. App-level refresh updates credentials used for the
+   next `apps.connections.open`; do not tear down a healthy socket solely to
+   rotate. The old access token remains usable until expiry/revocation, but a
+   failed refresh must be visible well before that.
+5. Handle explicit 429s with persisted Retry-After. A response timeout/reset,
+   crash while `refreshing`, or failure to durably save a received replacement
+   is **rotation_unknown**, not a safe automatic refresh retry. Preserve
+   evidence and explain reauthorization/reprovisioning. Do not repeatedly
+   redeem the uncertain old refresh token.
+6. `invalid_refresh_token`, expiration after extended downtime and missing
+   replacement credentials enter a repair-required state. Stop using expired
+   tokens, hold publication and preserve settings/content under the chosen
+   authentication-failure retention policy. OAuth reauthorization repairs a bot
+   chain; app-level reprovisioning repairs the connection chain. Recheck the
+   installation identity before resuming.
+
+Steps 1-6 are our design recommendation, not an SDK-provided atomicity guarantee.
+Slack and SQLite cannot share a transaction. If Slack consumes the refresh token
+but the replacement response is lost before durable storage, **fully automatic,
+lossless recovery cannot be guaranteed from the documented API**. A short grace
+period may help in practice but is not a provable crash-recovery mechanism.
+The minimal correct product is fail-closed with a clear operator recovery path,
+not "rotation can never interrupt service". Reauthorization need not uninstall
+the app or destroy bridge state.
+
+**Change revocation handling before enabling rotation.** Slack explicitly says
+`auth.revoke` on a rotating app revokes one token **without uninstalling the
+underlying installation**; events can continue. `tokens_revoked` identifies bot
+user IDs, not token generations. Therefore a matching bot-user revocation is no
+longer sufficient evidence to purge the installation. For rotating installs,
+hold/revalidate the current chain and treat a confirmed uninstall separately.
+Do not delete all content because an older access generation was revoked.
+Whether every refresh/expiry produces that event is not promised by the event
+reference and must not be assumed.
+[Rotating-token revocation semantics](https://docs.slack.dev/authentication/using-token-rotation/#uninstall),
+[revocation payload](https://docs.slack.dev/reference/events/tokens_revoked/).
+
+Before that manager exists, setup/doctor should explicitly refuse supplied
+rotating credentials instead of working for twelve hours and then failing.
+Never enable rotation in the manifest or app UI merely to pass review first.
+Secret detection/redaction also needs the rotating `xoxe.xoxb-`, `xoxe.xapp-`
+and refresh-token formats, and must not dump OAuth response bodies on errors.
+
+### E5. Reviewer questions and the limits of local copies
+
+This is a reviewer checklist grounded in Slack's published recommendations, not
+a claim about GitHub's private process. A small app does not inherit Slack's own
+AI or Marketplace security guarantees. A custom Socket Mode app has not passed
+Marketplace review just because its scopes are approved.
+[Slack's admin review questions](https://slack.com/help/articles/360001670528-Security-recommendations-for-approving-apps),
+[Marketplace review scope and limits](https://docs.slack.dev/slack-marketplace/marketplace-terms-conditions/slack-security-review/).
+
+| Reviewer question | Already in our design | Remaining approval or evidence gap |
+|---|---|---|
+| What does it read and why? | Nine justified bot scopes, only linked channels retained, no DMs/admin/SCIM/Discovery, default requester filtering, no autojoin. | Explain that bot OAuth capability/membership can be broader than local filtering, and that unallowlisted thread context can reach the model. Confirm the exact approved channels and permitted private content. |
+| Where does data go? | Outbound Socket Mode, loopback Toy Box, intentional Slack publication, disclosed model use. | Name the actual Copilot account/plan, selected model providers/subprocessors, processing regions, retention, support access and contractual no-training terms. "Copilot-only lead" alone does not establish these. |
+| Who can act or widen access? | Explicit IDs, terminal-confirmed owner, Slack-authenticated approval, immutable read-set, audited narrowing, revision-bound output. | Enterprise admission/audience changes above, guest policy, account removal response and prompt-injection scenario proof. Model instructions are not an execution sandbox. |
+| How are copies secured/deleted? | 0700 folder, 0600 socket, FileVault check, local retention/purge and file TTL. | Include SQLite/WAL, backups/snapshots, downloaded files, generated reports, Toy Box session/tool transcripts, conversation context and provider copies. Deleting the bridge ledger cannot erase already-consumed model context. Prove the actual deletion boundary rather than promising end-to-end purge. |
+| How is it operated? | Exclusive lock, commit-before-ack, cooldowns, no blind post retry, coverage/error visibility. | Company-owned app collaborators, maintenance and incident contacts, approved Mac/MDM/network/secrets storage, rotation, dependency updates, offboarding and a supported disaster-recovery path. |
+| Is the host an adequate trust boundary? | Same-UID/local-process limitation is explicit. | GitHub may require an isolated bridge account, sandbox/managed host or stronger Toy Box auth. FileVault and Unix file mode do not protect bridge secrets from a shell-capable agent with the same UID. |
+
+Slack's Developer Policy, effective **December 10, 2024**, requires proper
+consent, strong encryption, disclosed necessary scopes and an accessible
+privacy policy, prohibits training LLMs on Slack data, and requires deletion
+within fourteen business days after app deletion/discontinuation. It also
+forbids encouraging users to bypass employer policies. The reviewer should
+approve the actual inference data-processing arrangement; this research is not
+a legal determination that any chosen provider contract meets it.
+[Developer Policy](https://docs.slack.dev/developer-policy/),
+[Slack's AI-app data/security guidance](https://slack.dev/data-security-best-practices-for-agentic-slack-apps/).
+
+**EKM.** Slack EKM encrypts covered data inside Slack and explicitly includes
+apps running on Slack's managed infrastructure. Our local bridge is not that
+infrastructure. Its downloaded plaintext, SQLite records and model transcripts
+are separate copies that cannot be presumed to be revoked by a Slack key
+change. Slack exposes `ekm_access_denied` redaction and may return that Web API
+error. The redaction actor can be virtual `UREVOKEDU`, which cannot be resolved
+with `users.info`.
+[EKM coverage](https://slack.com/help/articles/360019110974-Slack-Enterprise-Key-Management),
+[redaction subtype](https://docs.slack.dev/reference/events/message/ekm_access_denied/).
+
+Treat an observed redaction as an access withdrawal, not ordinary new human
+content or evidence that repair is complete. Purge/withhold affected cached text
+and files, prevent stale output and mark pending sources unverifiable. A
+redaction can refer to an old message: its lack of a newer edit timestamp must
+not cause the merge to keep the prior text. Current `mergeSnapshot` would
+preserve a same-version stored hash when the incoming snapshot merely drops
+content, so normalization/merge need an explicit access-withdrawal path. Do not
+promise a complete push feed of all EKM revocations or retroactive deletion of
+what the model already read. If that promise is mandatory, this architecture
+needs a different data/control design before deployment.
+
+**DLP.** Slack's native DLP can alert, warn or hide/tombstone messages/files;
+its documented exclusions include non-text files and several other surfaces.
+It does not establish a guaranteed synchronous pre-export gate for this bridge.
+An event can reach us before a later administrative action, and a local secret
+regex is not an enterprise DLP system. Handle subsequent hide/delete/refusal
+without continuing to use a retained copy, and obtain approval for the remaining
+timing gap and model exposure.
+[Native DLP actions and exclusions](https://slack.com/help/articles/12914005852819-Slack-data-loss-prevention).
+
+**Retention and legal hold.** Slack retention and legal-hold settings describe
+Slack's storage, not our database, Toy Box transcripts or provider retention.
+Legal holds preserve certain Slack content despite ordinary edits/deletions and
+expose it through exports/Discovery; their coverage has explicit exclusions.
+The bridge is not a compliance archive and lacks a hold/export integration.
+Do not silently turn off our deletion policy to approximate legal hold or claim
+that a Slack hold automatically preserves/deletes our copies. Ask the designated
+legal/compliance owner whether a short-lived operational copy is permitted and
+how preservation requests reach its operator. Block a corporate rollout if the
+required local-copy obligations conflict with our implemented retention.
+[Legal holds](https://slack.com/help/articles/4401830811795-Create-and-manage-legal-holds),
+[Slack data residency applies to specified Slack-held data](https://slack.com/help/articles/360035633934-Data-residency-for-Slack).
+
+**AI-specific channel controls.** Current Slack documentation also describes
+channel AI-use restrictions and gradually rolling-out app/channel access
+permissions. The former page discusses Slack search/Slackbot/canvas AI; do not
+assume it universally blocks a custom Events API bot. The latter can restrict
+our app's channel placement. Honor actual denials, get explicit approval for
+every selected channel, and do not treat successful API access as evidence the
+company approved AI processing.
+[AI-use restriction scope](https://slack.com/help/articles/47421816860947-Restrict-AI-access-to-certain-channels-canvases-and-lists),
+[app/channel access controls](https://slack.com/help/articles/360000281563-Manage-apps-in-an-Enterprise-organization).
+
+### E6. Recommended brief changes, in corporate-rollout priority
+
+| Priority | Change | Is this a GitHub install blocker? |
+|---|---|---|
+| 1 | Approve the internal app, exact scopes/channels, model-processing path and host/data-copy policy. Name the responsible admin/security/privacy owner. | **Potential hard policy blocker.** Actual GitHub rules and approvers are unknown. Do not deploy first and ask later. Marketplace-only by itself is not proof of a block. |
+| 2 | Implement E4's credential manager and recovery contract if OAuth/app-level rotation is required. Separate rotating-token revocation from uninstall/purge. | **Hard feature blocker if required.** Otherwise the nonrotating test deployment can proceed. |
+| 3 | Add Enterprise ID and installation type, use admission-time verified accounts plus exact IDs, fix authorization-tuple routing and test sibling-workspace claims/requests/clicks. | **Correctness blocker for Enterprise use**, not a Slack install-dialog restriction. |
+| 4 | Permit verified org-shared channels, persist/compare their workspace audience, retain the external/pending-external ban and owner reapproval. | **Channel-usability blocker** if the selected work channel is multi-workspace. |
+| 5 | Add access-withdrawal handling and accurately scope retention/erasure beyond the bridge. Obtain acceptance for EKM/DLP timing and external model copies. | **Potential security/privacy blocker**, depending on required controls. |
+| 6 | Keep workspace-only v1. Reject org-installed credentials and document the explicit supported topology. | **Hard scope blocker only if GitHub mandates org deployment.** Do not imply all Enterprise customers mandate it. |
+
+Minimum new tests for those changes:
+
+- A T1 workspace installation with enterprise E accepts an admitted global
+  account from T2 in E, through message, terminal claim, allow and owner click.
+  Missing `user_team` does not authorize an unknown account. A foreign-E
+  account, deactivated account and disallowed guest cannot be admitted.
+- A wrapper naming T1 with an authorization for our T2 installation routes
+  correctly. A wrong app/bot authorization does not. Truncated nonmatching
+  authorizations are distinguished from a proven foreign event. Null interaction
+  team/org-install credentials are handled explicitly rather than crashing.
+- Both U- and W-prefixed IDs and verified local/global aliases match. Different
+  people with the same display name never do. Startup/migration invalidation
+  holds stale grants without per-message API calls.
+- Internal org sharing is permitted, external/pending sharing is not, and adding
+  a workspace to an already org-shared audience stales an old approval.
+- Each rotation chain has one refresh in flight. Success commits the full pair
+  before use. Kill before request, lose the response, kill after receipt but
+  before commit, fail disk persistence, return 429, revoke an older generation
+  and restart after thirty days. Every uncertain outcome is visible and never
+  silently purges or retries a one-use chain.
+- An old same-ts EKM redaction removes cached content/files and holds a queued
+  answer. Ordinary stale snapshot replay cannot resurrect it. A native DLP-style
+  hide/delete is not reinterpreted as permission to use our older copy.
+
+These are source-grounded acceptance recommendations. Free-workspace protocol
+fakes can exercise their state machines, but cannot prove Slack's real
+Enterprise payload variants or GitHub's policies. No Enterprise sandbox was
+created. An approved Enterprise test environment remains required before
+claiming Enterprise compatibility.
+[Slack's Enterprise testing guidance](https://docs.slack.dev/enterprise/developing-for-enterprise-orgs/#sandbox).
+
+**Local characterization:** a credential-free Bun invocation against the current
+`normalizeHistoryMessage`, `authorRole`, `classify`, `readFrame` and
+`mergeSnapshot` confirmed all three code-specific observations: an allowlisted
+T2 author is stored as observed/rejected as `other_team` by a T1 installation;
+the callback parser drops the authorization tuple; and same-version content
+removal alone leaves a cached snapshot intact. These are local contract checks,
+not observed Enterprise workspace behavior.
