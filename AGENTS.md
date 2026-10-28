@@ -33,7 +33,7 @@ Each guide explains one capability end to end. Read them in order for a first ar
 - [`src/features/requests/AGENTS.md`](src/features/requests/AGENTS.md): the request loop, from classification and the request lifecycle to waking the lead and the CLI contract it answers through
 - [`src/features/outbox/AGENTS.md`](src/features/outbox/AGENTS.md): every write to Slack, checked at send time, posted once, and reconciled when its outcome is unknown
 - [`src/features/links/AGENTS.md`](src/features/links/AGENTS.md): link settings, the allowlist, the owner's passphrase, and suspensions
-- [`src/features/toybox/AGENTS.md`](src/features/toybox/AGENTS.md): waking a lead by running its channel's routine
+- [`src/features/toybox/AGENTS.md`](src/features/toybox/AGENTS.md): reading a Toy Box channel, and waking its lead by running one of its routines
 - [`tests/AGENTS.md`](tests/AGENTS.md): the unit, integration, end-to-end, and live layers and the protocol fakes they share
 
 ## Writing Great Code
