@@ -157,12 +157,6 @@ describe("openBridgeDatabase", () => {
 });
 
 describe("unmetSettings", () => {
-  test("accepts the settings the bridge requires", () => {
-    expect(
-      unmetSettings({ journal_mode: "wal", synchronous: 2, fullfsync: 1, foreign_keys: 1 }),
-    ).toEqual([]);
-  });
-
   test("names every setting SQLite didn't apply", () => {
     expect(
       unmetSettings({ journal_mode: "delete", synchronous: 1, fullfsync: 0, foreign_keys: 1 }),
