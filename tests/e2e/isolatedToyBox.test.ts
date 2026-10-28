@@ -3,12 +3,12 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createTestFolder } from "@bridge/server/testFixtures";
-import { fetchToyBoxCatalog } from "@toybox/server/api";
 import { version } from "../../package.json";
 import { readCommandLog } from "./commandLog";
 import { installCommands, isolatedEnvironment, waitUntil } from "./isolatedToyBox";
 import { describeEndToEnd } from "./suite";
 import { CREATE_CHANNEL_TIMEOUT, createTestChannel, type TestChannel } from "./testChannel";
+import { readCatalog } from "./toyBoxApi";
 
 describe("isolatedEnvironment", () => {
   test("drops what points at the owner and runs Toy Box under its own home", () => {
@@ -97,7 +97,7 @@ describeEndToEnd(
     suite.scenario(
       "a test channel's lead kicks off alone, with no wake scheduled",
       async () => {
-        const catalog = await fetchToyBoxCatalog(suite.toyBox.origin);
+        const catalog = await readCatalog(suite.toyBox.origin);
 
         expect(catalog.members).toEqual([]);
         expect(channel.presence()).not.toHaveProperty("wakeAt");
@@ -162,7 +162,7 @@ describeEndToEnd(
     suite.scenario(
       "the run leaves the owner's Toy Box and Copilot untouched",
       async () => {
-        const catalog = await fetchToyBoxCatalog(suite.toyBox.origin);
+        const catalog = await readCatalog(suite.toyBox.origin);
         const { home } = suite.toyBox;
 
         expect(catalog.channels.map(({ id }) => id)).toEqual([channel.id]);
