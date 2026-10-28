@@ -3,7 +3,13 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import type { SlackMessage } from "@slackapi/model/messages";
-import { noteReply, storeDelete, storeMessage, trackThread, type LedgerLink } from "./ledger";
+import {
+  noteReply,
+  storeDelete,
+  storeMessage,
+  trackRequestThread,
+  type LedgerLink,
+} from "./ledger";
 
 const link: LedgerLink = {
   id: "link",
@@ -85,10 +91,9 @@ function storeDeleteOf(database: BridgeDatabase, message: SlackMessage) {
   );
 }
 
-function track(database: BridgeDatabase, threadTs: string, latestReplyTs: string | null = null) {
-  return database.write((transaction) =>
-    trackThread(transaction, "C-link", threadTs, latestReplyTs),
-  );
+/** A request opens on `source` at `now`. */
+function track(database: BridgeDatabase, source: SlackMessage, now = 1_700_001_000_000) {
+  return database.write((transaction) => trackRequestThread(transaction, link.id, source, now));
 }
 
 // Bun's toMatchObject compares the rows of a query result whole, so the reads copy them out.
@@ -234,7 +239,7 @@ test("a delete the ledger sees first leaves a tombstone its late original can't 
 test("someone not on the allowlist keeps their text only in a request's thread", async () => {
   const database = await openLedger();
   const elsewhere = rootAt(aside, "1700000400.000100");
-  await track(database, ask.ts);
+  await track(database, ask);
 
   await store(database, aside);
   await store(database, elsewhere);
@@ -257,7 +262,7 @@ test("a link that observes the whole channel keeps everyone's text", async () =>
 test("a marker fills in without a change once its thread becomes a request's", async () => {
   const database = await openLedger();
   await store(database, aside);
-  await track(database, ask.ts);
+  await track(database, ask);
 
   const stored = await store(database, aside);
   expect(stored).toMatchObject({ decision: { kind: "update", change: null }, mentionedBot: false });
@@ -339,7 +344,7 @@ test("a tracked thread's newest reply only moves forward", async () => {
     database.read((sql) => sql`SELECT thread_ts, latest_reply_ts FROM threads ORDER BY thread_ts`);
   const later = { ...aside, ts: "1700000900.000100", version: "1700000900.000100" };
   await store(database, ask);
-  await track(database, ask.ts);
+  await track(database, ask);
 
   await store(database, later);
   await store(database, aside);
@@ -361,16 +366,55 @@ test("a reply in a thread the bridge doesn't track leaves threads alone", async 
   expect(await database.read((sql) => sql`SELECT * FROM threads`)).toEqual([]);
 });
 
-test("tracking a thread says whether it was untracked", async () => {
+test("a request's thread is tracked, and hydrated once if it holds other messages", async () => {
   const database = await openLedger();
+  const threads = () =>
+    database.read((sql) => sql`SELECT thread_ts, latest_reply_ts FROM threads ORDER BY thread_ts`);
+  const gaps = () =>
+    database.read(
+      (sql) => sql`
+        SELECT channel_id, scope, thread_ts, oldest_ts, latest_ts, state, reason, opened_at
+        FROM coverage ORDER BY id
+      `,
+    );
+  const root = rootAt(ask, "1700000700.000100");
+  const reply = { ...aside, ts: "1700000800.000100", threadTs: root.ts, rootTs: root.ts };
+  const answered = { ...rootAt(ask, "1700000900.000100"), latestReplyTs: "1700000950.000100" };
 
-  expect(await track(database, ask.ts, aside.ts)).toBe(true);
-  expect(await track(database, ask.ts, null)).toBe(false);
-  expect(
-    await database.read(
-      (sql) => sql`SELECT thread_ts, tracked_reason, latest_reply_ts FROM threads`,
-    ),
-  ).toEqual([{ thread_ts: ask.ts, tracked_reason: "request", latest_reply_ts: aside.ts }]);
+  // A fresh root holds nothing else, and a second request in a thread hydrates nothing more.
+  await track(database, ask);
+  await track(database, aside);
+  expect(await gaps()).toEqual([]);
+
+  await track(database, reply);
+  await track(database, answered, 1_700_002_000_000);
+  expect(await threads()).toEqual([
+    { thread_ts: ask.ts, latest_reply_ts: null },
+    { thread_ts: root.ts, latest_reply_ts: reply.ts },
+    { thread_ts: answered.ts, latest_reply_ts: "1700000950.000100" },
+  ]);
+  expect(await gaps()).toEqual([
+    {
+      channel_id: "C-link",
+      scope: "thread",
+      thread_ts: root.ts,
+      oldest_ts: root.ts,
+      latest_ts: "1700001300.000000",
+      state: "open",
+      reason: "thread",
+      opened_at: 1_700_001_000_000,
+    },
+    {
+      channel_id: "C-link",
+      scope: "thread",
+      thread_ts: answered.ts,
+      oldest_ts: answered.ts,
+      latest_ts: "1700002300.000000",
+      state: "open",
+      reason: "thread",
+      opened_at: 1_700_002_000_000,
+    },
+  ]);
 });
 
 function file(id: string) {

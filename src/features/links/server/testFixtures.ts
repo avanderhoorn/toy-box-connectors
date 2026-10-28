@@ -2,12 +2,18 @@ import type { BridgeDatabase } from "@bridge/server/database";
 
 /**
  * Persist an active Link fixture so rows that belong to a Link can be stored. `columns` replace
- * the fixture's, such as a Toy Box channel and routine a fake serves.
+ * the fixture's, such as its settings or a Toy Box channel and routine a fake serves.
  */
 export function createStoredLink(
   database: BridgeDatabase,
   id = "link",
-  columns: { toybox_channel_id?: string; requests_routine_id?: string } = {},
+  columns: {
+    toybox_channel_id?: string;
+    requests_routine_id?: string;
+    status?: "active" | "paused" | "suspended";
+    request_mode?: "mention" | "all";
+    observe?: "requesters" | "channel";
+  } = {},
 ) {
   const link = {
     id,

@@ -1,3 +1,4 @@
+import { threadGap } from "@activity/model/gaps";
 import {
   authorRole,
   fingerprintSource,
@@ -11,6 +12,7 @@ import {
 } from "@activity/model/ledger";
 import type { SlackMessage } from "@slackapi/model/messages";
 import { compareTs, type SlackTs } from "@slackapi/model/ts";
+import { recordGap } from "./coverage";
 import { forgetMessageFiles, syncMessageFiles } from "./files";
 
 // The ledger's writes.
@@ -113,20 +115,31 @@ export async function storeDelete(
   return { decision, purged: await forgetMessageFiles(transaction, channelId, ts) };
 }
 
-/** Tracks a request's thread from its newest known reply. Returns whether it was untracked. */
-export async function trackThread(
+/**
+ * Tracks the thread a request opened in, so the ledger keeps what everyone says there. A thread it
+ * didn't track that holds other messages gets a gap, so repair hydrates it whole.
+ */
+export async function trackRequestThread(
   transaction: Bun.SQL,
-  channelId: string,
-  threadTs: SlackTs,
-  latestReplyTs: SlackTs | null,
-): Promise<boolean> {
+  linkId: string,
+  source: SlackMessage,
+  now: number,
+): Promise<void> {
+  const { channelId, rootTs } = source;
+  const latestReplyTs = source.isReply ? source.ts : source.latestReplyTs;
   const tracked = await transaction`
     INSERT INTO threads (channel_id, thread_ts, tracked_reason, latest_reply_ts)
-    VALUES (${channelId}, ${threadTs}, 'request', ${latestReplyTs})
+    VALUES (${channelId}, ${rootTs}, 'request', ${latestReplyTs})
     ON CONFLICT DO NOTHING
     RETURNING thread_ts
   `;
-  return tracked.length > 0;
+  if (tracked.length === 0 || latestReplyTs === null) return;
+  const window = threadGap(rootTs, now);
+  await recordGap(
+    transaction,
+    { linkId, channelId, threadTs: rootTs, window, reason: "thread" },
+    now,
+  );
 }
 
 /**
