@@ -148,6 +148,13 @@ describe("send-time posting authority", () => {
     expect(check(value)).toEqual({ kind: "failed", error: "request_missing" });
   });
 
+  test("a reply cannot follow its request to a channel the link doesn't watch", () => {
+    const value = facts();
+    value.post.channelId = "C-moved";
+    value.request.channelId = "C-moved";
+    expect(check(value)).toEqual({ kind: "failed", error: "destination_changed" });
+  });
+
   test("a missing or different request cannot authorize a reply", () => {
     const value = facts();
     expect(
@@ -179,6 +186,16 @@ describe("send-time posting authority", () => {
       expect(check(value)).toEqual({ kind: "failed", error: "request_not_ready" });
       value.post.phase = "follow_up";
       expect(check(value)).toEqual({ kind: "allowed" });
+    },
+  );
+
+  test.each(["open", "seen", "in_progress", "answering"] as const)(
+    "a follow-up cannot post to a request that's still %s",
+    (state) => {
+      const value = facts();
+      value.request.state = state;
+      value.post.phase = "follow_up";
+      expect(check(value)).toEqual({ kind: "failed", error: "request_not_ready" });
     },
   );
 
