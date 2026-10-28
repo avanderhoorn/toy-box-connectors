@@ -39,12 +39,6 @@ type Caller = "the lead" | "a member's session" | "a terminal";
 async function ownedBridge() {
   const bridge = await connectedBridge({ link: { slack_channel_id: "C0LINK" } });
   const { slack, channelId, home, dataFolder, deliver } = bridge;
-  slack.addChannel({
-    id: "C0LINK",
-    name: "release-eng",
-    is_private: true,
-    members: [BOT, ALICE, MALLORY],
-  });
   slack.setUser(MALLORY_USER);
   writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", HASH);
   const [askedTs] = timestamps(1);

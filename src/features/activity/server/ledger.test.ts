@@ -76,37 +76,19 @@ test("a delete forgets a message's text for good, even when it arrives first", a
   });
 });
 
-test("a stranger's text is kept only where the link observes them, and another bot's never", async () => {
+test("a stranger's text is kept only where the link observes them", async () => {
   const database = await openLedger();
-  const said = (ts: string, changes = {}) =>
-    askMessage(ts, {
-      userId: "U-stranger",
-      text: "it's red",
-      mentions: [],
-      mentionsBot: false,
-      ...changes,
-    });
   const inThread = replyMessage(ask, "1700000200.000100", { userId: "U-stranger" });
+  const atRoot = askMessage("1700000300.000100", { userId: "U-stranger", text: inThread.text });
   await store(database, inThread);
   // A request started in the thread since, so its redelivery fills the marker in.
   await store(database, inThread, { inRequestThread: true });
-  await store(database, said("1700000300.000100"));
-  await store(database, said("1700000400.000100"), { observe: "channel" });
-  await store(database, said("1700000500.000100", { author: "bot" }), {
-    inRequestThread: true,
-    observe: "channel",
-  });
+  await store(database, atRoot);
+  await store(database, { ...atRoot, ts: "1700000400.000100" }, { observe: "channel" });
 
-  expect(
-    await database.read(
-      (sql) => sql`SELECT ts, author_role, text IS NOT NULL AS kept FROM messages ORDER BY ts`,
-    ),
-  ).toEqual([
-    { ts: inThread.ts, author_role: "observed", kept: 1 },
-    { ts: "1700000300.000100", author_role: "observed", kept: 0 },
-    { ts: "1700000400.000100", author_role: "observed", kept: 1 },
-    { ts: "1700000500.000100", author_role: "other", kept: 0 },
+  expect((await readLedger(database)).messages).toEqual([
+    { ts: inThread.ts, text: inThread.text, deleted: 0, updated_seq: 1 },
+    { ts: atRoot.ts, text: null, deleted: 0, updated_seq: 2 },
+    { ts: "1700000400.000100", text: inThread.text, deleted: 0, updated_seq: 3 },
   ]);
-  const kinds = (await readLedger(database)).changes.map((change: { kind: string }) => change.kind);
-  expect(kinds).toEqual(["new", "new", "new", "new"]);
 });

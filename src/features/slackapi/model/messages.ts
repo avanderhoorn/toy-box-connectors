@@ -14,6 +14,7 @@ export const slackMessageSchema = z.object({
   app_id: id.nullish().describe("App author"),
   text: z.string().nullish().describe("Slack text"),
   edited: z.object({ ts: slackTsSchema.describe("Edit time") }).nullish(),
+  latest_reply: slackTsSchema.nullish().describe("A root's newest reply"),
   hidden: z.boolean().nullish().describe("Content withdrawn"),
 });
 const bookkeeping = new Set(["message_changed", "message_deleted", "message_replied"]);

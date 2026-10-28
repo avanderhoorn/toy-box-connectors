@@ -124,7 +124,7 @@ export async function startBridge(
     });
     if (bot) {
       outbox = startOutboxWorker(database, bot, {
-        ready: () => slackState().connection === "connected" && slackState().problem === null,
+        ready: () => slackState().connection === "connected",
         onChange: () => scheduler?.reconsider(),
         onError: failure.resolve,
       });

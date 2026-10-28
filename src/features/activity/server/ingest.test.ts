@@ -26,33 +26,21 @@ function ingest(database: BridgeDatabase, event: SlackMessageEvent) {
   return database.write((transaction) => ingestMessageEvent(transaction, event, 1_700_001_000_000));
 }
 
-function readStored(database: BridgeDatabase) {
-  return database.read(async (sql) => ({
-    messages: await sql`SELECT channel_id, user_id, author_role, deleted FROM messages`,
-    requests: await sql`SELECT requester_user_id, state, closed_reason FROM requests`,
-  }));
-}
-
-test("only a linked channel's messages are stored, each under its author's own ID", async () => {
+test("only a linked channel's messages are stored, under their authors' own IDs, and a delete cancels the request it asked", async () => {
   const database = await openIngest();
   const elsewhere = askMessage("1700000200.000100", { channelId: "C-other" });
   expect(await ingest(database, { kind: "message", message: elsewhere, edit: false })).toBe(false);
   const aliased = { ...ask, userId: "W-owner" };
   expect(await ingest(database, { kind: "message", message: aliased, edit: false })).toBe(true);
   expect(await ingest(database, { kind: "replied" })).toBe(false);
-
-  expect(await readStored(database)).toEqual({
-    messages: [{ channel_id: "C-link", user_id: "U-owner", author_role: "allowed", deleted: 0 }],
-    requests: [{ requester_user_id: "U-owner", state: "open", closed_reason: null }],
-  });
-});
-
-test("a deleted message cancels the request it asked", async () => {
-  const database = await openIngest();
-  await ingest(database, { kind: "message", message: ask, edit: false });
   expect(await ingest(database, { kind: "deleted", channelId: "C-link", ts: ask.ts })).toBe(true);
 
-  expect(await readStored(database)).toEqual({
+  expect(
+    await database.read(async (sql) => ({
+      messages: await sql`SELECT channel_id, user_id, author_role, deleted FROM messages`,
+      requests: await sql`SELECT requester_user_id, state, closed_reason FROM requests`,
+    })),
+  ).toEqual({
     messages: [{ channel_id: "C-link", user_id: "U-owner", author_role: "allowed", deleted: 1 }],
     requests: [
       { requester_user_id: "U-owner", state: "cancelled", closed_reason: "source_deleted" },

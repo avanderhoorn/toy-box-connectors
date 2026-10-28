@@ -25,11 +25,7 @@ test.each<[string, LifecycleAction | null, EventCallback["event"]]>([
   ["a public channel", suspend("channel_made_public"), notice("channel_convert_to_public")],
   ["an archive notice", suspend("channel_archived"), notice("channel_archive")],
   ["a private archive notice", suspend("channel_archived"), notice("group_archive")],
-  [
-    "an archived channel",
-    suspend("channel_archived"),
-    { type: "channel_archive", user: "U-owner" },
-  ],
+  ["an archived channel", suspend("channel_archived"), { type: "channel_archive" }],
   ["a deleted channel", suspend("channel_not_found"), { type: "channel_deleted" }],
   ["a shared channel", suspend("workspace_joined"), { type: "channel_shared" }],
   ["our bot leaving", suspend("bot_removed"), { type: "member_left_channel", user: "U-bot" }],

@@ -7,7 +7,8 @@ import { ALICE, BOT, connectedBridge, said, timestamps } from "./connectedBridge
 import { waitFor } from "./waitFor";
 
 test("an answer the bridge was posting when it crashed posts once, and the next bridge confirms it", async () => {
-  const { slack, dataFolder, inbox, reply, post, crash, stop, saying } = await connectedBridge();
+  const { slack, dataFolder, inbox, status, reply, post, crash, stop, saying } =
+    await connectedBridge();
   const [askedTs] = timestamps(1);
   await post(said(ALICE, askedTs, `<@${BOT}> can you check the deploy?`));
   await inbox();
@@ -24,10 +25,9 @@ test("an answer the bridge was posting when it crashed posts once, and the next 
         transaction`UPDATE outbox SET attempt_started_at = attempt_started_at - 60000`,
     ),
   );
-  await waitFor(
-    () => expect(slack.calls.map(({ method }) => method)).toContain("conversations.replies"),
-    5_000,
-  );
+  await waitFor(async () => {
+    expect((await status(null)).json).toMatchObject({ links: [{ unconfirmed: [] }] });
+  }, 5_000);
 
   expect(await stop()).toEqual({ code: 0, stderr: saying() });
   const [answer] = answers(slack, askedTs);

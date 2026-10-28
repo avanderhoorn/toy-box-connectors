@@ -42,7 +42,3 @@ export async function readConnectedAt(sql: Bun.SQL): Promise<number | null> {
 export async function markConnected(tx: Bun.SQL, at: number): Promise<void> {
   await tx`UPDATE installation SET connected_at = ${at}`;
 }
-
-export async function markDisconnected(tx: Bun.SQL, at: number): Promise<void> {
-  await tx`UPDATE installation SET disconnected_at = ${at}`;
-}

@@ -43,14 +43,8 @@ test("only text and mentions are a message's content, compared exactly", () => {
   const content = fingerprintSource(message);
   expect(fingerprintSource({ ...message, text: `${message.text} ` })).not.toBe(content);
   expect(fingerprintSource({ ...message, mentions: [] })).not.toBe(content);
-  expect(
-    fingerprintSource({
-      ...message,
-      editedTs: "1700000150.000100",
-      version: "1700000150.000100",
-      author: "bot",
-    }),
-  ).toBe(content);
+  const edited = { ...message, editedTs: "1700000150.000100", version: "1700000150.000100" };
+  expect(fingerprintSource({ ...edited, author: "bot" })).toBe(content);
 });
 
 const [v1, v2] = ["1700000100.000100", "1700000150.000100"];

@@ -6,9 +6,9 @@ import type { EventCallback } from "@slackapi/model/envelopes";
 import { isForInstallation, readSlackEvent } from "@slackapi/model/events";
 import type { Installation } from "@slackapi/model/installation";
 import { normalizeMessageEvent, type SlackMessageEventPayload } from "@slackapi/model/messages";
-import { markConnected, markDisconnected, readInstallation } from "@slackapi/server/installation";
-import { readBotUserIds } from "@slackapi/server/users";
-import { ingestMessageEvent } from "./ingest";
+import { readInstallation } from "@slackapi/server/installation";
+import { noteGap, noteHello } from "./catchUp";
+import { ingestMessageEvent, readMessageContext } from "./ingest";
 
 // The receiver.
 //
@@ -16,7 +16,9 @@ import { ingestMessageEvent } from "./ingest";
 // changes in one transaction, and only then is its envelope acked, and only while Slack still
 // waits, so a delivery is never acked unless it's stored. A delivery that fails to commit isn't
 // acked, and nothing after it is handled, so Slack sends it again to a bridge that starts afresh.
-// A hello and a lost connection take their places in the same order.
+// A hello takes its place in the same order. It notes that the bridge may have missed anything
+// since the last one, as a minute Slack held events back and a delivery the bridge can't read do,
+// and catch-up reads what was missed from Slack's history.
 
 export interface SlackReceiver {
   /**
@@ -30,8 +32,6 @@ export interface SlackReceiver {
   ): Promise<void>;
   /** Notes that Slack said hello at `helloAt`, after every delivery received before the hello. */
   connected(helloAt: number): Promise<void>;
-  /** Notes that the connection was found lost at `at`. */
-  disconnected(at: number): Promise<void>;
   /** Stops once the delivery in hand is handled. */
   stop(): Promise<void>;
 }
@@ -39,6 +39,8 @@ export interface SlackReceiver {
 export type SlackReceiverOptions = {
   /** Called after a delivery changed a link or request. */
   onChange?: () => void;
+  /** Called after a hello or delivery noted that the bridge may have missed events. */
+  onMissed?: () => void;
   /** Called after a delivery uninstalled the app and the purge committed. */
   onUninstalled?: () => void;
   /** Called when the receiver stops on an error, such as storage failing. */
@@ -47,14 +49,16 @@ export type SlackReceiverOptions = {
 };
 
 /** What a delivery did, which decides what follows its commit. */
-type Taken = { changed: boolean; uninstalled?: boolean };
+type Taken = { changed: boolean; missed?: boolean; uninstalled?: boolean };
 
 const unchanged: Taken = { changed: false };
+const missed: Taken = { changed: false, missed: true };
 
 export function startSlackReceiver(
   database: BridgeDatabase,
   {
     onChange = () => {},
+    onMissed = () => {},
     onUninstalled = () => {},
     onError = () => {},
     now = Date.now,
@@ -82,16 +86,19 @@ export function startSlackReceiver(
         console.error("Stored a delivery from Slack too late to ack it, so Slack will resend it.");
     }
     if (taken.changed) onChange();
+    if (taken.missed) onMissed();
     if (taken.uninstalled) onUninstalled();
   }
 
-  async function note(mark: (transaction: Bun.SQL, at: number) => Promise<void>, at: number) {
+  async function hello(helloAt: number) {
     if (stopped) return;
     try {
-      await database.write((transaction) => mark(transaction, at));
+      await database.write((transaction) => noteHello(transaction, helloAt));
     } catch (error) {
       fail(error);
+      return;
     }
+    onMissed();
   }
 
   function fail(error: unknown) {
@@ -102,8 +109,7 @@ export function startSlackReceiver(
 
   return {
     receive: (delivery, arrivedAt, ack) => queue.enqueue(() => handle(delivery, arrivedAt, ack)),
-    connected: (helloAt) => queue.enqueue(() => note(markConnected, helloAt)),
-    disconnected: (at) => queue.enqueue(() => note(markDisconnected, at)),
+    connected: (helloAt) => queue.enqueue(() => hello(helloAt)),
     async stop() {
       stopped = true;
       await queue.waitForPending();
@@ -122,12 +128,11 @@ async function take(transaction: Bun.SQL, delivery: SlackDelivery, now: number):
     case "event":
       return takeEvent(transaction, delivery.callback, installation, now);
     case "rate_limited":
-      if (delivery.appId === installation.appId && delivery.teamId === installation.teamId) {
-        console.error("Slack held events back for a minute, so the bridge may have missed some.");
-      }
-      return unchanged;
+      await noteGap(transaction, now, now + 60_000);
+      console.error("Slack held events back for a minute, so the bridge will catch up on them.");
+      return missed;
     case "malformed":
-      return takeMalformed("a frame", delivery.issues);
+      return takeMalformed(transaction, "a frame", delivery.issues, now);
     case "other":
       return unchanged;
   }
@@ -142,7 +147,7 @@ async function takeEvent(
   if (!isForInstallation(callback, installation)) return unchanged;
   const event = readSlackEvent(callback.event);
   if (event.kind === "malformed") {
-    return takeMalformed(`an event of type ${callback.event.type}`, event.issues);
+    return takeMalformed(transaction, `an event of type ${callback.event.type}`, event.issues, now);
   }
   const taken =
     event.kind === "message"
@@ -173,17 +178,20 @@ async function takeMessage(
   installation: Installation,
   now: number,
 ): Promise<Taken> {
-  const botUserIds = await readBotUserIds(transaction);
-  const event = normalizeMessageEvent(payload, {
-    botUserId: installation.botUserId,
-    botId: installation.botId,
-    isBotUser: (userId) => botUserIds.has(userId),
-  });
+  const event = normalizeMessageEvent(payload, await readMessageContext(transaction, installation));
   return { changed: await ingestMessageEvent(transaction, event, now) };
 }
 
-/** Logs what couldn't be read, by its issue codes and paths only. */
-function takeMalformed(what: string, issues: string[]): Taken {
-  console.error(`Couldn't read ${what} from Slack: ${issues.join(", ")}`);
-  return unchanged;
+/** Notes that the bridge missed what it couldn't read, logged by its issue codes and paths only. */
+async function takeMalformed(
+  transaction: Bun.SQL,
+  what: string,
+  issues: string[],
+  now: number,
+): Promise<Taken> {
+  await noteGap(transaction, now, now);
+  console.error(
+    `Couldn't read ${what} from Slack, so the bridge will catch up on it: ${issues.join(", ")}`,
+  );
+  return missed;
 }

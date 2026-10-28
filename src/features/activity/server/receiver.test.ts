@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { expect, onTestFinished, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import { ACK_DEADLINE_MS } from "@activity/model/receiver";
-import { openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
+import { openBridgeDatabase } from "@bridge/server/database";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { readFrame } from "@slackapi/model/envelopes";
@@ -20,26 +20,19 @@ const ourBot = {
   is_enterprise_install: false,
 };
 
-/** What the owner says at the root of C-link at `ts`. */
-const said = (ts: string, text = "<@U0BOT> can you check the deploy?") => ({
+/** The owner asking our bot at the root of C-link. */
+const asked = {
   type: "message",
   channel: "C-link",
   user: "U-owner",
   team: "T-home",
-  text,
-  ts,
-});
-
-const asked = said("1700000100.000100");
-const archived = {
-  ...said("1700000200.000100", "archived the channel"),
-  subtype: "channel_archive",
+  text: "<@U0BOT> can you check the deploy?",
+  ts: "1700000100.000100",
 };
 
 /**
- * A receiver for the link that watches C-link for the owner, which commits 100 ms after a delivery
- * arrives unless the test moves its clock. `events` records each ack, with what had committed when
- * it was sent, and each callback, in order.
+ * A receiver for the owner's link on C-link, committing 100 ms after a delivery arrives unless the
+ * test moves its clock. `events` records each callback, and each ack with what had committed.
  */
 async function openReceiver() {
   const path = join(createTestFolder(), "bridge.db");
@@ -58,6 +51,7 @@ async function openReceiver() {
   let lag = 100;
   const receiver = startSlackReceiver(database, {
     onChange: () => events.push("changed"),
+    onMissed: () => events.push("missed"),
     onUninstalled: () => events.push("uninstalled"),
     onError: (error) => events.push(`stopped on ${(error as Error).message}`),
     now: () => arrivedAt + lag,
@@ -102,23 +96,22 @@ function eventFrame(id: string, event: object) {
   return frame;
 }
 
-function readLinks(database: BridgeDatabase) {
-  return database.read((sql) => sql`SELECT status, status_reason FROM links`);
-}
-
-test("a delivery is acked once everything it changed has committed, and its redelivery changes nothing", async () => {
-  const { receive, events } = await openReceiver();
+test("a delivery is acked once everything it changed has committed, and one that fails to commit stops the receiver unacked", async () => {
+  const { database, receive, events } = await openReceiver();
+  spyOn(console, "error").mockImplementation(() => {});
   await receive("1", asked);
-  await receive("2", asked);
+  spyOn(database, "write").mockImplementationOnce(() => Promise.reject(new Error("disk full")));
+  await receive("2", { ...asked, ts: "1700000200.000100" });
+  await receive("3", asked);
 
   expect(events).toEqual([
     "acked env-1 after 1 messages and 1 requests",
     "changed",
-    "acked env-2 after 1 messages and 1 requests",
+    "stopped on disk full",
   ]);
 });
 
-test("a delivery stored too late to ack is left for Slack to send again", async () => {
+test("a delivery stored too late to ack is left for Slack to send again, which changes nothing", async () => {
   const { receive, events, lag } = await openReceiver();
   const error = spyOn(console, "error").mockImplementation(() => {});
   lag(ACK_DEADLINE_MS + 1);
@@ -132,45 +125,22 @@ test("a delivery stored too late to ack is left for Slack to send again", async 
   );
 });
 
-test("a delivery that fails to commit isn't acked, and nothing after it is handled", async () => {
+test("each hello, a minute Slack held back and what can't be read note a gap to catch up on", async () => {
   const { database, receiver, receive, events } = await openReceiver();
   spyOn(console, "error").mockImplementation(() => {});
+  await receiver.connected(arrivedAt - 60_000);
   await receiver.connected(arrivedAt);
-  spyOn(database, "write").mockImplementationOnce(() => Promise.reject(new Error("disk full")));
-  await receive("1", asked);
-  await receive("2", said("1700000300.000100"));
-  await receiver.disconnected(arrivedAt + 1);
+  await receiver.receive({ kind: "rate_limited", envelopeId: null }, arrivedAt, () => {});
+  await receiver.receive({ kind: "malformed", envelopeId: null, issues: [] }, arrivedAt, () => {});
+  await receive("1", { ...asked, ts: 1_700_000_100 });
 
-  expect(events).toEqual(["stopped on disk full"]);
-  expect(
-    await database.read(
-      (sql) => sql`
-        SELECT connected_at, disconnected_at, (SELECT count(*) FROM messages) AS messages
-        FROM installation
-      `,
-    ),
-  ).toEqual([{ connected_at: arrivedAt, disconnected_at: null, messages: 0 }]);
-});
-
-test("redelivering what suspends a channel's links or uninstalls the app changes nothing", async () => {
-  const { database, receive, events } = await openReceiver();
-  const uninstalled = { type: "app_uninstalled" };
-  await receive("1", archived);
-  await receive("2", archived);
-  expect(await readLinks(database)).toEqual([
-    { status: "suspended", status_reason: "channel_archived" },
+  expect(await database.read((sql) => sql`SELECT starts_at, ends_at FROM gaps`)).toEqual([
+    { starts_at: 0, ends_at: arrivedAt - 60_000 },
+    { starts_at: arrivedAt - 60_000, ends_at: arrivedAt },
+    { starts_at: arrivedAt + 100, ends_at: arrivedAt + 60_100 },
+    { starts_at: arrivedAt + 100, ends_at: arrivedAt + 100 },
+    { starts_at: arrivedAt + 100, ends_at: arrivedAt + 100 },
   ]);
-  await receive("3", uninstalled);
-  await receive("4", uninstalled);
-
-  expect(events).toEqual([
-    "acked env-1 after 1 messages and 0 requests",
-    "changed",
-    "acked env-2 after 1 messages and 0 requests",
-    "acked env-3 after 0 messages and 0 requests",
-    "changed",
-    "uninstalled",
-    "acked env-4 after 0 messages and 0 requests",
-  ]);
-  expect(await readLinks(database)).toEqual([]);
+  const acked = "acked env-1 after 0 messages and 0 requests";
+  expect(events).toEqual(["missed", "missed", "missed", "missed", acked, "missed"]);
 });

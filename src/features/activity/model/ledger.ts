@@ -5,6 +5,9 @@ import { compareTs, type SlackTs } from "@slackapi/model/ts";
 // through the same decision, so replaying an envelope or a history page
 // converges to the same rows and appends no change.
 
+/** How long the ledger keeps a message after its latest version. */
+export const RETENTION_MS = 30 * 24 * 60 * 60_000;
+
 /** The author's standing in a link, fixed when a message is stored. */
 export type AuthorRole =
   /** A person on the link's allowlist. */

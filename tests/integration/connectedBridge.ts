@@ -23,7 +23,8 @@ const PROMPTLY: Partial<WakeTimings> = { debounce: 50, debounceLimit: 200 };
 /**
  * A bridge connected to a fake Slack whose workspace and app are its installation's, once Slack
  * said hello. Its link watches C-link, a private channel Alice, Mallory and the bot are in, and
- * allows Alice, and `link` changes its settings. `wakes` says how soon it wakes the lead.
+ * allows Alice, and `link` changes its settings, the channel's ID too. `wakes` says how soon it
+ * wakes the lead.
  */
 export async function connectedBridge({
   link,
@@ -38,8 +39,9 @@ export async function connectedBridge({
     botId: "B-bot",
     botUserId: BOT,
   });
+  // Slack must know the channel when the bridge connects, since catching up reads it.
   slack.addChannel({
-    id: "C-link",
+    id: link?.slack_channel_id ?? "C-link",
     name: "release-eng",
     is_private: true,
     members: [BOT, ALICE, MALLORY],

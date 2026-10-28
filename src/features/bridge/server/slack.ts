@@ -1,3 +1,4 @@
+import { startCatchUp } from "@activity/server/catchUp";
 import { startSlackReceiver } from "@activity/server/receiver";
 import type { SlackState } from "@commands/model/status";
 import {
@@ -19,12 +20,13 @@ import { confirmIdentity } from "./identity";
 // The bridge confirms whose tokens it holds once, before it takes anything from Slack, and asks
 // again only while Slack can't answer. Then it keeps one Socket Mode connection open. Each
 // connection starts from a fresh apps.connections.open, and its frames reach the receiver only
-// once hello names the installation's app. Losing a connection and each hello are noted in order
-// with the deliveries between them. A connection that Slack never said hello on backs off, so a
-// Slack that keeps refusing it costs a call every few minutes rather than one a second, and losing
-// one it did say hello on reconnects at once. A refusal, or a token Slack rejects, lasts until the
-// operator fixes it and restarts the bridge. A rejected bot token leaves the connection up, so
-// deletions and a channel's lifecycle are still taken.
+// once hello names the installation's app. Each hello is noted in order with the deliveries
+// around it, and catch-up then reads what the bridge may have missed since the last one from
+// Slack's history. A connection that Slack never said hello on backs off, so a Slack that keeps
+// refusing it costs a call every few minutes rather than one a second, and losing one it did say
+// hello on reconnects at once. A refusal, or a token Slack rejects, lasts until the operator fixes
+// it and restarts the bridge. A rejected bot token leaves the connection up, so deletions and a
+// channel's lifecycle are still taken.
 
 export interface SlackSupervisor {
   /** How the connection is doing, and what to do about it when something's wrong. */
@@ -77,8 +79,10 @@ export function startSlackSupervisor(
 ): SlackSupervisor {
   const stopping = new AbortController();
   const { signal } = stopping;
+  const catchUp = startCatchUp(database, bot, { onChange, onError: halt, now, timings });
   const receiver = startSlackReceiver(database, {
     onChange,
+    onMissed: () => catchUp.poke(),
     onUninstalled: () => refuse({ reason: "uninstalled" }),
     onError: halt,
     now,
@@ -94,8 +98,6 @@ export function startSlackSupervisor(
   let everConnected = false;
   let failed = false;
 
-  // The bridge may have missed anything since it last ran.
-  receiver.disconnected(now()).catch(fail);
   const running = run().catch(fail);
 
   async function run() {
@@ -178,12 +180,9 @@ export function startSlackSupervisor(
       everConnected = true;
       problem = null;
     }
-    const closedAt = await current.closed;
+    await current.closed;
     connected = false;
-    // Stopping, failing or refusing Slack notes nothing, since only starting again reconnects, and
-    // starting notes that the bridge may have missed anything.
     if (signal.aborted) return null;
-    receiver.disconnected(closedAt).catch(fail);
     console.error(`${connectionLoss(reason)}, so the bridge is reconnecting.`);
     return { connected: true };
   }
@@ -235,7 +234,7 @@ export function startSlackSupervisor(
     halt(error);
   }
 
-  // The receiver reports its own failures before they reach here.
+  // The receiver and catch-up report their own failures before they reach here.
   function halt(error: unknown) {
     if (failed) return;
     failed = true;
@@ -249,7 +248,7 @@ export function startSlackSupervisor(
     if (rejected.size > 0) {
       return { connection: "auth_failed", problem: [...rejected.values()].join(" ") };
     }
-    if (connected) return { connection: "connected", problem: null };
+    if (connected) return { connection: "connected", problem: catchUp.problem() };
     return { connection: everConnected ? "reconnecting" : "connecting", problem };
   }
 
@@ -264,6 +263,7 @@ export function startSlackSupervisor(
       socket?.close();
       await running;
       await receiver.stop();
+      await catchUp.stop();
     },
   };
 }

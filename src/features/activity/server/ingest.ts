@@ -1,8 +1,9 @@
 import { readChannelLink, type ChannelLink } from "@links/server/database";
 import { hasRequestInThread } from "@requests/server/database";
 import { takeDelete, takeMessage } from "@requests/server/intake";
-import type { SlackMessage, SlackMessageEvent } from "@slackapi/model/messages";
-import { canonicalUserId } from "@slackapi/server/users";
+import type { Installation } from "@slackapi/model/installation";
+import type { NormalizeContext, SlackMessage, SlackMessageEvent } from "@slackapi/model/messages";
+import { canonicalUserId, readBotUserIds } from "@slackapi/server/users";
 import { storeDelete, storeMessage, type LedgerLink } from "./ledger";
 
 // Ingest.
@@ -32,6 +33,19 @@ export async function ingestMessageEvent(
   const inRequestThread = await hasRequestInThread(transaction, link.id, message.rootTs);
   const stored = await storeMessage(transaction, ledgerLink(link), message, inRequestThread);
   return takeMessage(transaction, link, message, stored, now);
+}
+
+/** What reading a message for `installation` needs to know about the bots the bridge has seen. */
+export async function readMessageContext(
+  transaction: Bun.SQL,
+  installation: Installation,
+): Promise<NormalizeContext> {
+  const botUserIds = await readBotUserIds(transaction);
+  return {
+    botUserId: installation.botUserId,
+    botId: installation.botId,
+    isBotUser: (userId) => botUserIds.has(userId),
+  };
 }
 
 /** `message` with its author as the person an alias names, when Slack gave the alias. */

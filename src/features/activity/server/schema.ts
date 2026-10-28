@@ -45,5 +45,13 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
         CHECK (typeof(served_through_seq) = 'integer' AND served_through_seq >= 0),
       CHECK (through_seq <= served_through_seq)
     );
+
+    -- A stretch of time whose events the bridge may have missed. Catch-up reads it from Slack's
+    -- history once it has ended.
+    CREATE TABLE gaps (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      starts_at INTEGER NOT NULL,
+      ends_at   INTEGER NOT NULL
+    );
   `);
 }

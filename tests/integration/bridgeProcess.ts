@@ -54,12 +54,14 @@ export function spawnBridge(home: string, env: Record<string, string> = {}) {
 }
 
 /**
- * A fake Slack whose tokens belong to `identity`, or else the fake's own workspace and app, and the
- * environment that points a bridge at it with both tokens.
+ * A fake Slack whose tokens belong to `identity`, or else the fake's own workspace and app, with the
+ * channel C-link a linked bridge watches, and the environment that points a bridge at it with both
+ * tokens.
  */
 export function startSlackForBridge(identity?: Partial<FakeSlackIdentity>) {
   const slack = startFakeSlack({ identity });
   onTestFinished(() => slack.stop());
+  slack.addChannel({ id: "C-link" });
   const env = {
     SLACK_API_URL: slack.url,
     SLACK_BOT_TOKEN: slack.botToken,

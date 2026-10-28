@@ -45,12 +45,7 @@ export type SocketFrame =
   | { kind: "hello"; appId: string | null }
   | { kind: "disconnect"; reason: string | null }
   | { kind: "event"; envelopeId: string; callback: EventCallback }
-  | {
-      kind: "rate_limited";
-      envelopeId: string | null;
-      teamId: string;
-      appId: string;
-    }
+  | { kind: "rate_limited"; envelopeId: string | null }
   | { kind: "other"; type: string; envelopeId: string | null }
   | { kind: "malformed"; envelopeId: string | null; issues: string[] };
 
@@ -86,13 +81,7 @@ export function readFrame(raw: string): SocketFrame {
   if (!payload.success) return malformed(envelopeId, issuesOf(payload.error));
   if (header.type === "events_api" && !envelopeId) return malformed(null, ["missing_envelope_id"]);
   const event = payload.data;
-  if (event.type === "app_rate_limited")
-    return {
-      kind: "rate_limited",
-      envelopeId,
-      teamId: event.team_id,
-      appId: event.api_app_id,
-    };
+  if (event.type === "app_rate_limited") return { kind: "rate_limited", envelopeId };
   if (!envelopeId) return malformed(null, ["missing_envelope_id"]);
   return {
     kind: "event",
