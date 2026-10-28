@@ -187,7 +187,12 @@ export function createFakeSlackApi(options: {
   const botChanges: Record<string, unknown> = {};
   const statuses = new Map<string, { text: string; at: number }>();
   const pending = new Set<() => void>();
-  const emojiNames = new Set(["eyes", "thumbsup", ...(options.emojiNames ?? [])]);
+  const emojiNames = new Set([
+    "eyes",
+    "white_check_mark",
+    "thumbsup",
+    ...(options.emojiNames ?? []),
+  ]);
   let timestampMicros = 0n;
   const maxPageSize = options.pageSize ?? 100;
   if (!Number.isInteger(maxPageSize) || maxPageSize < 1)

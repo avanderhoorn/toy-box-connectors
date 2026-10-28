@@ -409,6 +409,7 @@ test("reactions preserve other users and duplicate adds/removes return Slack err
   await expect(client.reactions.add({ ...args, name: "no_such_emoji" })).rejects.toMatchObject({
     data: { error: "invalid_name" },
   });
+  expect((await client.reactions.add({ ...args, name: "white_check_mark" })).ok).toBe(true);
   expect((await client.reactions.add({ ...args, name: "custom_status" })).ok).toBe(true);
 });
 
