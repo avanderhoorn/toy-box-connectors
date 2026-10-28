@@ -75,3 +75,21 @@ export async function markAuthFailed(transaction: Bun.SQL, now: number): Promise
   `;
   return marked.length > 0;
 }
+
+/** When Slack last said hello to the bridge, or null when it never has. */
+export async function readConnectedAt(sql: Bun.SQL): Promise<number | null> {
+  const [row] = await sql<{ connected_at: number | null }[]>`
+    SELECT connected_at FROM installation
+  `;
+  return row?.connected_at ?? null;
+}
+
+/** Notes that Slack said hello at `at`. */
+export async function markConnected(transaction: Bun.SQL, at: number): Promise<void> {
+  await transaction`UPDATE installation SET connected_at = ${at}`;
+}
+
+/** Notes that the bridge found itself without a connection at `at`. */
+export async function markDisconnected(transaction: Bun.SQL, at: number): Promise<void> {
+  await transaction`UPDATE installation SET disconnected_at = ${at}`;
+}

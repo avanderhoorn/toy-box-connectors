@@ -68,6 +68,22 @@ export async function cancelStoredRequest(
   await cancelQueuedRequestItems(transaction, request.id, now);
 }
 
+/**
+ * Holds the replies of every active request of a link until repair re-reads its source and thread,
+ * because the bridge may have missed an edit, deletion or follow-up. A request that's held already
+ * keeps when it was first held.
+ */
+export async function markLinkSourcesUnverified(
+  transaction: Bun.SQL,
+  linkId: string,
+  now: number,
+): Promise<void> {
+  for (const request of await readActiveRequests(transaction, linkId)) {
+    const marked = markSourceUnverified(request, now);
+    if (marked !== request) await saveRequest(transaction, marked);
+  }
+}
+
 /** Cancels every active request of a link. Returns whether there were any. */
 export async function cancelLinkRequests(
   transaction: Bun.SQL,

@@ -4,6 +4,7 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { confirmIdentity } from "@bridge/server/identity";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
+import { createStoredRequest } from "@requests/server/testFixtures";
 import type { Installation } from "@slackapi/model/installation";
 import { createBotClient, type BotClient } from "@slackapi/server/botClient";
 import { markAuthFailed, readInstallation } from "@slackapi/server/installation";
@@ -211,6 +212,7 @@ describe("a rejected bot token", () => {
     await confirm(database, slack);
     await createStoredLink(database, "watch");
     await createStoredLink(database, "paused", { status: "paused" });
+    await createStoredRequest(database, { linkId: "watch", channelId: "C-watch" });
     const failedAt = NOW - 3_600_000;
     await database.write((transaction) => markAuthFailed(transaction, failedAt));
 
@@ -228,6 +230,10 @@ describe("a rejected bot token", () => {
         reason: "auth_failed",
       })),
     );
+    // An edit that came while the token was rejected was left for repair.
+    expect(await database.read((sql) => sql`SELECT source_unverified_at FROM requests`)).toEqual([
+      { source_unverified_at: NOW },
+    ]);
   });
 
   test("records no gap when the installation wasn't failing", async () => {

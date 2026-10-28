@@ -260,7 +260,7 @@ describe("committing before the ack", () => {
     expect(seen).toEqual([
       "env-1",
       [{ ts: ask.ts }],
-      [{ key: "Ev-1", type: "message", received_at: committedAt, disposition: "applied" }],
+      [{ key: "Ev-1", type: "message", received_at: arrivedAt, disposition: "applied" }],
       [{ source_ts: ask.ts }],
     ]);
   });
@@ -726,6 +726,98 @@ describe("gaps", () => {
   });
 });
 
+describe("the connection", () => {
+  function readMarkers(database: BridgeDatabase) {
+    return database.read(async (sql) => {
+      const [row] = await sql`SELECT connected_at, disconnected_at FROM installation`;
+      return row;
+    });
+  }
+
+  test("each hello records a gap up to it in turn, the first one for startup", async () => {
+    const { database, receiver, receive } = await openReceiver();
+    const linked = { link_id: "link", channel_id: "C-link" };
+    await receiver.connected(arrivedAt - 60_000);
+    // From when the link began, since nothing was received before.
+    const startup = { oldest_ts: "1700000000.000100", latest_ts: "1700001240.000000" };
+    expect(await readGaps(database)).toEqual([{ ...linked, ...startup, reason: "startup" }]);
+
+    // The connection is lost right behind a delivery, and Slack says hello again right ahead of one.
+    const lostAt = arrivedAt + 10_000;
+    const helloAt = arrivedAt + 20_000;
+    await Promise.all([
+      receive(eventFrame("1", message("1700000100.000100", "<@U0BOT> can you deploy?"))),
+      receiver.disconnected(lostAt),
+      receiver.connected(helloAt),
+      receive(eventFrame("2", message("1700001019.000100", "after")), helloAt + 1_000),
+    ]);
+
+    expect(await readRequests(database)).toEqual([
+      { id: 1, state: "open", closed_reason: null, source_unverified_at: lostAt },
+    ]);
+    // From the last delivery before the connection was lost.
+    const lost = { oldest_ts: "1700000700.000000", latest_ts: "1700001320.000000" };
+    expect(await readGaps(database)).toEqual([
+      { ...linked, ...startup, reason: "startup" },
+      { ...linked, ...lost, reason: "disconnect" },
+    ]);
+    expect(await readMarkers(database)).toEqual({ connected_at: helloAt, disconnected_at: lostAt });
+  });
+
+  test("a hello that fails to commit stops the receiver", async () => {
+    const log = silenceLog();
+    const errors: unknown[] = [];
+    const { database, receiver, receive } = await openReceiver({
+      onError: (error) => errors.push(error),
+    });
+    await database.write(
+      (transaction) => transaction`
+        CREATE TRIGGER fail_gap BEFORE INSERT ON coverage
+        BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END
+      `,
+    );
+
+    await receiver.connected(arrivedAt);
+    await receive(eventFrame("1", message("1700000100.000100", "after")));
+
+    expect(await readMarkers(database)).toEqual({ connected_at: null, disconnected_at: null });
+    expect(await readMessages(database)).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith("Stopped receiving from Slack:", errors[0]);
+  });
+
+  test("a lost connection that fails to commit stops the receiver", async () => {
+    const log = silenceLog();
+    const errors: unknown[] = [];
+    const { database, receiver, receive } = await openReceiver({
+      onError: (error) => errors.push(error),
+    });
+    await database.write(
+      (transaction) => transaction`
+        CREATE TRIGGER fail_marker BEFORE UPDATE ON installation
+        BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END
+      `,
+    );
+
+    await receiver.disconnected(arrivedAt);
+    await receive(eventFrame("1", message("1700000100.000100", "after")));
+
+    expect(await readMessages(database)).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith("Stopped receiving from Slack:", errors[0]);
+  });
+
+  test("a stopped receiver records neither a hello nor a lost connection", async () => {
+    const { database, receiver } = await openReceiver();
+    await receiver.stop();
+
+    await receiver.connected(arrivedAt);
+    await receiver.disconnected(arrivedAt);
+    expect(await readGaps(database)).toEqual([]);
+    expect(await readMarkers(database)).toEqual({ connected_at: null, disconnected_at: null });
+  });
+});
+
 describe("a channel's lifecycle", () => {
   test("a notice about the channel is stored and suspends the links it makes unsafe", async () => {
     const { database, receive, changes } = await openReceiver();
@@ -776,9 +868,9 @@ describe("a channel's lifecycle", () => {
       { id: "link", status: "suspended", status_reason: "channel_id_changed" },
     ]);
     expect(await readMessages(database)).toEqual([stored(ask, { channel_id: "C-new" })]);
-    expect(await database.read((sql) => sql`SELECT channel_id FROM requests`)).toEqual([
-      { channel_id: "C-new" },
-    ]);
+    expect(
+      await database.read((sql) => sql`SELECT channel_id, source_unverified_at FROM requests`),
+    ).toEqual([{ channel_id: "C-new", source_unverified_at: committedAt }]);
     expect(await readGaps(database)).toEqual([
       { link_id: "link", channel_id: "C-new", ...eventGap, reason: "moved" },
     ]);

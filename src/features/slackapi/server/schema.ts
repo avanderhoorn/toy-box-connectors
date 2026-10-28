@@ -12,7 +12,9 @@ export async function initializeSlackApiSchema(db: Bun.SQL): Promise<void> {
       owner_user_id   TEXT,
       status          TEXT NOT NULL CHECK (status IN ('active', 'auth_failed', 'uninstalled')),
       auth_failed_at  INTEGER,
+      -- When Slack last said hello. Everything before it was received or lies in a recorded gap.
       connected_at    INTEGER,
+      -- When the bridge last found itself without a connection, at startup or after losing one.
       disconnected_at INTEGER
     );
 

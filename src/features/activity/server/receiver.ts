@@ -20,7 +20,7 @@ import { currentChannelId, invalidateChannelInfo } from "@slackapi/server/channe
 import { readInstallation } from "@slackapi/server/installation";
 import { hasReceipt, recordReceipt, type ReceiptDisposition } from "@slackapi/server/receipts";
 import { readBotUserIds } from "@slackapi/server/users";
-import { recordChannelGaps } from "./coverage";
+import { recordChannelGaps, recordConnect, recordDisconnect } from "./coverage";
 import { forgetFile, removeLocalCopies } from "./files";
 import { ingestMessageEvent } from "./ingest";
 import { moveLedgerChannel } from "./ledger";
@@ -36,6 +36,9 @@ import { moveLedgerChannel } from "./ledger";
 // While Slack rejects the bot token, a channel's lifecycle, deleted and withdrawn messages, deleted
 // files, gaps and clicks are still taken, because repair can't find any of them later. What's
 // posted or edited meanwhile is left for the repair that follows recovery.
+//
+// A hello takes its place in the same order, so the gap it records ends before anything the new
+// connection delivers is stored, and no receipt from it can shorten the gap.
 
 export interface SlackReceiver {
   /**
@@ -47,6 +50,14 @@ export interface SlackReceiver {
     arrivedAt: number,
     ack: (envelopeId: string) => void,
   ): Promise<void>;
+  /**
+   * Records what the bridge may have missed before Slack said hello at `helloAt`, after every
+   * delivery received before the hello. The first hello follows startup, and each later one a
+   * lost connection.
+   */
+  connected(helloAt: number): Promise<void>;
+  /** Holds every pending request's replies, because the connection was found lost at `at`. */
+  disconnected(at: number): Promise<void>;
   /** Stops once the delivery in hand is handled. */
   stop(): Promise<void>;
 }
@@ -87,6 +98,7 @@ export function startSlackReceiver(
 ): SlackReceiver {
   const queue = new SerialTaskQueue();
   let stopped = false;
+  let interruption: "startup" | "disconnect" = "startup";
 
   async function handle(
     delivery: SlackDelivery,
@@ -113,6 +125,27 @@ export function startSlackReceiver(
     if (taken.uninstalled) onUninstalled();
   }
 
+  async function connect(helloAt: number) {
+    if (stopped) return;
+    try {
+      await database.write((transaction) =>
+        recordConnect(transaction, helloAt, interruption, now()),
+      );
+      interruption = "disconnect";
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  async function disconnect(at: number) {
+    if (stopped) return;
+    try {
+      await database.write((transaction) => recordDisconnect(transaction, at));
+    } catch (error) {
+      fail(error);
+    }
+  }
+
   function fail(error: unknown) {
     stopped = true;
     console.error("Stopped receiving from Slack:", error);
@@ -121,6 +154,8 @@ export function startSlackReceiver(
 
   return {
     receive: (delivery, arrivedAt, ack) => queue.enqueue(() => handle(delivery, arrivedAt, ack)),
+    connected: (helloAt) => queue.enqueue(() => connect(helloAt)),
+    disconnected: (at) => queue.enqueue(() => disconnect(at)),
     async stop() {
       stopped = true;
       await queue.waitForPending();
@@ -150,7 +185,7 @@ async function take(
     await recordReceipt(transaction, {
       key,
       type,
-      receivedAt: now,
+      receivedAt: arrivedAt,
       disposition: taken.disposition,
     });
   }

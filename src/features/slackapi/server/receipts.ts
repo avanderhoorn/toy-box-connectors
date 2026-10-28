@@ -26,6 +26,7 @@ export type Receipt = {
   key: string;
   /** The event or frame type, such as message or interactive. */
   type: string;
+  /** When the delivery arrived, the last moment the bridge knows it was receiving. */
   receivedAt: number;
   disposition: ReceiptDisposition;
 };
@@ -45,4 +46,12 @@ export async function recordReceipt(transaction: Bun.SQL, receipt: Receipt): Pro
     disposition: receipt.disposition,
   };
   await transaction`INSERT INTO receipts ${transaction(row)}`;
+}
+
+/** When the latest delivery the bridge holds a receipt for arrived, or null when it holds none. */
+export async function readLastReceiptAt(sql: Bun.SQL): Promise<number | null> {
+  const [row] = await sql<{ received_at: number | null }[]>`
+    SELECT max(received_at) AS received_at FROM receipts
+  `;
+  return row?.received_at ?? null;
 }

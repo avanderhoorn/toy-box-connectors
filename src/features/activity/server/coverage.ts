@@ -1,11 +1,20 @@
 import { interruptionGap, type GapWindow } from "@activity/model/gaps";
+import { markLinkSourcesUnverified } from "@requests/server/lifecycle";
 import type { SlackTs } from "@slackapi/model/ts";
 import { currentChannelId } from "@slackapi/server/channels";
+import { markConnected, markDisconnected, readConnectedAt } from "@slackapi/server/installation";
+import { readLastReceiptAt } from "@slackapi/server/receipts";
 
 // Coverage.
 //
 // Each gap names a span of a linked channel, or of one thread in it, that repair must read
 // because the bridge may have missed part of it. Its bounds never change once it's recorded.
+//
+// What a channel's history shows in a span is only what was posted in it, never an edit or a
+// deletion of an older message, so a channel gap also holds the replies of every pending request
+// in the channel, in the transaction that records it, until repair re-reads the request's source
+// and thread. While the connection is down the gap's end isn't known yet, so the bridge holds those
+// replies as soon as it finds the connection gone and records the gap once Slack says hello again.
 
 /** Why the bridge may have missed part of a channel or thread. */
 export type GapReason =
@@ -57,7 +66,8 @@ export async function recordGap(transaction: Bun.SQL, gap: Gap, now: number): Pr
 
 /**
  * Records a channel gap for each link that watches `channelId` at its current ID, or for every
- * link when it's null, whatever the link's status. `windowFrom` bounds each by when its link began.
+ * link when it's null, whatever the link's status, and holds its pending requests' replies.
+ * `windowFrom` bounds each gap by when its link began.
  */
 export async function recordChannelGaps(
   transaction: Bun.SQL,
@@ -73,6 +83,7 @@ export async function recordChannelGaps(
     if (window === null) continue;
     const gap = { linkId: watched.linkId, channelId: watched.channelId, threadTs: null };
     await recordGap(transaction, { ...gap, window, reason }, now);
+    await markLinkSourcesUnverified(transaction, watched.linkId, now);
   }
 }
 
@@ -90,4 +101,34 @@ export function recordInterruption(
   return recordChannelGaps(transaction, null, reason, now, (linkedAtTs) =>
     interruptionGap(sinceMs, untilMs, linkedAtTs),
   );
+}
+
+/**
+ * Holds the replies of every pending request because the bridge found itself without a connection
+ * at `at`, at startup or after losing one, so it may be missing what changed them.
+ */
+export async function recordDisconnect(transaction: Bun.SQL, at: number): Promise<void> {
+  for (const watched of await readWatchedChannels(transaction)) {
+    await markLinkSourcesUnverified(transaction, watched.linkId, at);
+  }
+  await markDisconnected(transaction, at);
+}
+
+/**
+ * Records what the bridge may have missed before Slack said hello at `helloAt`, as a gap in every
+ * linked channel. It reaches back to the last moment the bridge knew it was receiving: its latest
+ * receipt, or the hello before this one, since everything before that hello is covered already.
+ */
+export async function recordConnect(
+  transaction: Bun.SQL,
+  helloAt: number,
+  reason: "startup" | "disconnect",
+  now: number,
+): Promise<void> {
+  const since = Math.max(
+    (await readLastReceiptAt(transaction)) ?? 0,
+    (await readConnectedAt(transaction)) ?? 0,
+  );
+  await recordInterruption(transaction, reason, since, helloAt, now);
+  await markConnected(transaction, helloAt);
 }
