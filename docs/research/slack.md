@@ -100,25 +100,19 @@ oauth_config:
       - reactions:write
 settings:
   socket_mode_enabled: true
-  interactivity:
-    is_enabled: false
   org_deploy_enabled: false
   token_rotation_enabled: false
   event_subscriptions:
     bot_events:
       - message.channels
       - message.groups
-      - member_joined_channel
       - member_left_channel
       - channel_archive
       - channel_deleted
       - group_deleted
-      - channel_rename
-      - group_rename
       - app_uninstalled
       - tokens_revoked
       - channel_shared
-      - channel_unshared
       - channel_id_changed
 ```
 
@@ -382,31 +376,26 @@ ack-after-commit durability.
 [Bolt receiver, pinned release source](https://github.com/slackapi/bolt-js/blob/ffbe0b6c03a6b1e16b3d5d3c5c9a8ab3effcbc1d/src/receivers/SocketModeReceiver.ts),
 [Bolt auto-ack middleware](https://github.com/slackapi/bolt-js/blob/ffbe0b6c03a6b1e16b3d5d3c5c9a8ab3effcbc1d/src/middleware/builtin.ts).
 
-### Verified local spike
+### Local SDK verification
 
-`spikes/slack-sdk/` pins `@slack/socket-mode` 3.1.0, `@slack/web-api` 8.2.0,
-`undici` 7.29.0, and a `ws` 8.21.3 fake server. On this machine, all eight
-protocol/SDK tests pass under **Bun 1.4.4** and **Node 24.19.0**:
+The original eight-test SDK spike passed under **Bun 1.4.4** and **Node
+24.19.0**. It was retired after the bridge gained its own protocol-fake suites;
+uploads and the standalone spike package are not part of reduced v1.
+The installed versions remain `@slack/socket-mode` 3.1.0 and `@slack/web-api`
+8.2.0. Their current lifecycle and retry checks run from the repository root:
 
 ```sh
-bun install --cwd spikes/slack-sdk
-cd spikes/slack-sdk
-node --test protocol.test.mjs
-bun test protocol.test.mjs
+bun test tests/integration/slackSocket.test.ts tests/integration/slackBotClient.test.ts
+bun test src/features/outbox/server/posts.test.ts
 ```
 
-The tests cover actual localhost HTTP and WebSocket connections, explicit ack
-control, per-envelope retry metadata, clean `refresh_requested` reconnect with a
-new connection-open call, shutdown, surfaced 429 `Retry-After`, HTTP-200
-`missing_scope`, empty-page cursor continuation, binary uploadV2/thread targeting,
-and response-loss duplication with and without automatic SDK retries.
-All tokens are fake literals and every connected endpoint is localhost. No
-environment credentials are read.
-
-The SDK packages publish Node >=20 engines. The spike supports choosing Bun to
-match Toy Box, but does not establish an upstream Bun support promise or prove
-real Slack TLS/proxy/suspend behavior. The exact selected release comes from
-upstream commit `a98047a7f27149812664c78e2dccfe4155b0e145`.
+These suites exercise localhost HTTP and WebSocket connections with fake tokens,
+including raw hello and rate-limit frames, explicit acknowledgements, close,
+surfaced `Retry-After`, cursor continuation and a lost post response with SDK
+retries disabled. The supervisor suite owns reconnection. These are not live
+Slack TLS, proxy or Mac-sleep tests, nor an upstream Bun support promise.
+The selected SDK release comes from upstream commit
+`a98047a7f27149812664c78e2dccfe4155b0e145`.
 [Socket SDK package](https://www.npmjs.com/package/@slack/socket-mode/v/3.1.0),
 [Web API package](https://www.npmjs.com/package/@slack/web-api/v/8.2.0),
 [pinned WebSocket implementation](https://github.com/slackapi/node-slack-sdk/blob/a98047a7f27149812664c78e2dccfe4155b0e145/packages/socket-mode/src/SlackWebSocket.ts).
@@ -415,13 +404,13 @@ upstream commit `a98047a7f27149812664c78e2dccfe4155b0e145`.
 `app_rate_limited` as a top-level payload with no inner `event`. The SDK 3.1.0
 `events_api` dispatcher dereferences `payload.event.type` unconditionally. Feeding
 the documented top-level shape into that dispatcher rejects with `TypeError`,
-which the spike records as a characterization test. Its async event-listener
+which the retired spike recorded as a characterization test. Its async event-listener
 boundary does not turn that into a normal `slack_event` callback. We have not
 observed a real rate-limited Socket Mode delivery, so the precise production
-wrapping remains a live verification item. Before a production claim, add a
-bounded regression-tested receiver adapter for top-level controls or verify a
-supported SDK fix. Do not paper over this with a global unhandled-rejection
-handler or a false "all events processed" health signal.
+wrapping remains a live verification item. The bridge now reads raw frames before
+SDK dispatch, and `tests/integration/slackSocket.test.ts` pins the documented
+top-level control shape. This avoids the dispatcher bug without a global
+unhandled-rejection handler or a false "all events processed" health signal.
 [Documented payload](https://docs.slack.dev/reference/events/app_rate_limited/),
 [dispatcher source](https://github.com/slackapi/node-slack-sdk/blob/a98047a7f27149812664c78e2dccfe4155b0e145/packages/socket-mode/src/SocketModeClient.ts).
 
@@ -701,9 +690,9 @@ to become Block Kit.
 
 Keep ordinary `text` near 4,000 characters. Slack truncates above 40,000.
 Section text has its own 3,000-character limit, and messages allow up to 50
-blocks. The adopted v1 renderer limits the fallback and combined section text
-to 12,000 characters and refuses oversized output rather than splitting or
-truncating it. A larger report needs an explicitly approved delivery form.
+blocks. Reduced v1 uses one markdown block and refuses output above 12,000
+characters rather than splitting or truncating it. Longer answers must be
+rewritten.
 Set `unfurl_links=false`,
 `unfurl_media=false`, and, where available, `unfurl_app_links=false` for internal
 or potentially sensitive links. Never post a private localhost Toy Box URL as if
@@ -718,7 +707,7 @@ remove or preserve stale blocks. Ephemeral messages are not durable and cannot
 be edited with `chat.update`. They are unsuitable for request tracking.
 [Update semantics](https://docs.slack.dev/reference/methods/chat.update/).
 
-### Approval card edits: a different wire contract
+### Retired approval-card edits: a different wire contract
 
 The current `chat.update` argument table supports `channel`, `ts`, `text`,
 `blocks`, `parse`, and `metadata`, but does not list the post-only
@@ -732,15 +721,15 @@ contradictory nested fields without requiring that optional echo.
 
 The argument table provides no conditional version or compare-and-set option.
 Treat a timed-out edit as potentially still executing remotely, not cancelled.
-Our policy serializes edits per approval, renders its current state for every
-attempt, and supersedes older queued or unknown updates. Only a card's first
+The pre-cut policy serialized edits per approval, rendered its current state for every
+attempt, and superseded older queued or unknown updates. Only a card's first
 post may contain decision buttons. Every update follows a decision and its
 snapshot decoder rejects actions blocks, so a late older update can restore
 an older decision label but not approval controls. This limits the damage
 without promising remote ordering Slack has not documented.
-[Timeout/partial-success contract](https://docs.slack.dev/reference/methods/chat.update/#errors),
-[credential-free delivery cases](../../src/features/outbox/server/posts.test.ts),
-[snapshot boundary cases](../../src/features/outbox/model/payload.test.ts).
+[Timeout/partial-success contract](https://docs.slack.dev/reference/methods/chat.update/#errors).
+Those card and snapshot guards were retired with approvals and are not part
+of the current outbox.
 
 On 2026-10-28 the Lead reported six live-message probes with no unfurls on
 edits to messages initially posted with unfurls disabled, including adding
@@ -750,54 +739,28 @@ guarantee about inherited unfurl settings.
 
 ### Reading uncertain delivery without reposting
 
-The local reconciler now uses single-page SDK readers with
-`include_all_metadata=true` and `limit=200`. Slack documents that a short page
-does not prove exhaustion and recommends no more than 200 results per cursor
-page. Root history is bounded from the immutable attempt time minus the same
-five-minute clock-skew margin used for intake gap repair, not queue time.
-Replies scan the entire intended thread because its parent can be much older.
-Known-target edits read that original message even when it predates the edit.
+Reduced v1 makes two positive-only metadata checks, around one and five
+minutes after the attempt. Readers request `include_all_metadata=true` and
+follow cursors, including empty pages. Slack documents that a short page does
+not prove exhaustion and recommends no more than 200 results per cursor page.
+Publication history is bounded to five minutes either side of the attempt,
+not the queue time. Answers are read in their intended thread.
 [History and timestamp bounds](https://docs.slack.dev/reference/methods/conversations.history/),
 [thread pagination and metadata](https://docs.slack.dev/reference/methods/conversations.replies/).
 
-Our policy requires the own bot/app and exact item ID/payload hash to confirm
-an automatic read. Text alone never suffices. A correlated reply found at the
-root queues withdrawal instead of answering its request. If the intended thread
-returns `thread_not_found`, root history may still find that misplaced post.
-Once that root scan finishes without evidence, it counts as a complete miss.
-Other incomplete or failed reads never spend a pass.
-
-Only complete misses spend the three original 10/60/120-second deadlines.
-Partial cursor progress survives ordinary cooldowns in memory so a large thread
-can reach its tail across rate-limit windows. Restart, expired cursors and
-malformed continuations discard that partial work without spending a pass.
-Missing or cyclic cursors, malformed pages and failed reads retain explicit
-unknown state and back off from 5 to 120 seconds within an attempt and pass.
-Retry-After can extend that wait beyond the cap. A channel refusal clears the
-read deadline and waits for its suspended link to become active, rather than
-polling Slack. Refused linkless cards require manual resolution.
-Exhaustion never authorizes an automatic repost. This is a local conservative
-policy, not Slack's exactly-once guarantee.
-After unlink, sending and unknown posts retain only correlation and target metadata.
-An edit keeps its target ts beside the redaction marker. Proof of valid delivery purges the
-local row without withdrawing the Slack message. A channel refusal or the final empty pass
-ends an orphan's reads by purging it. Misplaced posts still go through withdrawal.
+Confirmation requires our bot/app, exact metadata and the intended channel
+and thread. Text alone, a misplaced post or a missing match proves nothing.
+Incomplete or failed reads leave the item unknown without spending a check.
+Pagination is local to one check and restarts after interruption; there is no
+persisted page continuation. After two complete misses the item remains unknown
+and reserved. Neither a miss nor restarting permits another send.
 [Reconciliation implementation](../../src/features/outbox/server/reconcile.ts),
-[credential-free protocol cases](../../src/features/outbox/server/reconcile.test.ts).
+[credential-free protocol cases](../../src/features/outbox/server/posts.test.ts).
 
-The shared bot client's `guardBotClient(bot, usable)` view checks current local
-permission inside every SDK callback, after the awaited cooldown read. The
-supervisor retains the raw client for identity bootstrap. The view shares
-cooldowns, retry configuration and token-failure notification with that client.
-Its `unusable` outcome means no SDK call ran, not rejected authentication or
-uncertain delivery. Conditional settlement restores the attempt count, while
-retaining an earlier uncertain reaction. Channel refresh pauses without
-inventing facts. Each reconciliation page independently checks the guard and
-holds without changing its durable deadline, spending a pass or read-error
-backoff, or forgetting its partial cursor.
-[Client and cooldown-race cases](../../tests/integration/slackBotClient.test.ts),
-[refresh and post cases](../../src/features/outbox/server/posts.test.ts),
-[page pause and resume](../../src/features/outbox/server/reconcile.test.ts).
+One shared bot client holds per-method cooldowns in memory. A 429 defers only
+that method until `Retry-After`, with SDK retries disabled. Restart may encounter
+another 429 but cannot release a post reservation.
+[Client and cooldown cases](../../tests/integration/slackBotClient.test.ts).
 
 ### Withdrawal without inventing answer proof
 
@@ -806,45 +769,14 @@ own messages. Its documented success identifies channel and ts, and
 `message_not_found` means no message exists at that target.
 [Delete contract](https://docs.slack.dev/reference/methods/chat.delete/).
 
-The local withdrawal handler accepts only a previously proved outbox target,
-never an arbitrary Slack message ID. It freezes the target ts, validates the
-receipt, and safely retries uncertain deletions with 5-to-120-second backoff.
-An already absent target also completes the operation. Cleanup still runs for
-a suspended link, but requires an active installation. A valid delivery becomes
-`retracted` while retaining its proof and publication key. A misplaced post
-instead becomes `failed` once withdrawn. The bridge cancels its request as
-`thread_gone` as soon as misplacement is proved, without waiting for withdrawal.
-Failed withdrawal of a still-linked target retains `stray` and Slack's exact error.
-The handler can finish from a redacted target after its link is purged, without
-the request or link rows. Confirmed absence then purges both orphaned outbox
-rows. A permanent orphan withdrawal refusal instead writes a content-free
-`abandon_post` audit entry naming channel and ts for manual deletion, then purges
-both rows atomically. It also handles a locally refused withdrawal when its
-proved target still matches, never a target changed during the call. For a card,
-the missing approval establishes orphanhood: an initial link-proposal post can
-still have a null link ID after the proposal creates a link. Request settlement
-additionally checks the target's link, channel and thread.
-[Withdrawal implementation](../../src/features/outbox/server/retract.ts),
-[credential-free protocol cases](../../src/features/outbox/server/retract.test.ts).
-
-Unlink and delivery share card retirement through `forgetUnlinkedApprovals`.
-The approval stays while a card attempt or withdrawal is pending, including an
-older update's replacement. Its current link owns that lifecycle even when the
-original outbox row has a null link ID. Once everything settles, only misplaced
-initial posts survive, redacted with their original hashes and one final
-withdrawal. A permanent refusal of that now-orphaned withdrawal follows the
-audit-and-purge rule above, rather than retaining an unreachable operation.
-[Shared retirement](../../src/features/links/server/approvals.ts),
-[card cleanup](../../src/features/outbox/server/database.ts),
-[delivery and withdrawal cases](../../src/features/outbox/server/posts.test.ts).
-
-A confirmed answer's checkmark stays after unlink, like the answer it marks.
-Queued additions are dropped, and in-flight or unknown checkmarks whose request
-or link disappeared are retired without retrying or removing them. Eyes still
-need removal. A checkmark whose existing request no longer has a confirmed
-answer, or whose target mismatches, still gets compensating cleanup.
-[Reaction delivery](../../src/features/outbox/server/reactions.ts),
-[protocol cases](../../src/features/outbox/server/reactions.test.ts).
+Reduced v1's `retract` accepts a known post belonging to the caller's link,
+not an arbitrary Slack target. A matching delete receipt or `message_not_found`
+confirms removal. Otherwise the command reports that deletion is unconfirmed,
+and retrying the same known target is safe. Retraction never frees the request
+or publication slot. There is no generalized orphan cleanup, approval retirement
+or durable reaction state. Eyes are fire-and-forget when inbox serves a request.
+[Retraction implementation](../../src/features/outbox/server/retract.ts),
+[delivery and retraction cases](../../src/features/outbox/server/posts.test.ts).
 
 ### Daily and weekly releases
 

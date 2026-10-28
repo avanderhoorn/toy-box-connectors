@@ -1,0 +1,72 @@
+# Operating the bridge
+
+Run one bridge per data folder. The [README](../README.md) covers foreground
+startup and the login service. Toy Box must run separately on loopback.
+Default state lives in `~/.toy-box-slack`; keep its mode 0700 and
+`credentials.env` mode 0600.
+
+**Owner commands and history catch-up are pending on main.** The pause/resume,
+unlink and catch-up instructions below are completion requirements, not
+currently available operator workflows.
+
+## Check status
+
+The lead runs `toy-box-slack status`. At a terminal, add
+`--channel <toybox-channel-id>` to inspect one link, or omit it to list links.
+Status shows the allowlist, pending requests, wake failures and unconfirmed
+posts. Use `--json` for structured output.
+
+If Slack requests wait, inspect the wake result and make sure Toy Box is up.
+The channel needs an inbox routine whose prompt runs `toy-box-slack inbox`.
+The lead creates it using the installed skill. Missing routines are retried;
+repeated unserved wakes eventually show stalled. Reading inbox serves work,
+so do not run it as the lead merely to inspect status.
+
+## Pause and repair
+
+A paused link holds queued posts and opens no new requests. Existing requests
+still receive edits and deletes. Questions first asked while paused do not
+return automatically after resume.
+
+The owner must fix the cause before resuming with the passphrase. A new Slack
+channel ID requires unlinking the old link and linking the new ID. Do not edit
+the database to bypass an audience or policy refusal.
+
+For bad credentials, stop the foreground bridge with Ctrl-C or unload the
+login job, repair `credentials.env`, then restart. Environment variables
+override that file, so a stale exported token can hide a correction. Ordinary
+credential failures retain the ledger; they are not uninstall events.
+
+Editing `docs/manifest.yaml` does not update Slack. Apply changes in the app's
+**App Manifest** settings, follow Slack's reinstall prompt for permission
+changes, and update credentials if Slack issues new tokens.
+
+## Unknown posts are not a retry queue
+
+An ambiguous send or a send interrupted by a crash becomes unknown. The
+bridge checks its metadata about one and five minutes later. If confirmed,
+it records the Slack post. Otherwise status keeps it unconfirmed and lists
+the request's permalink when available.
+
+Inspect Slack before drawing conclusions. A missing match does not prove the
+post was absent. There is no resend or resolve command, and retraction keeps
+the request or scheduled slot reserved. An allowed person's next follow-up
+can open a new request.
+
+## Deletion and limits
+
+Unlink deletes that link's bridge data. Observed app uninstall or bot-token
+revocation deletes everything except an uninstalled installation marker.
+Before reinstalling after uninstall, stop the service and follow its startup
+refusal to remove `bridge.db` and its WAL/SHM companions. Do not reset the
+database to recover an unknown post.
+Deleting or restoring an older database can also lose post reservations.
+Check Slack before resuming publications after any state reset.
+
+Automatic 30-day text cleanup and history recovery still need to land.
+Planned catch-up reads replies only for roots at most 30 days old and cannot
+recover unseen edits/deletes to older stored messages.
+
+Bridge deletion does not erase Toy Box transcripts, provider copies, sent
+Slack messages, exported files or backups. See the [reviewer guide](security-review.md)
+for the separate consent, encryption and deletion approvals.

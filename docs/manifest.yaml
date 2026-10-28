@@ -31,15 +31,11 @@ settings:
     bot_events:
       - message.channels
       - message.groups
-      - member_joined_channel
       - member_left_channel
       - channel_archive
       - channel_deleted
       - group_deleted
-      - channel_rename
-      - group_rename
       - app_uninstalled
       - tokens_revoked
       - channel_shared
-      - channel_unshared
       - channel_id_changed
