@@ -238,6 +238,47 @@ describe("durable attempts", () => {
     expect(await item(database, sending.id)).toEqual(sent!);
   });
 
+  test("a rate-limited retry cannot replace its stored body or method", async () => {
+    const database = await openTestDatabase();
+    const sending = await start(database, await queue(database));
+    const queued = await database.write((tx) =>
+      settleOutboxAttempt(
+        tx,
+        sending,
+        { state: "queued", error: "rate_limited", nextAttemptAt: 2_000 },
+        1_100,
+      ),
+    );
+
+    await expect(
+      database.write((tx) =>
+        startOutboxAttempt(tx, queued!, { text: "Rendered again" }, "chat.postMessage", 2_000),
+      ),
+    ).rejects.toThrow("stored method and payload snapshot");
+    await expect(
+      database.write((tx) =>
+        startOutboxAttempt(tx, queued!, queued!.payload, "chat.update", 2_000),
+      ),
+    ).rejects.toThrow("stored method and payload snapshot");
+    expect(await item(database, queued!.id)).toEqual(queued!);
+    expect((await start(database, queued!, 2_000)).payload).toEqual(sending.payload);
+  });
+
+  test("metadata cannot become part of the queued or send-time snapshot it identifies", async () => {
+    const database = await openTestDatabase();
+    const queued = await queue(database);
+    const payload = {
+      text: "Hello",
+      metadata: { event_type: "toy_box_outbox", event_payload: { id: queued.id } },
+    };
+
+    await expect(queue(database, { payload })).rejects.toThrow("Add it at call time");
+    await expect(
+      database.write((tx) => startOutboxAttempt(tx, queued, payload, "chat.postMessage", 1_000)),
+    ).rejects.toThrow("Add it at call time");
+    expect(await item(database, queued.id)).toEqual(queued);
+  });
+
   test("a misplaced receipt stays durably stray while withdrawal is attempted", async () => {
     const database = await openTestDatabase();
     const sending = await start(database, await queue(database));

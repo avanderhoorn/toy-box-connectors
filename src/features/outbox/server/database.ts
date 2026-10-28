@@ -190,6 +190,13 @@ export async function startOutboxAttempt(
     if (slot && slot.next_post_at > now) return { kind: "waiting", until: slot.next_post_at };
   }
   const encoded = encodePayload(payload);
+  if (
+    current.attempts > 0 &&
+    (encoded.hash !== current.payloadHash ||
+      (current.attemptMethod !== null && current.attemptMethod !== method))
+  ) {
+    throw new Error(`Retry o${current.number} with its stored method and payload snapshot.`);
+  }
   const [row] = await transaction<OutboxRow[]>`
     UPDATE outbox SET state = 'sending', attempts = attempts + 1,
       attempt_method = ${method}, attempt_started_at = ${now},
@@ -384,6 +391,9 @@ export async function queueItem(
 }
 
 function encodePayload(payload: Record<string, unknown>): { text: string; hash: string } {
+  if (Object.hasOwn(payload, "metadata")) {
+    throw new Error("Outbox snapshots must not contain Slack metadata. Add it at call time.");
+  }
   const text = JSON.stringify(payload);
   return { text, hash: Bun.SHA256.hash(text, "hex") };
 }

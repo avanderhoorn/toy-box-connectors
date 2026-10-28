@@ -21,6 +21,8 @@ requires withdrawal, not confirmation.
 `server/database.ts` commits each attempt's method, start time, incremented attempt count, and
 exact send-time payload before the call. An unknown post can never be requeued automatically.
 Idempotent updates, deletions and feedback may retry without posting another message.
+After a rejected attempt, a retry uses the stored method and payload unchanged. Slack metadata
+is never stored inside that snapshot: the call adds it from the committed ID and payload hash.
 Reconciliation counts only fully read passes, scheduled
 from that immutable attempt time at 10, 60 and 120 seconds. Unsuccessful reads never turn an
 unknown into a send candidate. Conditional settlements keep late responses from overwriting
