@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { compareTs, laterTs, slackTsSchema, tsAt } from "./ts";
+import { compareTs, epochSecondsSchema, laterTs, slackTsSchema, tsAt } from "./ts";
 
 describe("Slack ts", () => {
   test("orders by seconds, then by fraction", () => {
@@ -59,4 +59,14 @@ describe("Slack ts", () => {
     expect(() => tsAt(-1)).toThrow(RangeError);
     expect(() => tsAt(1.5)).toThrow(RangeError);
   });
+});
+
+test("a time in epoch seconds is a whole second from 1970 to the last a Date can hold", () => {
+  for (const seconds of [0, 1_700_000_000, 8_640_000_000_000]) {
+    expect(epochSecondsSchema.parse(seconds)).toBe(seconds);
+  }
+  for (const seconds of [-1, 1_700_000_000.5, 8_640_000_000_001, Number.NaN, Infinity]) {
+    expect(epochSecondsSchema.safeParse(seconds).success).toBe(false);
+  }
+  expect(tsAt(8_640_000_000_000 * 1_000)).toBe("8640000000000.000000");
 });

@@ -222,16 +222,34 @@ describe("malformed frames", () => {
   });
 
   test("a malformed rate limit is still malformed, not a minute to repair", () => {
-    expect(
+    const read = (minute: unknown) =>
       readFrame(
         frame({
           type: "app_rate_limited",
           team_id: "THOME",
           api_app_id: "AAPP",
-          minute_rate_limited: "soon",
+          minute_rate_limited: minute,
         }),
-      ),
-    ).toMatchObject({ kind: "malformed", envelopeId: null });
+      );
+    expect(read("soon")).toMatchObject({ kind: "malformed", envelopeId: null });
+    expect(read(8_640_000_000_060)).toMatchObject({ kind: "malformed", envelopeId: null });
+    expect(read(8_640_000_000_000)).toMatchObject({ kind: "rate_limited" });
+  });
+
+  test("an event time past the last a Date can hold is malformed, and no hint", () => {
+    const read = readFrame(
+      frame({
+        type: "events_api",
+        envelope_id: "env-11",
+        payload: { ...callback, event_time: 9_007_199_254_740 },
+      }),
+    );
+    expect(read).toEqual({
+      kind: "malformed",
+      envelopeId: "env-11",
+      hint: { channelId: "C1", eventTime: null },
+      issues: ["too_big at payload.event_time"],
+    });
   });
 
   test("diagnostics name issue codes and paths but never the payload's content", () => {

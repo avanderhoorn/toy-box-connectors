@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { epochSecondsSchema } from "./ts";
 
 // Socket Mode frames.
 //
@@ -35,11 +36,9 @@ const rateLimitedSchema = z
     type: z.literal("app_rate_limited"),
     team_id: slackIdSchema.describe("The team whose events were held back"),
     api_app_id: slackIdSchema.describe("The rate-limited app"),
-    minute_rate_limited: z
-      .number()
-      .int()
-      .nonnegative()
-      .describe("The start of the minute Slack held events back, in epoch seconds"),
+    minute_rate_limited: epochSecondsSchema.describe(
+      "The start of the minute Slack held events back, in epoch seconds",
+    ),
   })
   .describe("Slack stopped delivering events for a minute");
 
@@ -74,11 +73,7 @@ const eventCallbackSchema = z
         "One installation that can see the event. A few events such as tokens_revoked omit it",
       ),
     event_id: slackIdSchema.describe("The event's ID, the same on every redelivery"),
-    event_time: z
-      .number()
-      .int()
-      .nonnegative()
-      .describe("When the event happened, in epoch seconds"),
+    event_time: epochSecondsSchema.describe("When the event happened, in epoch seconds"),
     event: z
       .looseObject({ type: z.string().min(1).describe("The event's type, such as message") })
       .describe("The event itself, which its handler parses"),
@@ -252,7 +247,7 @@ function malformed(envelopeId: string | null, value: unknown, issues: string[]):
 const hintSchema = z.object({
   payload: z
     .object({
-      event_time: z.number().int().nonnegative().optional().catch(undefined),
+      event_time: epochSecondsSchema.optional().catch(undefined),
       event: z.object({ channel: slackIdSchema.optional() }).optional().catch(undefined),
     })
     .optional()
