@@ -250,6 +250,19 @@ describe("taking a claim message", () => {
     expect(await readClaims(database)).toMatchObject([{ state: "live" }]);
     expect(await readClaims(idle)).toEqual([]);
   });
+
+  test("while Slack isn't connected, no code is tried", async () => {
+    const { database, code } = await openClaim();
+    await database.write(
+      (transaction) => transaction`UPDATE installation SET status = 'auth_failed'`,
+    );
+
+    expect(await take(database, claimPost(`<@U-bot> claim ${code}`), 60_000)).toBe(false);
+    expect(await take(database, claimPost("<@U-bot> claim 0000-0000"), 61_000)).toBe(false);
+
+    expect(await readClaims(database)).toMatchObject([{ state: "live", failed_attempts: 0 }]);
+    expect(await readAudit(database)).toMatchObject([{ action: "start_claim" }]);
+  });
 });
 
 describe("admitting who posted the code", () => {

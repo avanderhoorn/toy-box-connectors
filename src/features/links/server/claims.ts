@@ -211,7 +211,8 @@ export async function answerStoredClaim(
 /**
  * Tries a claim message against the open claim, in its delivery's transaction before the ack.
  * The receiver consumes every claim message whatever this returns. Only a live, new post in the
- * exact shape by a person, while no owner is pinned, is tried. Returns whether the claim changed.
+ * exact shape by a person, while Slack is connected and no owner is pinned, is tried. Returns
+ * whether the claim changed.
  */
 export async function takeClaim(
   transaction: Bun.SQL,
@@ -221,7 +222,7 @@ export async function takeClaim(
   const attempt = claimAttempt(posted);
   if (!attempt) return false;
   const installation = await readInstallation(transaction);
-  if (!installation || installation.ownerUserId !== null) return false;
+  if (installation?.status !== "active" || installation.ownerUserId !== null) return false;
   const open = await readOpenClaim(transaction);
   const tried = open && attemptClaim(open, attempt, now);
   if (!tried) return false;
