@@ -18,6 +18,12 @@ payload hash. Manual resolution may use exact sent text only when metadata is ab
 never when metadata identifies another item. A receipt that shows a reply at the root
 requires withdrawal, not confirmation.
 
+`model/posting.ts` checks the current installation, link, destination, requester and request
+revision. Only explicit follow-ups reach answered, dismissed or expired requests, and none
+reach cancelled requests. A destination needs channel facts younger than two minutes with no
+invalidation. Both roles are judged when a channel is monitored and published to, against the
+owner-approved audiences. This pure gate asks for a refresh or hold rather than guessing.
+
 `server/answers.ts` settles one request inside the transaction that proves a delivery or
 changes its source. Proof alone cannot answer a request while its source is unverified.
 Repair calls the same function after verification, revision or cancellation, so either order
