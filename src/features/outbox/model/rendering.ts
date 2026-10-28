@@ -399,7 +399,7 @@ function escapeText(text: string): string {
 }
 
 function neutralize(text: string): string {
-  return text.replace(/@(here|channel|everyone)\b/gi, "@\u200b$1");
+  return text.replaceAll("@\u200b", "@").replace(/@(here|channel|everyone)\b/gi, "@\u200b$1");
 }
 
 const builtinTypes = new Set([

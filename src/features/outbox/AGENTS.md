@@ -87,7 +87,9 @@ it alone, uninstall removes it, and maintenance expires slots whose deadline has
 mrkdwn section blocks and an escaped plain fallback, disables automatic parsing and unfurls,
 and neutralizes mentions. Only HTTP(S) becomes a link. Email addresses, mailto links,
 git remotes, and other autolinked schemes stay plain text. An explicit Markdown link to
-another scheme is refused. Whole blocks pack greedily into a section with a blank line
+another scheme is refused. Before neutralizing broadcasts, it removes the inbox's zero-width
+space immediately after @ in both surfaces, so quoted handles and code identifiers return
+unchanged. Other zero-width characters stay intact. Whole blocks pack greedily into a section with a blank line
 between them, up to 3,000 UTF-16 code units. An oversized block
 breaks only between lines, closing and reopening formatting, never inside a link, entity, or
 surrogate pair. A line that cannot fit is refused. The rendered sections and the fallback

@@ -1,3 +1,4 @@
+import { renderSlackText } from "@commands/model/slackText";
 import { expect, test } from "bun:test";
 import { describeRenderingRefusal, renderMarkdown, type RenderedMessage } from "./rendering";
 
@@ -47,6 +48,45 @@ test("raw Slack controls, HTML and named broadcasts cannot mention anyone", () =
   expect(text).not.toContain("<@");
   expect(text).not.toContain("<!");
   expect(message.text).not.toMatch(/@(here|channel|everyone)\b/);
+});
+
+test.each([
+  {
+    source: "Use @types/node with @decorator and ask @lead.",
+    fallback: "Use @types/node with @decorator and ask @lead.",
+  },
+  {
+    source: "Use `@types/node` with `@decorator`.",
+    fallback: "Use @types/node with @decorator.",
+  },
+  {
+    source: "```\n@decorator\n```",
+    fallback: "@decorator",
+  },
+])("an inbox quote restores handles in both Slack surfaces: $source", ({ source, fallback }) => {
+  const inbox = renderSlackText(source, { people: new Map(), channels: new Map() });
+  expect(inbox).toContain("@\u200b");
+  const message = rendered(inbox);
+  expect(message.text).toBe(fallback);
+  expect(message.blocks.map((block) => block.text.text)).toEqual([source]);
+});
+
+test.each([
+  ["<!here> <!channel> <!everyone>", "@\u200bhere @\u200bchannel @\u200beveryone"],
+  ["@here @CHANNEL @Everyone", "@\u200bhere @\u200bCHANNEL @\u200bEveryone"],
+])("an inbox quote keeps broadcasts neutralized: %s", (source, expected) => {
+  const inbox = renderSlackText(source, { people: new Map(), channels: new Map() });
+  const message = rendered(inbox);
+  expect(message.text).toBe(expected);
+  expect(message.blocks.map((block) => block.text.text)).toEqual([expected]);
+});
+
+test("only the inbox's zero-width space immediately after @ is removed", () => {
+  const message = rendered("a\u200bb @\u200btypes/node @\u200cdecorator");
+  expect(message.text).toBe("a\u200bb @types/node @\u200cdecorator");
+  expect(message.blocks.map((block) => block.text.text)).toEqual([
+    "a\u200bb @types/node @\u200cdecorator",
+  ]);
 });
 
 test("inline and block HTML are escaped, and raw ampersands are escaped exactly once", () => {
