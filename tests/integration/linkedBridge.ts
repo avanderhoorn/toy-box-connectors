@@ -78,10 +78,18 @@ export async function startLinkedBridge({
     return started;
   }
 
-  /** Calls `name` the way the CLI does, in session `sessionId`, or at a terminal when it's null. */
-  function call(name: string, sessionId: string | null, channel: string | null = null) {
+  /**
+   * Calls `name` with `input` the way the CLI does, in session `sessionId`, or at a terminal when
+   * it's null.
+   */
+  function call(
+    name: string,
+    sessionId: string | null,
+    channel: string | null = null,
+    input: Record<string, unknown> = {},
+  ) {
     const env = { COPILOT_AGENT_SESSION_ID: sessionId ?? undefined };
-    return callBridge(name, {}, { channelId: channel, env, home });
+    return callBridge(name, input, { channelId: channel, env, home });
   }
 
   return {
@@ -98,5 +106,8 @@ export async function startLinkedBridge({
       call("status", sessionId, channel),
     /** What inbox shows the channel's lead, which marks what it shows read. */
     inbox: async () => (await call("inbox", channelId)).json as Inbox,
+    /** Has the channel's lead answer request `id` with `text`. */
+    reply: (id: number, text: string) =>
+      call("reply", channelId, null, { request: `r${id}`, text }),
   };
 }

@@ -1,11 +1,12 @@
 // A running bridge connected to a fake Slack, and the events Slack sends it about its channel.
 
 import { expect } from "bun:test";
+import type { BridgeDatabase } from "@bridge/server/database";
 import { tsAt, type SlackTs } from "@slackapi/model/ts";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import type { WakeTimings } from "@wakes/model";
 import type { FakeEventOptions, FakeSlackMessage } from "../fakes/slack";
-import { startSlackForBridge } from "./bridgeProcess";
+import { startSlackForBridge, withDatabase } from "./bridgeProcess";
 import { startLinkedBridge, type LinkColumns } from "./linkedBridge";
 import { waitFor } from "./waitFor";
 
@@ -95,11 +96,13 @@ export async function connectedBridge({
     },
     /**
      * Kills the bridge the way a crash does, and starts another over the same data folder that
-     * wakes the lead promptly, once Slack says hello to it.
+     * wakes the lead promptly, once Slack says hello to it. `meanwhile` changes the database while
+     * neither runs.
      */
-    crash: async () => {
+    crash: async (meanwhile?: (database: BridgeDatabase) => Promise<unknown>) => {
       bridge.child.kill("SIGKILL");
       await bridge.exit();
+      if (meanwhile) await withDatabase(linked.dataFolder, meanwhile);
       const count = slack.connections.length + 1;
       bridge = await linked.serve(waking(PROMPTLY));
       await connected(count);
