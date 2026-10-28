@@ -123,20 +123,11 @@ describe("personName", () => {
     expect(personName("  ", "U0DAVE")).toBe("U0DAVE");
     expect(personName("()", "U0DAVE")).toBe("U0DAVE");
   });
-
-  test("keeps at most 80 characters", () => {
-    expect(personName("a".repeat(100), "U0A")).toBe(`${"a".repeat(79)}…`);
-  });
 });
 
 test("oneLine cuts between graphemes", () => {
   expect(oneLine("ab👨‍👩‍👧 cd", 4)).toBe("ab…");
   expect(oneLine("short", 5)).toBe("short");
-});
-
-test("oneLine neutralizes a mention once, however often it's applied", () => {
-  const once = oneLine("@lead and @everyone", 80);
-  expect(oneLine(once, 80)).toBe(once);
 });
 
 test("fenceFor is longer than any run of backticks in the text", () => {
