@@ -307,10 +307,17 @@ export async function cancelQueuedRequestItems(
   `;
 }
 
-/** Queues adding the reaction `name` to a message, such as ✅ on a claim the terminal confirmed. */
+/** Queues adding or removing a reaction, such as ✅ on a claim the terminal confirmed. */
 export async function queueReaction(
   transaction: Bun.SQL,
-  reaction: { channelId: string; ts: SlackTs; name: string; linkId?: string | null },
+  reaction: {
+    channelId: string;
+    ts: SlackTs;
+    name: string;
+    action?: "add" | "remove";
+    linkId?: string | null;
+    requestId?: number | null;
+  },
   now: number,
 ): Promise<void> {
   await queueItem(
@@ -318,8 +325,9 @@ export async function queueReaction(
     {
       kind: "reaction",
       linkId: reaction.linkId,
+      requestId: reaction.requestId,
       channelId: reaction.channelId,
-      payload: { action: "add", name: reaction.name, timestamp: reaction.ts },
+      payload: { action: reaction.action ?? "add", name: reaction.name, timestamp: reaction.ts },
     },
     now,
   );

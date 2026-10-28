@@ -18,6 +18,15 @@ payload hash. Manual resolution may use exact sent text only when metadata is ab
 never when metadata identifies another item. A receipt that shows a reply at the root
 requires withdrawal, not confirmation.
 
+`server/answers.ts` settles one request inside the transaction that proves a delivery or
+changes its source. Proof alone cannot answer a request while its source is unverified.
+Repair calls the same function after verification, revision or cancellation, so either order
+settles the same way without polling. A current confirmed final answers only verified input,
+an older final returns the request as updated, and a failed or dropped final returns it as
+reply failed unless a replacement still waits. The answered transition queues both reactions
+in that transaction. Retraction preserves a valid delivery's proof, while withdrawing a
+misplaced post is failure, never a successful delivery.
+
 `server/database.ts` commits each attempt's method, start time, incremented attempt count, and
 exact send-time payload before the call. An unknown post can never be requeued automatically.
 Idempotent updates, deletions and feedback may retry without posting another message.
