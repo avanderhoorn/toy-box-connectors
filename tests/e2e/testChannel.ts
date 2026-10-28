@@ -36,6 +36,8 @@ export type TestChannel = {
   routine(title: string): Routine | undefined;
   /** Waits for the lead to settle, wakes it with `wake`, and resolves once that turn settles. */
   turn(wake: () => Promise<void>): Promise<void>;
+  /** Runs the lead's routine titled `title`, and resolves once the turn it starts settles. */
+  run(title: string): Promise<void>;
 };
 
 const createdChannelSchema = z.object({
@@ -142,23 +144,37 @@ function followChannel(toyBox: IsolatedToyBox, channelId: string) {
     return presence && presence.state !== "working" ? true : undefined;
   }
 
+  function routine(title: string) {
+    return [...routines.values()].find((candidate) => candidate.title === title);
+  }
+
+  async function turn(wake: () => Promise<void>) {
+    await waitUntil("the lead to finish its last turn", settled, TURN_FINISH_TIMEOUT);
+    const before = presences.length;
+    await wake();
+    await waitUntil(
+      "the lead to start working",
+      () => {
+        following();
+        return presences.slice(before).some(isWorking) || undefined;
+      },
+      TURN_START_TIMEOUT,
+    );
+    await waitUntil("the lead to finish its turn", settled, TURN_FINISH_TIMEOUT);
+  }
+
   return {
     id: channelId,
-    routine: (title: string) => [...routines.values()].find((routine) => routine.title === title),
+    routine,
+    turn,
 
-    async turn(wake: () => Promise<void>) {
-      await waitUntil("the lead to finish its last turn", settled, TURN_FINISH_TIMEOUT);
-      const before = presences.length;
-      await wake();
-      await waitUntil(
-        "the lead to start working",
-        () => {
-          following();
-          return presences.slice(before).some(isWorking) || undefined;
-        },
-        TURN_START_TIMEOUT,
-      );
-      await waitUntil("the lead to finish its turn", settled, TURN_FINISH_TIMEOUT);
+    async run(title: string) {
+      const scheduled = routine(title);
+      if (!scheduled) throw new Error(`The lead has no routine titled "${title}".`);
+      const path = `channels/${channelId}/routines/${scheduled.id}/run`;
+      await turn(async () => {
+        await callToyBox(toyBox.origin, path, { method: "POST", expected: 204 });
+      });
     },
 
     /**

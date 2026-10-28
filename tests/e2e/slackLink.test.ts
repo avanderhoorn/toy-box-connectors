@@ -12,8 +12,14 @@ import { describeEndToEnd } from "./suite";
 import { CREATE_CHANNEL_TIMEOUT, createTestChannel, type TestChannel } from "./testChannel";
 import { readCatalog } from "./toyBoxApi";
 
-const { title, schedule, prompt } = REQUESTS_ROUTINE;
-const PURPOSE = `Answer the release team's questions from Slack. Tonight's release ships dark mode and faster search. In your kickoff turn, add a routine titled "${title}" with the schedule "${schedule}" and exactly this prompt: "${prompt}" Run toy-box-slack only when a routine asks you to.`;
+/** The lead's release notes routine, on a schedule no run reaches, so only a scenario runs it. */
+const RELEASE_NOTES_ROUTINE = {
+  title: "Release notes",
+  schedule: REQUESTS_ROUTINE.schedule,
+  prompt:
+    "Publish release notes in Slack for tonight's release: pipe a few lines on dark mode and faster search to `toy-box-slack publish --series release-notes`, which posts them once for this run.",
+};
+const PURPOSE = `Answer the release team's questions from Slack, and publish release notes there. Tonight's release ships dark mode and faster search. In your kickoff turn, add ${adding(REQUESTS_ROUTINE)} Then add ${adding(RELEASE_NOTES_ROUTINE)} Run toy-box-slack only when a routine asks you to.`;
 
 describeEndToEnd("a channel linked to Slack", (suite) => {
   let channel: TestChannel;
@@ -66,6 +72,23 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
   );
 
   suite.scenario(
+    "release notes post once in the channel when their routine runs twice",
+    async () => {
+      // Both tries share a scheduled slot, so a rerun checks every publication, not only its own.
+      await channel.run(RELEASE_NOTES_ROUTINE.title);
+      await waitFor(() =>
+        expect(publications(link)).toMatchObject([{ series: "release-notes", state: "sent" }]),
+      );
+      const sent = publications(link);
+      await channel.run(RELEASE_NOTES_ROUTINE.title);
+
+      expect(publications(link)).toEqual(sent);
+      expect(sent.map(({ slack_ts }) => slack_ts)).toEqual(postedInChannel(link.slack));
+    },
+    { turns: 2 },
+  );
+
+  suite.scenario(
     "the run leaves the owner's Toy Box and Copilot untouched",
     async () => {
       const catalog = await readCatalog(suite.toyBox.origin);
@@ -84,6 +107,11 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
   );
 });
 
+/** Asks the lead to add `routine` as given. */
+function adding({ title, schedule, prompt }: typeof REQUESTS_ROUTINE) {
+  return `a routine titled "${title}" with the schedule "${schedule}" and exactly this prompt: "${prompt}"`;
+}
+
 /** What people in C-link see of the message at `ts`: its reactions and the bot's replies to it. */
 function seenInSlack(slack: FakeSlack, ts: string) {
   const messages = slack.getMessages("C-link");
@@ -91,4 +119,19 @@ function seenInSlack(slack: FakeSlack, ts: string) {
     reactions: messages.find((message) => message.ts === ts)?.reactions,
     replies: messages.filter((message) => message.thread_ts === ts && message.user === BOT).length,
   };
+}
+
+/** The link's publications as bridge.db records them, in the order the lead queued them. */
+function publications(link: SlackLink) {
+  return link.query<{ series: string; state: string; slack_ts: string | null }>(
+    "SELECT series, state, slack_ts FROM outbox WHERE kind = 'publication' ORDER BY number",
+  );
+}
+
+/** The ts of each post the bot made at the top of C-link rather than in a thread. */
+function postedInChannel(slack: FakeSlack) {
+  return slack
+    .getMessages("C-link")
+    .filter((message) => message.user === BOT && message.thread_ts === undefined)
+    .map(({ ts }) => ts);
 }
