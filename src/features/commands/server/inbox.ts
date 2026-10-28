@@ -10,6 +10,7 @@ import {
   renderSlackText,
   type SlackNames,
 } from "@commands/model/slackText";
+import type { OutboxWorker } from "@outbox/server";
 import { serveRequest } from "@requests/model/lifecycle";
 import { readActiveRequests, saveRequest, type StoredRequest } from "@requests/server/database";
 import { readSlackPersonName } from "@slackapi/server/users";
@@ -23,6 +24,7 @@ export type InboxCommandOptions = {
   wakes: Pick<WakeScheduler, "reconsider">;
   /** The Slack workspace's URL, once Slack has said it, for permalinks. */
   workspaceUrl: () => string | null;
+  acknowledge?: OutboxWorker["acknowledge"];
 };
 
 type ThreadMessage = {
@@ -37,15 +39,20 @@ export function inboxCommand({
   database,
   wakes,
   workspaceUrl,
+  acknowledge,
 }: InboxCommandOptions): CommandHandler<"inbox"> {
   return async ({ limit }, { caller, at }) => {
+    const seen: StoredRequest[] = [];
     const inbox = await database.write(async (transaction): Promise<Inbox> => {
       const link = await readCallerLink(transaction, caller);
       const waiting = inboxOrder(await readActiveRequests(transaction, link.id));
       const requests: InboxRequest[] = [];
       for (const request of waiting.slice(0, limit)) {
         requests.push(await readInboxRequest(transaction, request, workspaceUrl()));
-        if (isPending(request)) await saveRequest(transaction, serveRequest(request, at));
+        if (isPending(request)) {
+          await saveRequest(transaction, serveRequest(request, at));
+          seen.push(request);
+        }
       }
       return {
         channel: link.channel,
@@ -55,6 +62,7 @@ export function inboxCommand({
       };
     });
     wakes.reconsider();
+    acknowledge?.(seen);
     return { result: inbox, text: presentInbox(inbox, at) };
   };
 }

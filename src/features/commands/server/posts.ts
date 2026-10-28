@@ -6,6 +6,7 @@
 import type { BridgeDatabase } from "@bridge/server/database";
 import { CommandRefusedError } from "@commands/model/protocol";
 import { clockTime } from "@commands/model/wording";
+import type { OutboxWorker } from "@outbox/server";
 import { OutboxRefusedError, queuePublication, queueReply } from "@outbox/server/database";
 import { retractPost } from "@outbox/server/retract";
 import type { BotClient } from "@slackapi/server/botClient";
@@ -22,10 +23,15 @@ import type { CommandHandler } from "./serve";
 export type ReplyCommandOptions = {
   database: BridgeDatabase;
   wakes: Pick<WakeScheduler, "reconsider">;
+  outbox?: Pick<OutboxWorker, "poke">;
 };
 
 /** Queues the answer to a request in its thread. Only Slack's confirmation answers it. */
-export function replyCommand({ database, wakes }: ReplyCommandOptions): CommandHandler<"reply"> {
+export function replyCommand({
+  database,
+  wakes,
+  outbox,
+}: ReplyCommandOptions): CommandHandler<"reply"> {
   return async ({ request: id, text }, { caller, at }) => {
     const post = await database.write(async (transaction) => {
       const link = await readCallerLink(transaction, caller);
@@ -35,6 +41,7 @@ export function replyCommand({ database, wakes }: ReplyCommandOptions): CommandH
       );
     });
     wakes.reconsider();
+    outbox?.poke();
     return {
       result: { request: `r${id}`, post: `o${post.number}`, state: post.state },
       text: `Queued o${post.number} to answer r${id} in its thread. If it can't post, inbox shows r${id} again.`,
@@ -46,12 +53,14 @@ export type PublishCommandOptions = {
   database: BridgeDatabase;
   /** The Toy Box channel's routines, or null when Toy Box has no such channel. */
   routines: (channelId: string) => Promise<readonly ToyBoxRoutine[] | null>;
+  outbox?: Pick<OutboxWorker, "poke">;
 };
 
 /** Queues a post in the watched channel for the latest scheduled run of the routine that runs it. */
 export function publishCommand({
   database,
   routines,
+  outbox,
 }: PublishCommandOptions): CommandHandler<"publish"> {
   return async ({ series, text }, { caller, at }) => {
     const link = await database.read((sql) => readCallerLink(sql, caller));
@@ -69,6 +78,7 @@ export function publishCommand({
         queuePublication(transaction, { linkId: link.id, series, scheduledAt, text }, at),
       ),
     );
+    outbox?.poke();
     return {
       result: { post: `o${post.number}`, series, scheduledAt, state: post.state },
       text: `Queued o${post.number} in ${link.channel} for ${run}.`,

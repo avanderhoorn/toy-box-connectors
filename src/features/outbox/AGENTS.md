@@ -20,6 +20,11 @@ item ID, payload hash and destination prove delivery. Complete misses leave the 
 Partial or failed reads spend no check. There is no automatic resend or manual resolution.
 An unknown item can settle only on positive delivery proof, never a later apparent refusal.
 
+The bridge recovers interrupted attempts before starting work. The worker shares its one bot
+client, waits for verified Slack readiness, and serializes coalesced command pokes and a
+one-second fallback timer. Stop drains the current pass before storage closes. Inbox hands it
+the requests just served after commit, and their best-effort eyes batch has no stored state.
+
 Queueing a reply calls the request model's `beginAnswer` in the same transaction. Proven
 delivery calls `confirmAnswer`. Only a definite refusal can return it to seen and replace
 the payload on that same failed row. Late results settle only their matching attempt.

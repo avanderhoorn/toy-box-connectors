@@ -2,7 +2,6 @@ import { expect, mock, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { clockTime } from "@commands/model/wording";
 import { createStoredLink } from "@links/server/testFixtures";
-import { createPostDelivery } from "@outbox/server/posts";
 import { createOutboxWorld } from "@outbox/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { publishCommand, replyCommand, retractCommand } from "./posts";
@@ -26,7 +25,8 @@ test("reply refuses another channel's request the way it refuses one that doesn'
 test("reply queues one answer in the request's thread, and refuses another by naming it", async () => {
   const { database, now } = await createOutboxWorld();
   const wakes = { reconsider: mock(() => {}) };
-  const reply = replyCommand({ database, wakes });
+  const outbox = { poke: mock(() => {}) };
+  const reply = replyCommand({ database, wakes, outbox });
   const lead = { caller: LEAD, at: now() };
 
   expect(await reply({ request: 1, text: "It's **fixed**." }, lead)).toEqual({
@@ -37,6 +37,7 @@ test("reply queues one answer in the request's thread, and refuses another by na
   expect(await refusal(reply({ request: 1, text: "Again." }, lead))).toBe(
     "r1 wasn't answered. Request r1 is already reserved by o1 (queued). Run `toy-box-slack inbox` to see what waits on you.",
   );
+  expect(outbox.poke).toHaveBeenCalledTimes(1);
 });
 
 test("publish posts once for the latest scheduled run of the routine that runs it", async () => {
@@ -49,8 +50,10 @@ test("publish posts once for the latest scheduled run of the routine that runs i
     prompt:
       "Draft this week's release notes and post them with `toy-box-slack publish --series notes`.",
   };
+  const outbox = { poke: mock(() => {}) };
   const publish = publishCommand({
     database,
+    outbox,
     routines: async (channelId) => (channelId === "toybox-link" ? [routine] : null),
   });
   const friday = new Date(2026, 9, 30, 16, 0).getTime();
@@ -69,12 +72,13 @@ test("publish posts once for the latest scheduled run of the routine that runs i
   expect(await refusal(publish({ series: "weekly", text: "# Weekly" }, saturday))).toBe(
     "Nothing posted, because no routine in this channel runs `toy-box-slack publish --series weekly`. Publish posts once for each scheduled run of that routine, so create it first.",
   );
+  expect(outbox.poke).toHaveBeenCalledTimes(1);
 });
 
 test("retract deletes the lead's post from Slack, and says why when it can't", async () => {
   const world = await createOutboxWorld();
   const { id } = await world.queue();
-  await createPostDelivery(world.database, world.bot, { now: world.now }).post(id);
+  await world.post(id);
   const lead = { caller: LEAD, at: world.now() };
   const retract = retractCommand({ database: world.database, bot: world.bot });
 

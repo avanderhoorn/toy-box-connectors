@@ -18,6 +18,8 @@ import { inboxCommand } from "@commands/server/inbox";
 import { publishCommand, replyCommand, retractCommand } from "@commands/server/posts";
 import { serveCommands } from "@commands/server/serve";
 import { statusCommand } from "@commands/server/status";
+import { startOutboxWorker, type OutboxWorker } from "@outbox/server";
+import { recoverOutboxAttempts } from "@outbox/server/database";
 import { createBotClient, type BotClient } from "@slackapi/server/botClient";
 import { wakeLead } from "@toybox/server";
 import { readToyBoxRoutines } from "@toybox/server/api";
@@ -72,11 +74,13 @@ export async function startBridge(
   let scheduler: WakeScheduler | undefined;
   let slack: SlackSupervisor | undefined;
   let socket: CommandSocket | undefined;
+  let outbox: OutboxWorker | undefined;
 
   async function stop() {
     try {
       await socket?.stop();
       await scheduler?.stop();
+      await outbox?.stop();
       await slack?.stop();
       await database?.close();
     } finally {
@@ -86,6 +90,7 @@ export async function startBridge(
 
   try {
     database = await openBridgeDatabase(join(dataFolder, "bridge.db"));
+    await database.write((tx) => recoverOutboxAttempts(tx, Date.now()));
     // Slack is supervised exactly when both tokens are set.
     const slackState = (): SlackState => unconfiguredSlack(settings) ?? slack!.state();
     const { botToken, appToken, slackApiUrl } = settings;
@@ -108,6 +113,13 @@ export async function startBridge(
       onError: failure.resolve,
       timings: settings.wakeTimings,
     });
+    if (bot) {
+      outbox = startOutboxWorker(database, bot, {
+        ready: () => slackState().connection === "connected" && slackState().problem === null,
+        onChange: () => scheduler?.reconsider(),
+        onError: failure.resolve,
+      });
+    }
     socket = listenForCommands(
       commandSocketPath(dataFolder),
       serveCommands(database, {
@@ -115,12 +127,14 @@ export async function startBridge(
           database,
           wakes: scheduler,
           workspaceUrl: () => slack?.workspaceUrl() ?? null,
+          acknowledge: (requests) => outbox?.acknowledge(requests),
         }),
         dismiss: dismissCommand({ database, wakes: scheduler }),
-        reply: replyCommand({ database, wakes: scheduler }),
+        reply: replyCommand({ database, wakes: scheduler, outbox }),
         publish: publishCommand({
           database,
           routines: (channelId) => readToyBoxRoutines(origin, channelId),
+          outbox,
         }),
         retract: retractCommand({ database, bot }),
         status: statusCommand({ database, slack: slackState, timings: settings.wakeTimings }),

@@ -34,7 +34,13 @@ test("shows changed requests first, up to its limit, and marks only those it sho
     await saveRequest(transaction, dismissRequest(serveRequest(dismissed, 5), "Done"));
   });
   const wakes = { reconsider: mock(() => {}) };
-  const inbox = inboxCommand({ database, wakes, workspaceUrl: () => null });
+  const acknowledged: string[][] = [];
+  const inbox = inboxCommand({
+    database,
+    wakes,
+    workspaceUrl: () => null,
+    acknowledge: (requests) => acknowledged.push(requests.map(({ sourceTs }) => sourceTs)),
+  });
 
   const first = await inbox({ limit: 1 }, { caller: LEAD, at: 1_000 });
   const second = await inbox({ limit: 10 }, { caller: LEAD, at: 2_000 });
@@ -53,6 +59,7 @@ test("shows changed requests first, up to its limit, and marks only those it sho
     { id: 5, state: "open", attention: null, touchedAt: null },
   ]);
   expect(wakes.reconsider).toHaveBeenCalledTimes(2);
+  expect(acknowledged).toEqual([[askedAt(3).sourceTs], [askedAt(2).sourceTs]]);
 });
 
 test("names the people a message mentions by the names the bridge stored", async () => {
