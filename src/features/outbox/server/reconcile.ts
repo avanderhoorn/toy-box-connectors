@@ -1,5 +1,6 @@
 import { gapOverlapMs } from "@activity/model/gaps";
 import type { BridgeDatabase } from "@bridge/server/database";
+import { readApproval } from "@links/server/approvals";
 import { suspendChannelLinks } from "@links/server/lifecycle";
 import { channelFailureReason } from "@slackapi/model/errors";
 import { continueHistory, type HistoryPage } from "@slackapi/model/history";
@@ -58,7 +59,7 @@ export function createReconciliation(
         (item.reconcilePass === 3 ||
           item.nextAttemptAt === null ||
           channelFailureReason(item.error ?? "") !== null) &&
-        (await forgetStoppedOrphan(sql, item))
+        (await forgetStoppedOrphan(sql, item, now()))
       ) {
         return { kind: "changed" };
       }
@@ -66,13 +67,14 @@ export function createReconciliation(
         return { kind: "waiting", reason: "reconciliation_stopped", until: null };
       }
       if (channelFailureReason(item.error ?? "") !== null) {
+        const linkId = await readOwningLinkId(sql, item);
         const [link] = await sql<{ status: string }[]>`
-          SELECT status FROM links WHERE id = ${item.linkId}
+          SELECT status FROM links WHERE id = ${linkId}
         `;
         if (!link || link.status !== "active") {
           return {
             kind: "waiting",
-            reason: item.linkId === null ? "channel_unavailable" : "link_inactive",
+            reason: linkId === null ? "channel_unavailable" : "link_inactive",
             until: null,
           };
         }
@@ -273,7 +275,7 @@ export function createReconciliation(
     backoffs.delete(id);
     return database.write(async (tx) => {
       const advanced = await advanceReconciliation(tx, item, now());
-      if (advanced?.reconcilePass === 3 && (await forgetStoppedOrphan(tx, advanced))) {
+      if (advanced?.reconcilePass === 3 && (await forgetStoppedOrphan(tx, advanced, now()))) {
         return { kind: "changed" };
       }
       return advanced ? { kind: "settled", item: advanced } : { kind: "changed" };
@@ -283,13 +285,14 @@ export function createReconciliation(
   async function resume(item: OutboxItem): Promise<OutboxItem | null> {
     return database.write(async (tx) => {
       const at = now();
+      const linkId = await readOwningLinkId(tx, item);
       const changed = await tx`
         UPDATE outbox SET next_attempt_at = ${at}, error = NULL, updated_at = ${at}
         WHERE id = ${item.id} AND state = 'delivery_unknown' AND attempts = ${item.attempts}
           AND payload_hash = ${item.payloadHash} AND reconcile_pass = ${item.reconcilePass}
           AND channel_id = ${item.channelId} AND error IS ${item.error}
           AND next_attempt_at IS NULL
-          AND EXISTS (SELECT 1 FROM links WHERE id = ${item.linkId} AND status = 'active')
+          AND EXISTS (SELECT 1 FROM links WHERE id = ${linkId} AND status = 'active')
         RETURNING id
       `;
       return changed.length > 0 ? readOutboxItem(tx, item.id) : null;
@@ -307,7 +310,7 @@ export function createReconciliation(
   async function hold(item: OutboxItem, reason: string, until: number | null): Promise<PostStep> {
     return database.write(async (tx) => {
       const at = now();
-      if (until === null && (await forgetStoppedOrphan(tx, item))) {
+      if (until === null && (await forgetStoppedOrphan(tx, item, at))) {
         return { kind: "changed" };
       }
       const next = until === null ? null : Math.max(until, item.nextAttemptAt ?? 0);
@@ -336,10 +339,10 @@ export function createReconciliation(
   return { reconcile, close };
 }
 
-async function forgetStoppedOrphan(tx: Bun.SQL, item: OutboxItem): Promise<boolean> {
+async function forgetStoppedOrphan(tx: Bun.SQL, item: OutboxItem, now: number): Promise<boolean> {
   if (
     !["reply", "progress", "publication", "card"].includes(item.kind) ||
-    !(await linkWasRemoved(tx, item.linkId))
+    !(await linkWasRemoved(tx, await readOwningLinkId(tx, item)))
   )
     return false;
   const deleted = await tx`
@@ -351,8 +354,16 @@ async function forgetStoppedOrphan(tx: Bun.SQL, item: OutboxItem): Promise<boole
     RETURNING id
   `;
   if (deleted.length === 0) return false;
-  await purgeRemovedLinkItem(tx, item);
+  await purgeRemovedLinkItem(tx, item, now);
   return true;
+}
+
+async function readOwningLinkId(sql: Bun.SQL, item: OutboxItem): Promise<string | null> {
+  const approval =
+    item.kind === "card" && item.approvalId !== null
+      ? await readApproval(sql, item.approvalId)
+      : null;
+  return approval?.linkId ?? item.linkId;
 }
 
 function sameRead(left: OutboxItem, right: OutboxItem): boolean {

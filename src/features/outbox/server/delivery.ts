@@ -1,5 +1,5 @@
 import type { ChannelSuspendReason } from "@links/model/audience";
-import { recordCardPosted } from "@links/server/approvals";
+import { forgetUnlinkedApprovals, recordCardPosted } from "@links/server/approvals";
 import { suspendChannelLinks } from "@links/server/lifecycle";
 import { isActive } from "@requests/model/lifecycle";
 import { readRequest } from "@requests/server/database";
@@ -50,7 +50,7 @@ export async function settleDelivery(
     await cancelThreadRequest(tx, settled, now);
   }
   if (item.requestId !== null) await settleRequestAnswer(tx, item.requestId, now);
-  await purgeRemovedLinkItem(tx, settled);
+  await purgeRemovedLinkItem(tx, settled, now);
   return settled;
 }
 
@@ -62,36 +62,18 @@ export async function linkWasRemoved(tx: Bun.SQL, linkId: string | null): Promis
 }
 
 /** Retire a settled or forgotten orphan without discarding another pending card operation. */
-export async function purgeRemovedLinkItem(tx: Bun.SQL, item: OutboxItem): Promise<void> {
-  if (!(await linkWasRemoved(tx, item.linkId))) return;
-  const current = await readOutboxItem(tx, item.id);
-  if (current && ["queued", "sending", "delivery_unknown", "stray"].includes(current.state)) {
-    if (current.kind === "card" || current.state !== "queued") return;
-  }
+export async function purgeRemovedLinkItem(
+  tx: Bun.SQL,
+  item: OutboxItem,
+  now: number,
+): Promise<void> {
   if (item.kind === "card") {
-    if (item.phase === "post" && item.state === "sent") return;
-    if (item.approvalId !== null) {
-      const [pending] = await tx`
-        SELECT id FROM outbox WHERE kind = 'card'
-          AND approval_id = ${item.approvalId} AND state IN ('queued', 'sending', 'delivery_unknown')
-          AND (phase = 'post' OR ${item.phase} = 'update')
-        LIMIT 1
-      `;
-      if (pending) return;
-      if (item.phase === "post") {
-        const [posted] = await tx`SELECT id FROM approvals
-          WHERE id = ${item.approvalId} AND card_ts IS NOT NULL`;
-        if (posted) return;
-      }
-      await tx`UPDATE outbox SET payload = '{"redacted":"unlink"}'
-        WHERE kind = 'card' AND approval_id = ${item.approvalId} AND state = 'stray'`;
-      await tx`DELETE FROM outbox WHERE kind = 'card' AND approval_id = ${item.approvalId}
-        AND state <> 'stray'`;
-      await tx`DELETE FROM approvals WHERE id = ${item.approvalId} AND link_id = ${item.linkId}`;
-    } else {
-      await tx`DELETE FROM outbox WHERE id = ${item.id}`;
-    }
-  } else if (["reply", "progress", "publication"].includes(item.kind)) {
+    await forgetUnlinkedApprovals(tx, now);
+    return;
+  }
+  if (!(await linkWasRemoved(tx, item.linkId))) return;
+  if (["sending", "delivery_unknown", "stray"].includes(item.state)) return;
+  if (["reply", "progress", "publication"].includes(item.kind)) {
     await tx`DELETE FROM outbox WHERE id = ${item.id}`;
   }
 }
@@ -133,7 +115,7 @@ export async function settleQueuedDelivery(
   if (item.kind === "reply" && item.phase === "final" && item.requestId !== null) {
     await settleRequestAnswer(tx, item.requestId, now);
   }
-  if (settled) await purgeRemovedLinkItem(tx, settled);
+  if (settled) await purgeRemovedLinkItem(tx, settled, now);
   return settled;
 }
 

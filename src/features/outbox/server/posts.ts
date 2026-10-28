@@ -224,7 +224,7 @@ export function createPostDelivery(
     if (item.kind === "card") {
       const approval = item.approvalId === null ? null : await readApproval(tx, item.approvalId);
       if (!approval) return finishQueued(tx, item, "dropped", "approval_removed", at);
-      if (method === "chat.postMessage" && (await linkWasRemoved(tx, item.linkId))) {
+      if (method === "chat.postMessage" && (await linkWasRemoved(tx, approval.linkId))) {
         return finishQueued(tx, item, "dropped", "link_removed", at);
       }
       if (item.channelId !== approval.card.channelId || item.threadTs !== null) {

@@ -86,11 +86,16 @@ transaction. The same applies to a locally refused withdrawal that still identif
 matching target. A changed target is never abandoned on the authority of an older operation.
 Cleanup settles a final's request only if its link, channel and thread
 still match, and a local cleanup refusal never settles a reply merely by its numeric request ID.
-An unlinked card's initial delivery remains until its stale update settles, then its approval
-and card rows are purged. An older update cannot retire the approval while another update
-is queued, sending or unknown, even when the older attempt becomes superseded.
-A card that never started is dropped without posting a new stale card.
-Stray card targets survive that purge, redacted, until withdrawal finishes.
+`forgetUnlinkedApprovals` in links owns card retirement and runs after delivery, stopped reads
+and withdrawals. The approval's link owns its card even when a new link proposal's original
+outbox row still has no link ID. Due reads and released channel holds use that current ownership.
+An unlinked card's approval and rows remain while an initial post is sending or unknown, or an
+update or withdrawal is queued, sending or unknown. An older update cannot retire them while
+another operation waits, even when the older attempt becomes superseded. A card that never
+started is dropped without posting a new stale card. Once nothing remains pending, the approval
+and rows go, except misplaced initial posts. Those stay redacted with their original hashes and
+one fresh withdrawal. A permanent failure of that final orphan withdrawal is audited and purged
+as above.
 
 `server/reactions.ts` adds and removes only message reactions through the shared client.
 New eyes require a read, active request and an active link. A confirmed answer's checkmark

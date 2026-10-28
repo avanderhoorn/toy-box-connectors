@@ -768,6 +768,17 @@ additionally checks the target's link, channel and thread.
 [Withdrawal implementation](../../src/features/outbox/server/retract.ts),
 [credential-free protocol cases](../../src/features/outbox/server/retract.test.ts).
 
+Unlink and delivery share card retirement through `forgetUnlinkedApprovals`.
+The approval stays while a card attempt or withdrawal is pending, including an
+older update's replacement. Its current link owns that lifecycle even when the
+original outbox row has a null link ID. Once everything settles, only misplaced
+initial posts survive, redacted with their original hashes and one final
+withdrawal. A permanent refusal of that now-orphaned withdrawal follows the
+audit-and-purge rule above, rather than retaining an unreachable operation.
+[Shared retirement](../../src/features/links/server/approvals.ts),
+[card cleanup](../../src/features/outbox/server/database.ts),
+[delivery and withdrawal cases](../../src/features/outbox/server/posts.test.ts).
+
 ### Daily and weekly releases
 
 Use a durable local occurrence key such as `(binding, schedule, intended_time)`.

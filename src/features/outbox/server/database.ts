@@ -151,19 +151,23 @@ export async function readReadyOutbox(sql: Bun.SQL, now: number): Promise<Outbox
 
 /** Exhausted linked work stops; stopped orphans remain due for local disposal. */
 export async function readDueReconciliations(sql: Bun.SQL, now: number): Promise<OutboxItem[]> {
-  const rows = await sql<(OutboxRow & { link_status: string | null })[]>`
-    SELECT outbox.*, links.status AS link_status FROM outbox
-    LEFT JOIN links ON links.id = outbox.link_id
+  const rows = await sql<
+    (OutboxRow & { owner_link_id: string | null; link_status: string | null })[]
+  >`
+    SELECT outbox.*, COALESCE(approvals.link_id, outbox.link_id) AS owner_link_id,
+      links.status AS link_status FROM outbox
+    LEFT JOIN approvals ON outbox.kind = 'card' AND approvals.id = outbox.approval_id
+    LEFT JOIN links ON links.id = COALESCE(approvals.link_id, outbox.link_id)
     WHERE outbox.state = 'delivery_unknown' AND outbox.kind IN ('reply', 'progress', 'publication', 'card')
       AND (outbox.reconcile_pass < 3
-      OR (outbox.link_id IS NOT NULL AND links.id IS NULL))
+      OR (owner_link_id IS NOT NULL AND links.id IS NULL))
       AND (outbox.next_attempt_at IS NULL OR outbox.next_attempt_at <= ${now})
     ORDER BY outbox.next_attempt_at, outbox.number
   `;
   return rows
     .filter(
       (row) =>
-        (row.link_id !== null && row.link_status === null) ||
+        (row.owner_link_id !== null && row.link_status === null) ||
         (channelFailureReason(row.error ?? "") !== null
           ? row.link_status === "active"
           : row.next_attempt_at !== null),

@@ -230,13 +230,19 @@ test.each(["sent", "failed", "queued"] as const)(
   },
 );
 
-test.each([false, true])(
-  "an unlinked card's stale update purges its approval and card rows after readProof=%s",
-  async (readProof) => {
+test.each([
+  { readProof: false, originalLinkId: "link" },
+  { readProof: true, originalLinkId: "link" },
+  { readProof: false, originalLinkId: null },
+  { readProof: true, originalLinkId: null },
+])(
+  "an unlinked card's stale update purges its approval and card rows: %j",
+  async ({ readProof, originalLinkId }) => {
     const { database, slack, bot, delivery, approval, latestUpdate, now, advance } =
       await postedCard(100);
     await database.write(async (tx) => {
       await staleApprovals(tx, [approval], "link_changed", now());
+      await tx`UPDATE outbox SET link_id = ${originalLinkId} WHERE approval_id = ${approval.id}`;
       await tx`DELETE FROM links`;
     });
     const update = await latestUpdate();
@@ -255,9 +261,9 @@ test.each([false, true])(
         item: { state: "sent" },
       });
     }
-    expect(await database.read((sql) => sql`SELECT id FROM outbox WHERE link_id = 'link'`)).toEqual(
-      [],
-    );
+    expect(
+      await database.read((sql) => sql`SELECT id FROM outbox WHERE approval_id = ${approval.id}`),
+    ).toEqual([]);
     expect(await database.read((sql) => readApproval(sql, approval.id))).toBeNull();
     const card = slack.getMessages("C-link").find((message) => message.ts === approval.card.ts);
     expect(card?.blocks).not.toContainEqual(expect.objectContaining({ type: "actions" }));
@@ -265,13 +271,18 @@ test.each([false, true])(
   },
 );
 
-test.each(["channel_refused", "last_pass", "stopped"] as const)(
-  "disposing of an orphan card's unknown stale update also retires its approval: %s",
-  async (ending) => {
+test.each(
+  ["channel_refused", "last_pass", "stopped", "held"].flatMap((ending) =>
+    ["link", null].map((originalLinkId) => ({ ending, originalLinkId })),
+  ),
+)(
+  "disposing of an orphan card's unknown stale update also retires its approval: %j",
+  async ({ ending, originalLinkId }) => {
     const { database, slack, bot, delivery, approval, latestUpdate, now, advance } =
       await postedCard(100);
     await database.write(async (tx) => {
       await staleApprovals(tx, [approval], "link_changed", now());
+      await tx`UPDATE outbox SET link_id = ${originalLinkId} WHERE approval_id = ${approval.id}`;
       await tx`DELETE FROM links`;
     });
     const update = await latestUpdate();
@@ -287,6 +298,11 @@ test.each(["channel_refused", "last_pass", "stopped"] as const)(
     slack.setMessage("C-link", withoutMetadata);
     if (ending === "channel_refused") {
       slack.failNext("conversations.history", { error: "not_in_channel" });
+    } else if (ending === "held") {
+      await database.write(
+        (tx) => tx`UPDATE outbox SET error = 'not_in_channel', next_attempt_at = NULL
+          WHERE id = ${update.id}`,
+      );
     } else {
       await database.write(
         (tx) => tx`UPDATE outbox SET reconcile_pass = ${ending === "last_pass" ? 2 : 3}
@@ -294,16 +310,54 @@ test.each(["channel_refused", "last_pass", "stopped"] as const)(
       );
     }
     advance(120_000);
+    expect(await database.read((sql) => readDueReconciliations(sql, now()))).toContainEqual(
+      expect.objectContaining({ id: update.id }),
+    );
     const reconciliation = createReconciliation(database, bot, { now });
     onTestFinished(() => reconciliation.close());
+    const callsBefore = slack.calls.length;
     expect(await reconciliation.reconcile(update.id)).toEqual({ kind: "changed" });
+    if (ending === "held" || ending === "stopped") {
+      expect(slack.calls).toHaveLength(callsBefore);
+    }
     expect(await database.read((sql) => readApproval(sql, approval.id))).toBeNull();
-    expect(await database.read((sql) => sql`SELECT id FROM outbox WHERE link_id = 'link'`)).toEqual(
-      [],
-    );
+    expect(
+      await database.read((sql) => sql`SELECT id FROM outbox WHERE approval_id = ${approval.id}`),
+    ).toEqual([]);
     expect(slack.calls.filter((call) => call.method === "chat.delete")).toEqual([]);
   },
 );
+
+test("a card whose original link is null releases a hold through its approval's current link", async () => {
+  const { database, slack, bot, delivery, approval, latestUpdate, now, advance } =
+    await postedCard(100);
+  await database.write((tx) => staleApprovals(tx, [approval], "link_changed", now()));
+  const update = await latestUpdate();
+  await database.write((tx) => tx`UPDATE outbox SET link_id = NULL WHERE id = ${update.id}`);
+  slack.failNext("chat.update", { lostResponse: true });
+  expect(await delivery.updateCard(update.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "delivery_unknown" },
+  });
+  const reconciliation = createReconciliation(database, bot, { now });
+  onTestFinished(() => reconciliation.close());
+  slack.failNext("conversations.history", { error: "not_in_channel" });
+  advance(10_000);
+  expect(await reconciliation.reconcile(update.id)).toMatchObject({
+    kind: "waiting",
+    reason: "not_in_channel",
+  });
+  await database.write(
+    (tx) => tx`UPDATE links SET status = 'active', status_reason = NULL WHERE id = 'link'`,
+  );
+  expect(await database.read((sql) => readDueReconciliations(sql, now()))).toContainEqual(
+    expect.objectContaining({ id: update.id }),
+  );
+  expect(await reconciliation.reconcile(update.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "sent", error: null },
+  });
+});
 
 test.each(["sent", "delivery_unknown", "queued", "failed"] as const)(
   "an older card update settling as %s cannot discard the unlink update",
@@ -379,34 +433,37 @@ test.each(["sent", "delivery_unknown", "queued", "failed"] as const)(
   },
 );
 
-test("an unlinked card that never started is discarded without posting a new stale card", async () => {
-  const { database, slack, delivery, now } = await setup();
-  const approval = await createStoredApproval(database, {
-    card: { channelId: "C-link", ts: null },
-  });
-  await database.write(async (tx) => {
-    await queueCard(
-      tx,
-      { approvalId: approval.id, linkId: "link", channelId: "C-link", phase: "post" },
-      now(),
+test.each(["link", null])(
+  "an unlinked card whose original link is %s never starts a stale post",
+  async (originalLinkId) => {
+    const { database, slack, delivery, now } = await setup();
+    const approval = await createStoredApproval(database, {
+      card: { channelId: "C-link", ts: null },
+    });
+    await database.write(async (tx) => {
+      await queueCard(
+        tx,
+        { approvalId: approval.id, linkId: originalLinkId, channelId: "C-link", phase: "post" },
+        now(),
+      );
+      await staleApprovals(tx, [approval], "link_changed", now());
+      await tx`DELETE FROM links`;
+    });
+    const post = (await database.read((sql) => readReadyOutbox(sql, now()))).find(
+      (row) => row.phase === "post",
     );
-    await staleApprovals(tx, [approval], "link_changed", now());
-    await tx`DELETE FROM links`;
-  });
-  const post = (await database.read((sql) => readReadyOutbox(sql, now()))).find(
-    (row) => row.phase === "post",
-  );
-  if (!post) throw new Error("The queued card disappeared.");
-  expect(await delivery.post(post.id)).toMatchObject({
-    kind: "settled",
-    item: { state: "dropped", error: "link_removed" },
-  });
-  expect(await database.read((sql) => sql`SELECT id FROM outbox WHERE link_id = 'link'`)).toEqual(
-    [],
-  );
-  expect(await database.read((sql) => readApproval(sql, approval.id))).toBeNull();
-  expect(slack.calls).toEqual([]);
-});
+    if (!post) throw new Error("The queued card disappeared.");
+    expect(await delivery.post(post.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "dropped", error: "link_removed" },
+    });
+    expect(
+      await database.read((sql) => sql`SELECT id FROM outbox WHERE approval_id = ${approval.id}`),
+    ).toEqual([]);
+    expect(await database.read((sql) => readApproval(sql, approval.id))).toBeNull();
+    expect(slack.calls).toEqual([]);
+  },
+);
 
 test("dropping a duplicate orphan card never discards the first post still in flight", async () => {
   const { database, bot, slack, delivery, now } = await setup();
@@ -484,10 +541,16 @@ test("an orphan's terminal stale update keeps its stray card target until withdr
     item: { state: "sent" },
   });
   const remaining = await database.read(
-    (sql) => sql`SELECT kind, state, payload FROM outbox
-    WHERE kind = 'card'`,
+    (sql) => sql`SELECT phase, state FROM outbox
+    WHERE kind = 'card' ORDER BY number`,
   );
-  expect(remaining).toEqual([{ kind: "card", state: "stray", payload: '{"redacted":"unlink"}' }]);
+  expect(remaining).toEqual([
+    { phase: "post", state: "stray" },
+    { phase: "update", state: "sent" },
+  ]);
+  expect(await database.read((sql) => readApproval(sql, approval.id))).toMatchObject({
+    state: "stale",
+  });
   expect(await createRetraction(database, bot, { now }).retract(cleanup.id)).toMatchObject({
     kind: "settled",
     item: { state: "sent" },
@@ -495,10 +558,105 @@ test("an orphan's terminal stale update keeps its stray card target until withdr
   expect(await database.read((sql) => sql`SELECT id FROM outbox WHERE link_id = 'link'`)).toEqual(
     [],
   );
+  expect(await database.read((sql) => readApproval(sql, approval.id))).toBeNull();
   expect(
     slack.getMessages("C-link").find((message) => message.ts === approval.card.ts),
   ).toBeUndefined();
 });
+
+test.each(
+  ["link", null].flatMap((linkId) =>
+    [false, true].flatMap((permanent) =>
+      [false, true].map((local) => ({ linkId, permanent, local })),
+    ),
+  ),
+)(
+  "an unlinked stray card gets one last withdrawal after its approval retires: %j",
+  async ({ linkId, permanent, local }) => {
+    const { database, slack, bot, delivery, approval, latestUpdate, now } = await postedCard();
+    const { operation: first, target: original } = await database.write(async (tx) => {
+      await staleApprovals(tx, [approval], "link_changed", now());
+      await tx`UPDATE outbox SET state = 'stray', error = 'wrong_thread', link_id = ${linkId}
+      WHERE approval_id = ${approval.id} AND phase = 'post'`;
+      const [post] = await tx<{ id: string }[]>`SELECT id FROM outbox
+      WHERE approval_id = ${approval.id} AND phase = 'post'`;
+      if (!post) throw new Error("The fixture needs its stray card.");
+      const target = await readOutboxItem(tx, post.id);
+      if (!target) throw new Error("The fixture needs its stray card.");
+      await tx`DELETE FROM links`;
+      return { operation: await queueRetraction(tx, target, now()), target };
+    });
+    const update = await latestUpdate();
+    await delivery.updateCard(update.id);
+    const retraction = createRetraction(database, bot, { now });
+    if (local) {
+      await database.write(
+        (
+          tx,
+        ) => tx`UPDATE outbox SET payload = ${JSON.stringify({ target: original.id, extra: true })}
+          WHERE id = ${first.id}`,
+      );
+    } else {
+      slack.failNext("chat.delete", { error: "cant_delete_message" });
+    }
+    expect(await retraction.retract(first.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "failed", error: local ? "invalid_retract_payload" : "cant_delete_message" },
+    });
+    expect(slack.calls.filter((call) => call.method === "chat.delete")).toHaveLength(local ? 0 : 1);
+    expect(await database.read((sql) => readApproval(sql, approval.id))).toBeNull();
+    expect(await database.read((sql) => readOutboxItem(sql, first.id))).toBeNull();
+    const [last] = (await database.read((sql) => readReadyOutbox(sql, now()))).filter(
+      (item) => item.kind === "retract",
+    );
+    if (!last) throw new Error("The retired approval needs one last withdrawal.");
+    expect(last.id).not.toBe(first.id);
+    expect(last.number).toBeGreaterThan(first.number);
+    if (typeof last.payload.target !== "string")
+      throw new Error("The withdrawal needs its target.");
+    const targetId = last.payload.target;
+    const target = await database.read((sql) => readOutboxItem(sql, targetId));
+    expect(target).toMatchObject({
+      kind: "card",
+      phase: "post",
+      state: "stray",
+      linkId,
+      payload: { redacted: "unlink" },
+      payloadHash: original.payloadHash,
+      slackTs: original.slackTs,
+    });
+    expect(
+      await database.read((sql) => sql`SELECT action FROM audit WHERE action = 'abandon_post'`),
+    ).toEqual([]);
+    if (permanent) slack.failNext("chat.delete", { error: "cant_delete_message" });
+    expect(await retraction.retract(last.id)).toMatchObject({
+      kind: "settled",
+      item: { state: permanent ? "failed" : "sent" },
+    });
+    expect(
+      await database.read((sql) => sql`SELECT id FROM outbox WHERE kind IN ('card', 'retract')`),
+    ).toEqual([]);
+    expect(
+      await database.read(
+        (sql) => sql`SELECT action, approval_id, subject FROM audit WHERE action = 'abandon_post'`,
+      ),
+    ).toEqual(
+      permanent
+        ? [
+            {
+              action: "abandon_post",
+              approval_id: approval.id,
+              subject: `C-link/${approval.card.ts}`,
+            },
+          ]
+        : [],
+    );
+    expect(slack.getMessages("C-link").some((message) => message.ts === approval.card.ts)).toBe(
+      permanent,
+    );
+    expect(slack.calls.filter((call) => call.method === "chat.delete")).toHaveLength(local ? 1 : 2);
+  },
+);
 
 describe("confirmed posts", () => {
   test("the SDK sees committed sending, the frozen body and matching metadata before posting once", async () => {

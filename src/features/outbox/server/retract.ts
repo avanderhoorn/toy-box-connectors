@@ -1,5 +1,5 @@
 import type { BridgeDatabase } from "@bridge/server/database";
-import { readApproval } from "@links/server/approvals";
+import { forgetUnlinkedApprovals, readApproval } from "@links/server/approvals";
 import { audit } from "@links/server/audit";
 import { suspendChannelLinks } from "@links/server/lifecycle";
 import { readRequest } from "@requests/server/database";
@@ -190,6 +190,7 @@ export function createRetraction(
           await tx`DELETE FROM outbox WHERE id = ${item.id}`;
         }
       }
+      await forgetUnlinkedApprovals(tx, at);
       return { kind: "settled", item: settled };
     });
   }
@@ -222,6 +223,7 @@ async function refuse(
     } else if (await linkWasRemoved(tx, item.linkId)) {
       await tx`DELETE FROM outbox WHERE id = ${item.id}`;
     }
+    await forgetUnlinkedApprovals(tx, now);
   }
   return settled ? { kind: "settled", item: settled } : { kind: "changed" };
 }

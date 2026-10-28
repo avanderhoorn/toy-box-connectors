@@ -714,7 +714,10 @@ test("a resumed channel hold can complete a miss and keep the original deadline"
 
 test("a refused linkless card stops automatic reads until manual resolution", async () => {
   const { database, slack, item, reconcile, now, advance, read } = await setup({ kind: "card" });
-  await database.write((tx) => tx`UPDATE outbox SET link_id = NULL WHERE id = ${item.id}`);
+  await database.write(async (tx) => {
+    await tx`UPDATE outbox SET link_id = NULL WHERE id = ${item.id}`;
+    await tx`UPDATE approvals SET link_id = NULL WHERE id = ${item.approvalId}`;
+  });
   slack.failNext("conversations.history", { error: "channel_not_found" });
   expect(await reconcile(item.id)).toEqual({
     kind: "waiting",
