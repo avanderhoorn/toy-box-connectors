@@ -213,6 +213,30 @@ test("unlink makes an already channel-held item due for local disposal without a
   expect(slack.calls).toHaveLength(calls);
 });
 
+test("a channel hold released before unlink still reads for the orphan's misplaced reply", async () => {
+  const { database, slack, item, posted, now, read, reconcile, advance } = await setup({
+    misplaced: true,
+  });
+  slack.failNext("conversations.replies", { error: "not_in_channel" });
+  await reconcile(item.id);
+  slack.deleteMessage("C-link", posted.ts);
+  await database.write((tx) => tx`UPDATE links SET status = 'active', status_reason = NULL`);
+  expect(await reconcile(item.id)).toMatchObject({ kind: "settled", item: { reconcilePass: 1 } });
+  slack.setMessage("C-link", posted);
+  await database.write(async (tx) => {
+    await tx`UPDATE outbox SET payload = '{"redacted":"unlink"}' WHERE id = ${item.id}`;
+    await tx`DELETE FROM requests`;
+    await tx`DELETE FROM links`;
+  });
+  advance(50_000);
+
+  expect(await reconcile(item.id)).toMatchObject({ kind: "settled", item: { state: "stray" } });
+  expect(await read()).toMatchObject({ state: "stray", error: "wrong_thread" });
+  expect(
+    (await database.read((sql) => readReadyOutbox(sql, now()))).map((row) => row.kind),
+  ).toEqual(["retract"]);
+});
+
 test("a final empty pass forgets an orphan instead of retaining an unresolvable item", async () => {
   const { database, slack, item, posted, read, reconcile, advance } = await setup();
   slack.deleteMessage("C-link", posted.ts);
