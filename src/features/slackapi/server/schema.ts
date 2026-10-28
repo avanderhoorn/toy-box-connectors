@@ -16,7 +16,8 @@ export async function initializeSlackApiSchema(db: Bun.SQL): Promise<void> {
       disconnected_at INTEGER
     );
 
-    -- key is the event ID, the envelope ID of a delivery that has none, or app_rate_limited:<minute>.
+    -- key is the event ID, the envelope ID of a delivery that has none, or
+    -- app_rate_limited:<app>:<team>:<minute>.
     -- A receipt commits with whatever its delivery changed, before the ack, and holds no content.
     CREATE TABLE receipts (
       key         TEXT PRIMARY KEY,

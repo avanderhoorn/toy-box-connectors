@@ -82,6 +82,12 @@ export async function canonicalUserId(sql: Bun.SQL, userId: string): Promise<str
   return alias?.user_id ?? userId;
 }
 
+/** The users Slack said are bots, which a message's user ID alone doesn't tell apart from people. */
+export async function readBotUserIds(sql: Bun.SQL): Promise<Set<string>> {
+  const bots = await sql<{ user_id: string }[]>`SELECT user_id FROM users WHERE is_bot = 1`;
+  return new Set(bots.map((bot) => bot.user_id));
+}
+
 /** The name Slack shows `userId` by, their real name before their display name, or null when unknown. */
 export async function readSlackPersonName(sql: Bun.SQL, userId: string): Promise<string | null> {
   const [row] = await sql<Pick<UserRow, "real_name" | "display_name">[]>`

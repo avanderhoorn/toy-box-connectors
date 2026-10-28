@@ -3,7 +3,13 @@ import { WebClient } from "@slack/web-api";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { slackPerson as person } from "@slackapi/model/testFixtures";
-import { canonicalUserId, fetchSlackPerson, readSlackPersonName, writeSlackPerson } from "./users";
+import {
+  canonicalUserId,
+  fetchSlackPerson,
+  readBotUserIds,
+  readSlackPersonName,
+  writeSlackPerson,
+} from "./users";
 
 /** What the fake users.info answers for each user ID it's asked about. */
 const answers = new Map<string, unknown>([
@@ -103,6 +109,19 @@ describe("keeping what Slack said about someone", () => {
       writeSlackPerson(transaction, person({ isBot: null }), 1_000),
     );
     expect(await readUsers(database)).toMatchObject([{ is_bot: null }]);
+  });
+
+  test("knows a bot or a workflow bot as a bot, and nobody Slack left unsure", async () => {
+    const database = await openTestDatabase();
+    await database.write(async (transaction) => {
+      await writeSlackPerson(transaction, person({ id: "U-helper", isBot: true }), 1_000);
+      const workflow = person({ id: "U-workflow", isBot: false, isWorkflowBot: true });
+      await writeSlackPerson(transaction, workflow, 1_000);
+      await writeSlackPerson(transaction, person({ id: "U-unsure", isBot: null }), 1_000);
+      await writeSlackPerson(transaction, person(), 1_000);
+    });
+
+    expect(await database.read(readBotUserIds)).toEqual(new Set(["U-helper", "U-workflow"]));
   });
 
   test("a message or click carrying their org-wide ID counts as them", async () => {

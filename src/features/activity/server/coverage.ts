@@ -7,7 +7,14 @@ import type { SlackTs } from "@slackapi/model/ts";
 // because the bridge may have missed part of it. Its bounds never change once it's recorded.
 
 /** Why the bridge may have missed part of a channel or thread. */
-export type GapReason = "disconnect" | "rate_limited" | "malformed" | "startup" | "thread";
+export type GapReason =
+  | "disconnect"
+  | "rate_limited"
+  | "malformed"
+  | "startup"
+  | "thread"
+  /** Slack gave the channel a new ID, and events under either ID may have gone unmatched. */
+  | "moved";
 
 export type Gap = {
   linkId: string;
@@ -17,6 +24,17 @@ export type Gap = {
   window: GapWindow;
   reason: GapReason;
 };
+
+/** A link's channel, where its channel gaps are recorded. */
+export type WatchedChannel = { linkId: string; channelId: string; linkedAtTs: SlackTs };
+
+/** The channel each link watches, whatever the link's status. */
+export function readWatchedChannels(sql: Bun.SQL): Promise<WatchedChannel[]> {
+  return sql<WatchedChannel[]>`
+    SELECT id AS linkId, slack_channel_id AS channelId, linked_at_ts AS linkedAtTs
+    FROM links ORDER BY id
+  `;
+}
 
 /** Records a gap for repair to read. */
 export async function recordGap(transaction: Bun.SQL, gap: Gap, now: number): Promise<void> {

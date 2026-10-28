@@ -59,7 +59,7 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       cursor      TEXT,
       state       TEXT NOT NULL CHECK (state IN ('open', 'repairing', 'repaired', 'partial')),
       reason      TEXT NOT NULL
-        CHECK (reason IN ('disconnect', 'rate_limited', 'malformed', 'startup', 'thread')),
+        CHECK (reason IN ('disconnect', 'rate_limited', 'malformed', 'startup', 'thread', 'moved')),
       opened_at   INTEGER NOT NULL,
       repaired_at INTEGER,
       CHECK ((thread_ts IS NOT NULL) = (scope = 'thread'))
