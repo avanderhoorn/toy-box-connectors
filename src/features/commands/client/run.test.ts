@@ -311,7 +311,7 @@ describe("explaining a call without an answer", () => {
     async (_, answer) => {
       const bridge = startBridge(answer);
 
-      expect(await runNote(bridge.dataFolder, ["--text", "Ship it"], { timeout: 50 })).toEqual({
+      expect(await runNote(bridge.dataFolder, ["--text", "Ship it"], { timeout: 1_000 })).toEqual({
         exitCode: 1,
         stdout: "",
         stderr: `The bridge didn't answer \`note\` within 1 second, so it may or may not have run. ${check}\n`,
