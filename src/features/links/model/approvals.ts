@@ -157,6 +157,9 @@ export const MAX_PENDING = 3;
 /** The most proposals a Toy Box channel may make in an hour. */
 export const MAX_CREATED_PER_HOUR = 10;
 
+/** The most people one proposal may allow, so the owner reads every name on one card. */
+export const MAX_ALLOWED_PER_PROPOSAL = 20;
+
 /** Widening is refused unless the owner posted in the Toy Box channel this recently. */
 export const OWNER_PRESENCE_MS = 30 * 60_000;
 
@@ -195,6 +198,11 @@ export function canMove(from: ApprovalState, to: ApprovalState): boolean {
 /** The field of `userId`'s allowlist entry. */
 export function allowlistField(userId: string): AllowlistField {
   return `allowlist.${userId}`;
+}
+
+/** The person whose allowlist entry `field` is, or null for any other field. */
+export function allowlistUser(field: PatchField): string | null {
+  return field.startsWith("allowlist.") ? field.slice("allowlist.".length) : null;
 }
 
 /** Whether `approval`'s patch changes `field`. */
@@ -514,8 +522,12 @@ export type ProposalDraft = {
 };
 
 export type ProposalRefusal =
+  /** It allows more people than one card shows. */
+  | "too_many_people"
   /** Another open approval changes one of the same fields. */
-  "overlap" | "too_many_pending" | "too_many_created";
+  | "overlap"
+  | "too_many_pending"
+  | "too_many_created";
 
 export type ProposalCheck =
   | { kind: "new" }
@@ -532,6 +544,8 @@ export function checkProposal(
   open: readonly Approval[],
   createdInLastHour: number,
 ): ProposalCheck {
+  const people = draft.patch.filter((entry) => allowlistUser(entry.field) !== null).length;
+  if (people > MAX_ALLOWED_PER_PROPOSAL) return { kind: "refused", reason: "too_many_people" };
   const same = open.find(
     (approval) =>
       approval.action === draft.action &&

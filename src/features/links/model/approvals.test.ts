@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { channelFacts, slackPerson } from "@slackapi/model/testFixtures";
 import {
   allowlistField,
+  allowlistUser,
   APPROVAL_LIFETIME_MS,
   applyApproval,
   ApprovalStateError,
@@ -15,6 +16,7 @@ import {
   expireApproval,
   invalid,
   isOpen,
+  MAX_ALLOWED_PER_PROPOSAL,
   MAX_CREATED_PER_HOUR,
   MAX_PENDING,
   narrows,
@@ -604,6 +606,21 @@ describe("proposing a change", () => {
     });
   });
 
+  test("a proposal allowing more people than one card shows is refused, before anything else", () => {
+    const allowing = (count: number) => ({
+      ...draft,
+      action: "allow" as const,
+      patch: Array.from({ length: count }, (_, index) => ({
+        field: allowlistField(`U-${index}`),
+        after: { label: null },
+      })),
+    });
+    expect(checkProposal(allowing(MAX_ALLOWED_PER_PROPOSAL), [], 0)).toEqual({ kind: "new" });
+    expect(checkProposal(allowing(MAX_ALLOWED_PER_PROPOSAL + 1), [], MAX_CREATED_PER_HOUR)).toEqual(
+      { kind: "refused", reason: "too_many_people" },
+    );
+  });
+
   test("widening waits for an owner who posted in Toy Box within half an hour", () => {
     expect(ownerPresent(0, OWNER_PRESENCE_MS)).toBe(true);
     expect(ownerPresent(0, OWNER_PRESENCE_MS + 1)).toBe(false);
@@ -613,4 +630,7 @@ describe("proposing a change", () => {
 
 test("an allowlist entry is a field of its own for each person", () => {
   expect(allowlistField("U-carol")).toBe("allowlist.U-carol");
+  expect(allowlistUser(allowlistField("U-carol"))).toBe("U-carol");
+  expect(allowlistUser("owner_user_id")).toBeNull();
+  expect(allowlistUser("request_mode")).toBeNull();
 });

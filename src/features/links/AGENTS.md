@@ -10,5 +10,7 @@ A link binds one Toy Box channel to one Slack channel. Its allowlist names Slack
 
 - Every change writes an audit entry in the same transaction, with IDs only and never message text.
 - A change that widens access needs the owner's confirmation. `pause` and `deny` only narrow access and skip it.
+- The owner confirms only by clicking Approve on the bridge's own card. `model/cards.ts` renders it from the approval each time the outbox posts or updates it. It mentions only the owner, shows channels as Slack's own references and people by stored name with their ID, and carries buttons only while pending. Nothing a person or the lead chose can mention, link or format on it.
+- A proposal allows at most 20 people, so its card shows every name it asks the owner to approve.
 - Members can read settings but never change them, and the operator can never reply or publish.
 - Unlinking purges everything the link owned.
