@@ -99,13 +99,17 @@ reads. The skill's instruction to seek the owner's approval for consequential
 work is a prompt rule, not an execution sandbox.
 
 Channels shared within the pinned Enterprise org are eligible only with a
-known, approved workspace audience. A fresh channel check at startup and
-before every post compares against what the owner approved, not the last
+known, approved workspace audience. Fresh channel checks at link, resume and
+before every post compare against what the owner approved, not the last
 refresh. Link and resume refuse archived channels. External sharing, a widened
 audience, private-to-public conversion,
 archive, a new channel ID, bot removal or an applicable policy refusal pauses
 the link. A failed fresh read does not authorize sending. These checks cannot
 make a send atomic with Slack's next channel change.
+
+There is no audience refresh at startup or before catch-up. A change missed
+while offline can let text from a changed channel enter the ledger and model
+context before a later send or resume discovers it.
 
 ## Host and output boundary
 

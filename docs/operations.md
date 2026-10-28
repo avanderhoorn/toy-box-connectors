@@ -32,6 +32,8 @@ so do not run it as the lead merely to inspect status.
 A paused link holds queued posts and opens no new requests. Existing requests
 still receive edits and deletes. Questions first asked while paused do not
 return automatically after resume.
+Pause, deny and unlink cannot recall a post already on its way to Slack,
+and unlink deletes its local post record.
 
 ```sh
 toy-box-slack pause --channel TOYBOX_ID
