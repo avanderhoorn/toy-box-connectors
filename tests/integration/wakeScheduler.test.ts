@@ -249,6 +249,22 @@ test("an idle lead is reminded once per touch, and never about a held request", 
   expect(toyBox.runs).toHaveLength(1);
 });
 
+test("a request nobody finished expires instead of earning a reminder", async () => {
+  const { toyBox, database, now, startWaking } = await linkFakeChannel();
+  const seenAt = now() - TIMINGS.remindSeen;
+  await storeRequest(database, seenAt, { state: "seen", seen_at: seenAt, expires_at: now() });
+
+  await startWaking();
+
+  await waitFor(async () =>
+    expect(await database.read((sql) => sql`SELECT state FROM requests`)).toEqual([
+      { state: "expired" },
+    ]),
+  );
+  await Bun.sleep(TIMINGS.debounceLimit);
+  expect(toyBox.runs).toEqual([]);
+});
+
 test("a lead on another provider is never woken", async () => {
   const { toyBox, database, now, startWaking } = await linkFakeChannel({ provider: "claude" });
   const { scheduler } = await startWaking();

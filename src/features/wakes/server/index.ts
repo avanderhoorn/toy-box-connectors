@@ -1,12 +1,14 @@
 // The wake scheduler.
 //
-// A pass reads everything wake decisions need, plans, starts each run the plan names, and records
-// each run's outcome with what it changes. A pass follows any change to what a decision reads, the
-// end of the earliest wait, and at least every minute, so a new publication period or a Mac that
-// slept is noticed. Passes run one at a time, and a channel whose run is in flight or just landed
-// isn't woken again until its turn can show in presence.
+// A pass expires the requests that waited their lifetime, so nobody is reminded of them, then reads
+// everything wake decisions need, plans, starts each run the plan names, and records each run's
+// outcome with what it changes. A pass follows any change to what a decision reads, the end of the
+// earliest wait, and at least every minute, so a new publication period or a Mac that slept is
+// noticed. Passes run one at a time, and a channel whose run is in flight or just landed isn't
+// woken again until its turn can show in presence.
 
 import type { BridgeDatabase } from "@bridge/server/database";
+import { expireRequests } from "@requests/server/lifecycle";
 import type { RoutineRunOutcome } from "@toybox/model";
 import type { ToyBoxClient } from "@toybox/server";
 import { defaultWakeTimings, type WakeTimings } from "@wakes/model";
@@ -73,6 +75,7 @@ export function startWakeScheduler(
   async function decide() {
     clearTimeout(timer);
     const at = now();
+    await database.write((transaction) => expireRequests(transaction, at));
     const pass = await database.read((sql) => readWakePass(sql, at));
     if (stopped) return;
     for (const [channelId, until] of busyUntil) if (until <= at) busyUntil.delete(channelId);

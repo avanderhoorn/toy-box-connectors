@@ -77,6 +77,15 @@ export async function readActiveRequests(sql: Bun.SQL, linkId: string): Promise<
   return rows.map(requestFromRow);
 }
 
+/** Every link's active requests whose lifetime ended by `now`, oldest first. */
+export async function readOverdueRequests(sql: Bun.SQL, now: number): Promise<StoredRequest[]> {
+  const rows = await sql<RequestRow[]>`
+    SELECT * FROM requests
+    WHERE state IN ${sql(activeStates)} AND expires_at <= ${now} ORDER BY id
+  `;
+  return rows.map(requestFromRow);
+}
+
 /** A link's requests held since before `heldBefore`. */
 export async function readHeldRequests(
   sql: Bun.SQL,

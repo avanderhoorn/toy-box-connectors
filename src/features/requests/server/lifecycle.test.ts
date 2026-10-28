@@ -7,7 +7,7 @@ import { createStoredOutboxItem } from "@outbox/server/testFixtures";
 import type { Request } from "@requests/model/lifecycle";
 import { askMessage, editMessage } from "@slackapi/model/testFixtures";
 import { assignRequestMessage, hashInput, readRequest } from "./database";
-import { cancelLinkRequests, releaseHolds, reviseStoredRequest } from "./lifecycle";
+import { cancelLinkRequests, expireRequests, releaseHolds, reviseStoredRequest } from "./lifecycle";
 import { createStoredRequest } from "./testFixtures";
 
 const ask = askMessage();
@@ -116,4 +116,49 @@ test("releasing holds frees the link's requests held before the owner spoke", as
     { id: 4, held_at: 1_000, hold_reason: "asked the owner" },
   ]);
   expect(await release()).toBe(false);
+});
+
+test("expiring requests closes those that waited their lifetime, unless they're being answered", async () => {
+  const database = await openTestDatabase();
+  for (const [index, changes] of everyState.entries()) {
+    const ts = `${1_700_000_100 + index}.000100`;
+    await createStoredRequest(database, {
+      rootTs: ts,
+      sourceTs: ts,
+      expiresAt: 60_000,
+      ...changes,
+    });
+  }
+  await createStoredRequest(database, { linkId: "other", expiresAt: 60_001 });
+  for (let id = 1; id <= everyState.length + 1; id++) {
+    await createStoredOutboxItem(database, id, { request_id: id });
+  }
+  const expire = () => database.write((transaction) => expireRequests(transaction, 60_000));
+
+  expect(await expire()).toBe(true);
+  expect(await readClosings(database)).toEqual([
+    { id: 1, state: "expired", closed_reason: null },
+    { id: 2, state: "expired", closed_reason: null },
+    { id: 3, state: "expired", closed_reason: null },
+    { id: 4, state: "answering", closed_reason: null },
+    { id: 5, state: "answered", closed_reason: null },
+    { id: 6, state: "dismissed", closed_reason: "duplicate" },
+    { id: 7, state: "cancelled", closed_reason: "source_deleted" },
+    { id: 8, state: "expired", closed_reason: null },
+    { id: 9, state: "open", closed_reason: null },
+  ]);
+  expect(
+    await database.read((sql) => sql`SELECT number, state FROM outbox ORDER BY number`),
+  ).toEqual([
+    { number: 1, state: "cancelled" },
+    { number: 2, state: "cancelled" },
+    { number: 3, state: "cancelled" },
+    { number: 4, state: "queued" },
+    { number: 5, state: "queued" },
+    { number: 6, state: "queued" },
+    { number: 7, state: "queued" },
+    { number: 8, state: "queued" },
+    { number: 9, state: "queued" },
+  ]);
+  expect(await expire()).toBe(false);
 });

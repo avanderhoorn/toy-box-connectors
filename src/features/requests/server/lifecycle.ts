@@ -1,6 +1,8 @@
 import { cancelQueuedRequestItems } from "@outbox/server/database";
 import {
   cancelRequest,
+  expireRequest,
+  isDueToExpire,
   releaseHold,
   reviseRequest,
   type CancelReason,
@@ -9,6 +11,7 @@ import {
   readActiveRequests,
   readHeldRequests,
   readInputHash,
+  readOverdueRequests,
   saveRequest,
   type StoredRequest,
 } from "./database";
@@ -68,4 +71,19 @@ export async function releaseHolds(
   const held = await readHeldRequests(transaction, linkId, ownerSpokeAt);
   for (const request of held) await saveRequest(transaction, releaseHold(request));
   return held.length > 0;
+}
+
+/**
+ * Expires every request that waited its lifetime without an answer, along with its queued
+ * progress notes. Returns whether there were any.
+ */
+export async function expireRequests(transaction: Bun.SQL, now: number): Promise<boolean> {
+  const due = (await readOverdueRequests(transaction, now)).filter((request) =>
+    isDueToExpire(request, now),
+  );
+  for (const request of due) {
+    await saveRequest(transaction, expireRequest(request, now));
+    await cancelQueuedRequestItems(transaction, request.id, now);
+  }
+  return due.length > 0;
 }
