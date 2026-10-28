@@ -77,6 +77,7 @@ async function setup({ misplaced = true, publication = false } = {}) {
     slack,
     bot,
     original,
+    ts: original.slackTs,
     operation,
     request,
     now,
@@ -580,6 +581,114 @@ test.each(["queued", "sending", "delivery_unknown", "sent"])(
     expect(await database.write((tx) => queueRetraction(tx, original, now()))).toEqual(operation);
   },
 );
+
+test("unlink keeps only a redacted target until confirmed withdrawal purges both orphaned rows", async () => {
+  const { database, slack, original, operation, retract, readOriginal, read } = await setup();
+  await database.write(async (tx) => {
+    await tx`UPDATE outbox SET payload = '{"redacted":true}' WHERE id = ${original.id}`;
+    await tx`DELETE FROM requests`;
+    await tx`DELETE FROM links`;
+  });
+  expect(await retract(operation.id)).toMatchObject({ kind: "settled", item: { state: "sent" } });
+  expect(await read()).toBeNull();
+  expect(await readOriginal()).toBeNull();
+  expect(slack.calls.map((call) => call.method)).toEqual(["chat.postMessage", "chat.delete"]);
+});
+
+test("a failed orphan withdrawal retains a redacted stray and its exact refusal for the operator", async () => {
+  const { database, slack, original, operation, retract, readOriginal, read } = await setup();
+  await database.write(async (tx) => {
+    await tx`UPDATE outbox SET payload = '{"redacted":true}' WHERE id = ${original.id}`;
+    await tx`DELETE FROM requests`;
+    await tx`DELETE FROM links`;
+  });
+  slack.failNext("chat.delete", { error: "cant_delete_message" });
+  expect(await retract(operation.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "failed", error: "cant_delete_message" },
+  });
+  expect(await read()).toMatchObject({ state: "failed" });
+  expect(await readOriginal()).toMatchObject({
+    state: "stray",
+    payload: { redacted: true },
+    payloadHash: original.payloadHash,
+    slackTs: original.slackTs,
+    error: "cant_delete_message",
+  });
+});
+
+test("withdrawal never settles a different request that inherited the numeric ID", async () => {
+  const { database, original, operation, retract, readQuestion } = await setup();
+  const [old] = await database.read(
+    (sql) => sql<Record<string, unknown>[]>`SELECT * FROM requests`,
+  );
+  if (!old) throw new Error("The old request disappeared.");
+  await database.write(async (tx) => {
+    await tx`UPDATE outbox SET payload = '{"redacted":true}' WHERE id = ${original.id}`;
+    await tx`DELETE FROM requests`;
+    await tx`DELETE FROM links`;
+  });
+  await createStoredLink(database, "new");
+  await database.write(
+    (tx) =>
+      tx`INSERT INTO requests ${tx({
+        ...old,
+        link_id: "new",
+        channel_id: "C-new",
+        root_ts: "1700000123.000100",
+      })}`,
+  );
+  expect(await retract(operation.id)).toMatchObject({ kind: "settled", item: { state: "sent" } });
+  expect(await readQuestion()).toMatchObject({
+    linkId: "new",
+    state: "answering",
+    attention: null,
+  });
+  const next = await database.write((tx) =>
+    queueItem(
+      tx,
+      {
+        kind: "reply",
+        phase: "final",
+        linkId: "new",
+        requestId: original.requestId,
+        requestRev: 1,
+        channelId: "C-new",
+        threadTs: "1700000123.000100",
+        payload: {},
+      },
+      1_700_000_300_000,
+    ),
+  );
+  expect(next.id).not.toBe(original.id);
+});
+
+test("a cleanup target never settles a same-link request for another thread", async () => {
+  const { database, operation, retract, readQuestion } = await setup();
+  await database.write((tx) => tx`UPDATE requests SET root_ts = '1700000123.000100'`);
+  expect(await retract(operation.id)).toMatchObject({ kind: "settled", item: { state: "sent" } });
+  expect(await readQuestion()).toMatchObject({
+    rootTs: "1700000123.000100",
+    state: "answering",
+    attention: null,
+  });
+});
+
+test("a local cleanup refusal cannot apply an old failed final to another request", async () => {
+  const { database, slack, ts, original, operation, retract, readQuestion } = await setup();
+  slack.deleteMessage("C-link", ts);
+  await database.write(async (tx) => {
+    await tx`UPDATE requests SET root_ts = '1700000123.000100'`;
+    await tx`UPDATE outbox SET state = 'failed', error = 'misplaced_reply_withdrawn'
+      WHERE id = ${original.id}`;
+  });
+  expect(await retract(operation.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "dropped", error: "already_withdrawn" },
+  });
+  expect(await readQuestion()).toMatchObject({ state: "answering", attention: null });
+  expect(slack.calls).toHaveLength(1);
+});
 
 test("an existing cleanup with another scope never poisons the target's legitimate operation", async () => {
   const { database, original, operation, now } = await setup();

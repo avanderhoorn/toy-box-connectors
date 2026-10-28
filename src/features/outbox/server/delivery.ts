@@ -37,7 +37,7 @@ export async function settleDelivery(
   return settled;
 }
 
-/** A local refusal settles a queued item and its request without inventing a network attempt. */
+/** A local refusal returns a final reply's request without inventing a network attempt. */
 export async function settleQueuedDelivery(
   tx: Bun.SQL,
   item: OutboxItem,
@@ -52,7 +52,9 @@ export async function settleQueuedDelivery(
   `;
   if (changed.length === 0) return null;
   const settled = await readOutboxItem(tx, item.id);
-  if (item.requestId !== null) await settleRequestAnswer(tx, item.requestId, now);
+  if (item.kind === "reply" && item.phase === "final" && item.requestId !== null) {
+    await settleRequestAnswer(tx, item.requestId, now);
+  }
   return settled;
 }
 

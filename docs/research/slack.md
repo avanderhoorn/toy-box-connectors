@@ -733,6 +733,10 @@ a suspended link, but requires an active installation. A valid delivery becomes
 `retracted` while retaining its proof and publication key. A misplaced post
 instead becomes `failed` once withdrawn, returning the question as `reply_failed`.
 Failed withdrawal retains `stray` and Slack's exact error.
+The handler can finish from a redacted target after its link is purged, without
+the request or link rows. Confirmed absence then purges both orphaned outbox
+rows, while failure keeps the redacted stray for the operator. Request
+settlement additionally checks the target's link, channel and thread.
 [Withdrawal implementation](../../src/features/outbox/server/retract.ts),
 [credential-free protocol cases](../../src/features/outbox/server/retract.test.ts).
 

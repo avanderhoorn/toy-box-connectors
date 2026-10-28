@@ -1,5 +1,6 @@
 import type { BridgeDatabase } from "@bridge/server/database";
 import { suspendChannelLinks } from "@links/server/lifecycle";
+import { readRequest } from "@requests/server/database";
 import { slackTsSchema } from "@slackapi/model/ts";
 import type { BotClient } from "@slackapi/server/botClient";
 import { readInstallation } from "@slackapi/server/installation";
@@ -155,8 +156,26 @@ export function createRetraction(
           WHERE id = ${target.id} AND state IN ('sent', 'stray') AND slack_ts = ${target.slackTs}
           RETURNING request_id
         `;
-        if (changed.length > 0 && target.requestId !== null) {
-          await settleRequestAnswer(tx, target.requestId, at);
+        if (
+          changed.length > 0 &&
+          target.kind === "reply" &&
+          target.phase === "final" &&
+          target.requestId !== null
+        ) {
+          const request = await readRequest(tx, target.requestId);
+          if (
+            request?.linkId === target.linkId &&
+            request.channelId === target.channelId &&
+            request.rootTs === target.threadTs
+          ) {
+            await settleRequestAnswer(tx, target.requestId, at);
+          }
+        }
+        if (target.linkId !== null) {
+          const [link] = await tx`SELECT id FROM links WHERE id = ${target.linkId}`;
+          if (!link) {
+            await tx`DELETE FROM outbox WHERE id IN (${item.id}, ${target.id})`;
+          }
         }
       } else if (settled.state === "failed") {
         await tx`

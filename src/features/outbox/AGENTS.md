@@ -68,6 +68,10 @@ A valid delivery becomes retracted without losing its proof or publication key. 
 misplaced post becomes failed, never retracted, and returns its request with reply_failed.
 The operation, target and request commit together. Failed withdrawal leaves the target stray
 with Slack's exact error, and an explicit new retraction can try again.
+A retained unlink target needs no message body. Once confirmed absent, a target whose non-null
+link ID no longer exists is purged with its operation. Failed orphan cleanup keeps its redacted
+stray for the operator. Cleanup settles a final's request only if its link, channel and thread
+still match, and a local cleanup refusal never settles a reply merely by its numeric request ID.
 
 `model/posting.ts` checks the current installation, link, destination, requester and request
 revision. Only explicit follow-ups reach answered, dismissed or expired requests, and none
