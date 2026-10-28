@@ -11,7 +11,6 @@ import {
   STARTUP_TIMEOUT,
   STOP_TIMEOUT,
   type IsolatedToyBox,
-  type IsolatedToyBoxOptions,
 } from "./isolatedToyBox";
 import { TURN_TIMEOUT } from "./testChannel";
 
@@ -23,20 +22,15 @@ export type EndToEndSuite = {
 };
 
 /** Describes a suite that runs only with TOY_BOX_SLACK_E2E=1, around one isolated Toy Box. */
-export function describeEndToEnd(
-  name: string,
-  options: IsolatedToyBoxOptions,
-  define: (suite: EndToEndSuite) => void,
-) {
+export function describeEndToEnd(name: string, define: (suite: EndToEndSuite) => void) {
   describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")(name, () => {
     let started: IsolatedToyBox | undefined;
     beforeAll(
       async () => {
-        started = await startIsolatedToyBox(options);
+        started = await startIsolatedToyBox();
       },
       STARTUP_TIMEOUT + STOP_TIMEOUT + 5_000,
     );
-    afterAll(() => started?.stop(), STOP_TIMEOUT + 5_000);
 
     define({
       get toyBox() {
@@ -57,5 +51,8 @@ export function describeEndToEnd(
         );
       },
     });
+    // Bun runs afterAll hooks in the order they're added, so what the suite started against Toy Box
+    // stops before it does.
+    afterAll(() => started?.stop(), STOP_TIMEOUT + 5_000);
   });
 }

@@ -19,7 +19,7 @@ import {
 } from "./toyBoxApi";
 
 const TEST_CHANNEL_RULES =
-  "This channel runs an end-to-end test. Start with one short kickoff message, then do only what the owner or a routine asks. Never add members or create tasks, and pass wakeAfterMinutes only when asked to. Use a skill only when a message or routine names it.";
+  "This channel runs an end-to-end test. Start with one short kickoff message, then do only what the owner or a routine asks. Never add members or create tasks, and pass wakeAfterMinutes only when asked to.";
 
 const TURN_START_TIMEOUT = 90_000;
 const TURN_FINISH_TIMEOUT = 240_000;
@@ -191,7 +191,8 @@ function followChannel(toyBox: IsolatedToyBox, channelId: string) {
 
     /**
      * Resolves once the lead has posted and stopped working. A lead that never starts, or stops
-     * without posting, fails at once, which is how a model or token Copilot refuses shows up.
+     * without posting, fails at once, which is how a model or token Copilot refuses shows up. So
+     * does one that schedules its own wake, which could start a turn in the middle of a scenario.
      */
     async kickedOff() {
       const created = Date.now();
@@ -199,7 +200,13 @@ function followChannel(toyBox: IsolatedToyBox, channelId: string) {
       await waitUntil(
         "the lead's kickoff turn to post and settle",
         () => {
-          if (settled() && leadMessages.length) return true;
+          if (settled() && leadMessages.length) {
+            const presence = presences.at(-1);
+            if (presence?.state === "waiting" && presence.wakeAt) {
+              throw new Error(`The lead scheduled a wake for ${presence.wakeAt} at kickoff.`);
+            }
+            return true;
+          }
           if (!presences.some(isWorking)) {
             if (Date.now() - created < TURN_START_TIMEOUT) return undefined;
             throw new Error(

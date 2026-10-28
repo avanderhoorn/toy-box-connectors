@@ -3,8 +3,9 @@
 // It runs the built `toy-box` binary on 127.0.0.1:3199 under a temp HOME, so its database, its
 // sessions, the skills its lead finds and its Copilot CLI's state never touch the owner's. Agent
 // shells set variables that point Toy Box at the owner's server and session, so Toy Box runs in a
-// scrubbed environment, which is also the only place its Copilot token goes. The port is fixed, so
-// one runs at a time.
+// scrubbed environment, which is also the only place its Copilot token goes. Before it starts, the
+// CLI under test goes on its PATH and installs its skill, as an owner's would. The port is fixed,
+// so one runs at a time.
 
 import {
   chmodSync,
@@ -35,24 +36,18 @@ export const STOP_TIMEOUT = 15_000;
 
 const ORIGIN = new URL("http://127.0.0.1:3199");
 const REPOSITORY = join(import.meta.dir, "..", "..");
+/** The CLI under test, which the lead runs from PATH. */
+export const CLI = join(REPOSITORY, "cli", "index.ts");
 
 // Agent shells set these, and each points Toy Box, its Copilot CLI or the lead's shell at the
 // owner's server, session, credentials or state.
 const OWNER_VARIABLES =
   /^(BUN_BE_BUN|NITRO_\w+|COPILOT_\w+|GH_\w+|GITHUB_\w+|SSH_\w+|SLACK_\w+|TOY_BOX_\w+|XDG_\w+)$/;
 
-/** Commands to put on the lead's PATH, each with the command line it runs. An empty one only records. */
-export type Commands = Record<string, readonly string[]>;
-
-export type IsolatedToyBoxOptions = {
-  /** Skills installed as `~/.copilot/skills/<name>/SKILL.md` before any channel exists. */
-  skills?: Record<string, string>;
-  /** Commands besides the CLI under test, which is always on PATH. */
-  commands?: Commands;
-};
-
 export type IsolatedToyBox = {
   origin: URL;
+  /** The run's folder. A failure ends with the tail of each `.log` file in it. */
+  folder: string;
   /** The temp HOME Toy Box, its Copilot CLI and the lead's shell share. */
   home: string;
   /** Toy Box's working folder, which test channels use as their directory. */
@@ -76,9 +71,7 @@ class EndToEndFailure extends Error {
 }
 
 /** Starts Toy Box under a temp HOME, and resolves once it offers the lead's model. */
-export async function startIsolatedToyBox(
-  options: IsolatedToyBoxOptions = {},
-): Promise<IsolatedToyBox> {
+export async function startIsolatedToyBox(): Promise<IsolatedToyBox> {
   await refuseTakenPort();
   const binary = toyBoxBinary();
   const token = copilotToken();
@@ -87,8 +80,8 @@ export async function startIsolatedToyBox(
   for (const folder of [home, bin, work]) mkdirSync(folder);
   const log = join(root, "toy-box.log");
   const commandLog = join(root, "commands.jsonl");
-  installSkills(home, options.skills ?? {});
-  installCommands(bin, commandLog, options.commands ?? {});
+  installCommands(bin, commandLog);
+  installSkill(home);
 
   const output = openSync(log, "a");
   const server = Bun.spawn(
@@ -108,6 +101,7 @@ export async function startIsolatedToyBox(
   let stopped: Promise<void> | undefined;
   const toyBox: IsolatedToyBox = {
     origin: ORIGIN,
+    folder: root,
     home,
     work,
     signal: lifetime.signal,
@@ -117,13 +111,16 @@ export async function startIsolatedToyBox(
       if (error instanceof EndToEndFailure) return error;
       const message = error instanceof Error ? error.message : String(error);
       const transcripts = sessionTranscripts(home).map((path) => `Transcript: ${path}`);
+      const logs = readdirSync(root)
+        .filter((name) => name.endsWith(".log"))
+        .sort()
+        .map((name) => join(root, name));
       return new EndToEndFailure(
         [
           message,
           `Kept the run's folder at ${root}.`,
           ...transcripts,
-          "Toy Box's log ends with:",
-          logTail(log, token),
+          ...logs.flatMap((path) => [`${path} ends with:`, logTail(path, token)]),
         ].join("\n"),
         { cause: error },
       );
@@ -186,21 +183,28 @@ export function isolatedEnvironment(
   };
 }
 
-/**
- * Writes the CLI under test and `commands` into `bin`. Each runs its command line, if it has one,
- * then records the run in `log`, and exits as the command line did.
- */
-export function installCommands(bin: string, log: string, commands: Commands) {
-  const cli = [process.execPath, join(REPOSITORY, "cli", "index.ts")];
-  for (const [name, target] of Object.entries({ "toy-box-slack": cli, ...commands })) {
-    const run = target.length ? `${target.map(shellQuote).join(" ")} "$@"\nstatus=$?` : "status=0";
-    const record = [process.execPath, join(import.meta.dir, "commandLog.ts"), log, name]
-      .map(shellQuote)
-      .join(" ");
-    const path = join(bin, name);
-    writeFileSync(path, `#!/bin/sh\n${run}\n${record} "$status" "$@"\nexit "$status"\n`);
-    chmodSync(path, 0o755);
-  }
+/** Writes the CLI under test into `bin` as a script that records each run in `log`. */
+export function installCommands(bin: string, log: string) {
+  const [run, record] = [
+    [process.execPath, "--no-env-file", CLI],
+    [process.execPath, join(import.meta.dir, "commandLog.ts"), log, "toy-box-slack"],
+  ].map((command) => command.map(shellQuote).join(" "));
+  const path = join(bin, "toy-box-slack");
+  writeFileSync(
+    path,
+    `#!/bin/sh\n${run} "$@"\nstatus=$?\n${record} "$status" "$@"\nexit "$status"\n`,
+  );
+  chmodSync(path, 0o755);
+}
+
+/** Installs the skill into `home` the way its owner would, so every lead Toy Box starts finds it. */
+function installSkill(home: string) {
+  const install = Bun.spawnSync([process.execPath, "--no-env-file", CLI, "install-skill"], {
+    env: { PATH: process.env.PATH, HOME: home },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (!install.success) throw new Error(`install-skill failed:\n${install.stderr.toString()}`);
 }
 
 async function refuseTakenPort() {
@@ -242,14 +246,6 @@ function copilotToken(): string {
     throw new Error("`gh auth token` gave no token. Sign in with `gh auth login` first.");
   }
   return token;
-}
-
-function installSkills(home: string, skills: Record<string, string>) {
-  for (const [name, text] of Object.entries(skills)) {
-    const folder = join(home, ".copilot", "skills", name);
-    mkdirSync(folder, { recursive: true });
-    writeFileSync(join(folder, "SKILL.md"), text);
-  }
 }
 
 const modelListSchema = z.object({
