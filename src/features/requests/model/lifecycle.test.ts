@@ -85,6 +85,7 @@ describe("opening", () => {
       inputHash: "hash-1",
       servedRev: 0,
       attention: null,
+      sourceUnverifiedAt: null,
       heldAt: null,
       createdAt: openedAt,
       changedAt: openedAt,
@@ -113,13 +114,14 @@ describe("serving", () => {
     });
   });
 
-  test("the read answers a failed reply but not an unverified source", () => {
-    expect(
-      serveRequest(inState("in_progress", { attention: "reply_failed" }), later).attention,
-    ).toBe(null);
-    expect(
-      serveRequest(inState("in_progress", { attention: "source_unverified" }), later).attention,
-    ).toBe("source_unverified");
+  test("the read answers a failed reply and leaves an unverified source to repair", () => {
+    const failed = inState("in_progress", { attention: "reply_failed", sourceUnverifiedAt: later });
+    expect(serveRequest(failed, later + 1)).toEqual({
+      ...failed,
+      servedRev: 1,
+      touchedAt: later + 1,
+      attention: null,
+    });
   });
 });
 
@@ -151,6 +153,15 @@ describe("progress and answers", () => {
     }
   });
 
+  test("a final reply can be queued while the source is unverified, and waits for repair", () => {
+    const unverified = inState("seen", { sourceUnverifiedAt: later });
+    expect(beginAnswer(unverified, later + 1)).toEqual({
+      ...unverified,
+      state: "answering",
+      touchedAt: later + 1,
+    });
+  });
+
   test("a final reply to a newer revision keeps an answering request answering", () => {
     const answering = inState("answering", { inputRev: 2, attention: "updated" });
     expect(beginAnswer(answering, later)).toEqual({
@@ -158,9 +169,6 @@ describe("progress and answers", () => {
       attention: null,
       touchedAt: later,
     });
-    expect(beginAnswer(inState("seen", { attention: "source_unverified" }), later).attention).toBe(
-      "source_unverified",
-    );
   });
 
   test("a final reply needs a request the lead has read and that's still active", () => {
@@ -170,11 +178,16 @@ describe("progress and answers", () => {
   });
 
   test("Slack confirming the reply to the current revision answers the request", () => {
-    const answering = inState("answering", { inputRev: 2, attention: "updated" });
+    const answering = inState("answering", {
+      inputRev: 2,
+      attention: "updated",
+      sourceUnverifiedAt: later,
+    });
     expect(confirmAnswer(answering, 2, later)).toEqual({
       ...answering,
       state: "answered",
       attention: null,
+      sourceUnverifiedAt: null,
     });
   });
 
@@ -206,10 +219,13 @@ describe("progress and answers", () => {
       attention: "reply_failed",
       changedAt: later,
     });
-    expect(
-      returnToProgress(inState("answering", { attention: "source_unverified" }), "updated", later)
-        .attention,
-    ).toBe("source_unverified");
+    const unverified = inState("answering", { attention: "updated", sourceUnverifiedAt: later });
+    expect(returnToProgress(unverified, "reply_failed", later + 1)).toEqual({
+      ...unverified,
+      state: "in_progress",
+      attention: "reply_failed",
+      changedAt: later + 1,
+    });
     for (const state of ["seen", "in_progress", "cancelled"] as const) {
       expect(() => returnToProgress(inState(state), "reply_failed", later)).toThrow(
         "A request that's " + state.replace("_", " ") + " can't return to progress.",
@@ -221,12 +237,18 @@ describe("progress and answers", () => {
 describe("closing", () => {
   test("the lead can dismiss a request it has read but not one it's answering", () => {
     for (const state of ["seen", "in_progress"] as const) {
-      const held = inState(state, { heldAt: later, holdReason: "asking", attention: "updated" });
+      const held = inState(state, {
+        heldAt: later,
+        holdReason: "asking",
+        attention: "updated",
+        sourceUnverifiedAt: later,
+      });
       expect(dismissRequest(held, "answered in standup")).toEqual({
         ...held,
         state: "dismissed",
         closedReason: "answered in standup",
         attention: null,
+        sourceUnverifiedAt: null,
         heldAt: null,
         holdReason: null,
       });
@@ -238,12 +260,13 @@ describe("closing", () => {
 
   test("any active request can be cancelled, even one answering", () => {
     for (const state of ["open", "seen", "in_progress", "answering"] as const) {
-      expect(
-        cancelRequest(inState(state, { attention: "updated" }), "source_deleted"),
-      ).toMatchObject({
+      const attention = state === "open" ? null : "updated";
+      const active = inState(state, { attention, sourceUnverifiedAt: later });
+      expect(cancelRequest(active, "source_deleted")).toMatchObject({
         state: "cancelled",
         closedReason: "source_deleted",
         attention: null,
+        sourceUnverifiedAt: null,
       });
     }
     for (const state of ["answered", "dismissed", "cancelled", "expired"] as const) {
@@ -258,12 +281,17 @@ describe("closing", () => {
     expect(isDueToExpire(inState("in_progress"), due - 1)).toBe(false);
     for (const state of ["open", "seen", "in_progress"] as const) {
       expect(isDueToExpire(inState(state), due)).toBe(true);
-      const held = inState(state, { heldAt: later, holdReason: "asking" });
+      const held = inState(state, {
+        heldAt: later,
+        holdReason: "asking",
+        sourceUnverifiedAt: later,
+      });
       expect(expireRequest(held, due)).toEqual({
         ...held,
         state: "expired",
         closedReason: null,
         attention: null,
+        sourceUnverifiedAt: null,
         heldAt: null,
         holdReason: null,
       });
@@ -328,12 +356,14 @@ describe("revisions", () => {
     });
   });
 
-  test("new input keeps an unverified source flagged", () => {
-    const unverified = inState("seen", { attention: "source_unverified" });
-    expect(reviseRequest(unverified, "hash-2", later).attention).toBe("source_unverified");
-    expect(
-      reviseRequest(inState("seen", { attention: "reply_failed" }), "hash-2", later).attention,
-    ).toBe("updated");
+  test("new input leaves a failed reply flagged and the source unverified", () => {
+    const failed = inState("in_progress", { attention: "reply_failed", sourceUnverifiedAt: later });
+    expect(reviseRequest(failed, "hash-2", later + 1)).toEqual({
+      ...failed,
+      inputRev: 2,
+      inputHash: "hash-2",
+      changedAt: later + 1,
+    });
   });
 
   test("input that hashes the same changes nothing", () => {

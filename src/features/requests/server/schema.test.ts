@@ -68,20 +68,43 @@ test("a hold has a reason and pauses only a seen or in-progress request", async 
   }
 });
 
-test("only an active request needs the lead's attention", async () => {
+test("only a request the lead has seen and that's still active needs its attention", async () => {
   const database = await openTestDatabase();
+  const read = ["seen", "in_progress", "answering"];
 
-  for (const [index, state] of ACTIVE_STATES.entries()) {
+  for (const state of ["open", ...CLOSED_STATES]) {
+    await expect(insertRequest(database, { state, attention: "reply_failed" })).rejects.toThrow(
+      "CHECK constraint failed: attention IS NULL OR state IN ('seen', 'in_progress', 'answering')",
+    );
+  }
+  await expect(
+    insertRequest(database, { state: "seen", attention: "source_unverified" }),
+  ).rejects.toThrow(
+    "CHECK constraint failed: attention IS NULL OR attention IN ('updated', 'reply_failed')",
+  );
+  for (const [index, state] of read.entries()) {
     await insertRequest(database, {
       state,
       root_ts: `1700000100.00010${index}`,
       attention: "updated",
     });
   }
+});
+
+test("only an active request waits on repair to verify its source", async () => {
+  const database = await openTestDatabase();
+
   for (const state of CLOSED_STATES) {
-    await expect(insertRequest(database, { state, attention: "reply_failed" })).rejects.toThrow(
-      "CHECK constraint failed: attention IS NULL OR state IN ('open', 'seen', 'in_progress', 'answering')",
+    await expect(insertRequest(database, { state, source_unverified_at: 1 })).rejects.toThrow(
+      "CHECK constraint failed: source_unverified_at IS NULL OR state IN ('open', 'seen', 'in_progress', 'answering')",
     );
+  }
+  for (const [index, state] of ACTIVE_STATES.entries()) {
+    await insertRequest(database, {
+      state,
+      root_ts: `1700000100.00010${index}`,
+      source_unverified_at: 1,
+    });
   }
 });
 

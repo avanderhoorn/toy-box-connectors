@@ -24,8 +24,8 @@ export type RequestState = (typeof requestStates)[number];
 /** Why a request opened. */
 export type RequestReason = "mention" | "follow_up" | "channel_root";
 
-/** Why a request needs the lead again. */
-export type RequestAttention = "updated" | "reply_failed" | "source_unverified";
+/** What the lead must read about a request it has seen. Reading it clears it. */
+export type RequestAttention = "updated" | "reply_failed";
 
 /** Why a request was cancelled. */
 export type CancelReason =
@@ -66,6 +66,11 @@ export type Request = {
   /** The revision the lead last read. Display only: reply and dismiss check the revision they quote. */
   servedRev: number;
   attention: RequestAttention | null;
+  /**
+   * Set after an outage until repair re-reads the source. It holds the request's replies in the
+   * outbox, and it never wakes the lead.
+   */
+  sourceUnverifiedAt: number | null;
   /** While held, the lead gets no reminders. The request still expires. */
   heldAt: number | null;
   holdReason: string | null;
@@ -127,6 +132,7 @@ export function openRequest(request: NewRequest, now: number): Request {
     inputRev: 1,
     servedRev: 0,
     attention: null,
+    sourceUnverifiedAt: null,
     heldAt: null,
     holdReason: null,
     createdAt: now,
@@ -155,8 +161,9 @@ export function inputSource(messages: readonly RequestInput[]): string {
 
 /**
  * Records new input on an active request. A joined message or a substantive edit
- * bumps the revision, releases a hold, and flags a request the lead has seen.
- * Input that hashes the same changes nothing.
+ * bumps the revision, releases a hold, and flags a request the lead has seen as
+ * updated, unless a failed reply already waits for the lead. The lead reads the
+ * new revision along with it. Input that hashes the same changes nothing.
  */
 export function reviseRequest<T extends Request>(request: T, inputHash: string, now: number): T {
   if (!isActive(request.state)) throw new RequestStateError(request.state, "be revised");
@@ -168,23 +175,16 @@ export function reviseRequest<T extends Request>(request: T, inputHash: string, 
     changedAt: now,
     heldAt: null,
     holdReason: null,
-    attention: request.state === "open" ? request.attention : flag(request.attention, "updated"),
+    attention: request.state === "open" ? null : (request.attention ?? "updated"),
   };
 }
 
 /**
  * Records that inbox or thread showed the lead a request at its current
- * revision. An open request becomes seen. The read answers attention for an
- * update or a failed reply, but an unverified source stays flagged until repair
- * verifies it.
+ * revision. An open request becomes seen, and the read answers its attention.
  */
 export function serveRequest<T extends Request>(request: T, now: number): T {
-  const served = {
-    ...request,
-    servedRev: request.inputRev,
-    touchedAt: now,
-    attention: request.attention === "source_unverified" ? request.attention : null,
-  };
+  const served = { ...request, servedRev: request.inputRev, touchedAt: now, attention: null };
   return request.state === "open" ? move(served, "seen", { seenAt: now }) : served;
 }
 
@@ -198,15 +198,10 @@ export function startProgress<T extends Request>(request: T, now: number): T {
 /**
  * Moves a request to answering once the outbox queues the lead's final reply to
  * its current revision. A request already answering an older revision stays
- * answering. The hold ends, and so does attention the reply answers.
+ * answering. The hold ends, and so does the request's attention.
  */
 export function beginAnswer<T extends Request>(request: T, now: number): T {
-  const changes = {
-    touchedAt: now,
-    heldAt: null,
-    holdReason: null,
-    attention: request.attention === "source_unverified" ? request.attention : null,
-  };
+  const changes = { touchedAt: now, heldAt: null, holdReason: null, attention: null };
   if (request.state === "answering") return { ...request, ...changes };
   return move(request, "answering", changes);
 }
@@ -221,7 +216,7 @@ export function confirmAnswer<T extends Request>(request: T, rev: number, now: n
     throw new RangeError(`Revision ${rev} is newer than the request's ${request.inputRev}`);
   }
   if (rev < request.inputRev) return returnToProgress(request, "updated", now);
-  return move(request, "answered", { attention: null });
+  return move(request, "answered", closing(null));
 }
 
 /** Sends an answering request back to the lead because its final reply is stale, failed or dropped. */
@@ -233,10 +228,7 @@ export function returnToProgress<T extends Request>(
   if (request.state !== "answering") {
     throw new RequestStateError(request.state, "return to progress");
   }
-  return move(request, "in_progress", {
-    attention: flag(request.attention, attention),
-    changedAt: now,
-  });
+  return move(request, "in_progress", { attention, changedAt: now });
 }
 
 /** Closes a request the lead decided needs no answer. */
@@ -282,10 +274,11 @@ function move<T extends Request>(request: T, to: RequestState, changes: Partial<
 }
 
 function closing(reason: string | null): Partial<Request> {
-  return { closedReason: reason, attention: null, heldAt: null, holdReason: null };
-}
-
-/** An unverified source outranks any other attention until repair verifies it. */
-function flag(current: RequestAttention | null, next: RequestAttention): RequestAttention {
-  return current === "source_unverified" ? current : next;
+  return {
+    closedReason: reason,
+    attention: null,
+    sourceUnverifiedAt: null,
+    heldAt: null,
+    holdReason: null,
+  };
 }
