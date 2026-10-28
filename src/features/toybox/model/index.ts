@@ -82,6 +82,9 @@ export const routineChangeSchema = z.object({
 });
 export type RoutineChange = z.output<typeof routineChangeSchema>;
 
+/** A member joining or leaving, which Toy Box announces with a system message. */
+export const memberChangeSchema = z.object({ type: z.enum(["member_joined", "member_left"]) });
+
 /** Whether a routine the lead registered still exists and still runs the command it's for. */
 export type RoutineState = "present" | "drifted" | "missing";
 

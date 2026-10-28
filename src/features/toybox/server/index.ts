@@ -4,12 +4,18 @@
 // commits each frame before it reads the next, so the stored revision never runs ahead of what the
 // bridge applied, and a reconnect resumes after it or takes Toy Box's snapshot. Toy Box keeps its
 // own wakes in memory, so the wake scheduler decides from what this client stored and runs
-// routines through it.
+// routines through it. The client also keeps Toy Box's catalog, which says who a caller is, until
+// a linked channel's members may have changed.
 
 import type { BridgeDatabase } from "@bridge/server/database";
 import { suspendLink } from "@links/server/status";
 import { cancelLinkRequests, releaseHolds } from "@requests/server/lifecycle";
-import { channelFrameSchema, type ChannelFrame, type RoutineRunOutcome } from "@toybox/model";
+import {
+  channelFrameSchema,
+  type ChannelFrame,
+  type RoutineRunOutcome,
+  type ToyBoxCatalog,
+} from "@toybox/model";
 import {
   observeChannelFrame,
   reduceToyBoxStream,
@@ -19,7 +25,7 @@ import {
 } from "@toybox/model/stream";
 import { defaultWakeTimings, retryDelay, type ToyBoxView, type WakeTimings } from "@wakes/model";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
-import { readChannelStream, runToyBoxRoutine } from "./api";
+import { fetchToyBoxCatalog, readChannelStream, runToyBoxRoutine } from "./api";
 import {
   readFollowedLinks,
   readToyBoxStream,
@@ -32,6 +38,13 @@ import { readServerSentEvents, type ServerSentEvent } from "./sse";
 export interface ToyBoxClient {
   /** What the bridge knows of a linked channel's Toy Box side right now. */
   view(channelId: string): ToyBoxView;
+  /**
+   * The channels and members the bridge last read, or null when it hasn't read them since a
+   * linked channel's members may have changed.
+   */
+  catalog(): ToyBoxCatalog | null;
+  /** Reads the catalog again, sharing a read already on its way unless members changed since. */
+  loadCatalog(): Promise<ToyBoxCatalog>;
   /** Runs one of the channel's routines, which wakes its lead. */
   runRoutine(channelId: string, routineId: string): Promise<RoutineRunOutcome>;
   /** Follows every linked channel, and stops following channels that are no longer linked. */
@@ -84,6 +97,10 @@ export function startToyBoxClient(
   const deleted = new Set<string>();
   const reconciling = new SerialTaskQueue();
   let stopped = false;
+  // A read that members changed during still answers whoever asked, but isn't kept.
+  let catalog: ToyBoxCatalog | null = null;
+  let memberChanges = 0;
+  let catalogRead: { memberChanges: number; read: Promise<ToyBoxCatalog> } | undefined;
 
   function follow(link: FollowedLink) {
     const follower: Follower = {
@@ -164,7 +181,9 @@ export function startToyBoxClient(
       }
       return undefined;
     }
-    const changed = await record(follower, observeChannelFrame(frame, link.channelId));
+    const observation = observeChannelFrame(frame, link.channelId);
+    if (observation.members) forgetCatalog();
+    const changed = await record(follower, observation);
     if (frame.type === "deleted") {
       deleted.add(link.channelId);
       follower.connected = false;
@@ -206,6 +225,11 @@ export function startToyBoxClient(
     );
   }
 
+  function forgetCatalog() {
+    catalog = null;
+    memberChanges += 1;
+  }
+
   function setConnected(follower: Follower, connected: boolean) {
     if (follower.connected === connected) return;
     follower.connected = connected;
@@ -220,6 +244,23 @@ export function startToyBoxClient(
         provider: follower?.stream.provider ?? null,
         leadWorking: follower ? isWorking(follower.stream) : false,
       };
+    },
+    catalog() {
+      return catalog;
+    },
+    loadCatalog() {
+      if (catalogRead?.memberChanges === memberChanges) return catalogRead.read;
+      const changes = memberChanges;
+      const read = fetchToyBoxCatalog(origin)
+        .then((loaded) => {
+          if (changes === memberChanges) catalog = loaded;
+          return loaded;
+        })
+        .finally(() => {
+          if (catalogRead?.read === read) catalogRead = undefined;
+        });
+      catalogRead = { memberChanges: changes, read };
+      return read;
     },
     runRoutine(channelId, routineId) {
       return runToyBoxRoutine(origin, channelId, routineId);

@@ -476,3 +476,59 @@ test("a lead on another provider shows its provider", async () => {
 
   expect(client.view(channelId)).toMatchObject({ provider: "claude" });
 });
+
+test("callers asking together share one catalog read, kept until a member joins or leaves", async () => {
+  const { toyBox, channelId, startClient } = await linkFakeChannel();
+  const client = await startClient();
+  expect(client.catalog()).toBeNull();
+
+  const [first, second] = await Promise.all([client.loadCatalog(), client.loadCatalog()]);
+  expect(toyBox.catalogReads).toBe(1);
+  expect(second).toBe(first);
+  expect(client.catalog()).toBe(first);
+  expect(first.channels.map(({ id }) => id)).toEqual([channelId]);
+
+  const memberId = toyBox.addMember(channelId, "Reviewer");
+  await waitFor(() => expect(client.catalog()).toBeNull());
+  expect((await client.loadCatalog()).members).toEqual([
+    { id: memberId, channelId, name: "Reviewer" },
+  ]);
+
+  toyBox.removeMember(memberId);
+  await waitFor(() => expect(client.catalog()).toBeNull());
+  expect((await client.loadCatalog()).members).toEqual([]);
+  expect(toyBox.catalogReads).toBe(3);
+});
+
+test("a catalog read that a member change overtakes answers its callers but isn't kept", async () => {
+  const { toyBox, database, channelId, startClient } = await linkFakeChannel();
+  const client = await startClient();
+  const { revision } = await readStream(database, channelId);
+  const release = toyBox.holdCatalog();
+  const before = client.loadCatalog();
+  await waitFor(() => expect(toyBox.catalogReads).toBe(1));
+
+  const memberId = toyBox.addMember(channelId, "Reviewer");
+  await waitFor(async () => {
+    expect((await readStream(database, channelId)).revision).toBe(revision + 1);
+  });
+  const after = client.loadCatalog();
+  await waitFor(() => expect(toyBox.catalogReads).toBe(2));
+  release();
+
+  expect((await before).members).toEqual([]);
+  expect((await after).members.map(({ id }) => id)).toEqual([memberId]);
+  expect(client.catalog()).toBe(await after);
+});
+
+test("a catalog read that fails isn't shared with the next caller", async () => {
+  const { toyBox, startClient } = await linkFakeChannel();
+  const client = await startClient();
+  await toyBox.stop();
+
+  await expect(client.loadCatalog()).rejects.toThrow();
+  toyBox.start();
+
+  expect((await client.loadCatalog()).channels).toHaveLength(1);
+  expect(client.catalog()).not.toBeNull();
+});

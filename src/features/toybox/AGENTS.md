@@ -4,7 +4,7 @@ The Toy Box client is the bridge's only connection to Toy Box. It keeps the chan
 
 ## Domain model
 
-The catalog maps Toy Box sessions to the channels they lead or belong to. Each linked channel's stream reports routine changes, the lead's presence, when the owner last spoke, and whether the channel still exists. The bridge stores each stream's revision so it can resume. A routine run is the bridge's only way to reach the lead.
+The catalog maps Toy Box sessions to the channels they lead or belong to. The client reads it when a caller isn't in it and forgets it whenever a linked channel's stream says its members may have changed, so a removed member is refused on their next call. Each linked channel's stream reports routine changes, the lead's presence, when the owner last spoke, and whether the channel still exists. The bridge stores each stream's revision so it can resume. A routine run is the bridge's only way to reach the lead.
 
 ## Boundaries and invariants
 

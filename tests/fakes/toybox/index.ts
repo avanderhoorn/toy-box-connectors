@@ -5,9 +5,10 @@
 // channel's stream at GET /api/v1/channels/:id follows getChannelResponse and streamChannel in
 // server/stream.ts, framed by src/shared/server/sse.ts, with the replay ring of server/events.ts.
 // POST /api/v1/channels/:id/routines/:routineId/run follows runChannelRoutineResponse and
-// wakeChannelAgent in server/index.ts. Stopping it drops every connection and keeps only what Toy
-// Box stores durably, like a restart, and starting it again clears working statuses as
-// server/startup.ts does.
+// wakeChannelAgent in server/index.ts. Members join and leave with the system messages that
+// createMember and deleteMember in server/database.ts append. Stopping it drops every connection
+// and keeps only what Toy Box stores durably, like a restart, and starting it again clears working
+// statuses as server/startup.ts does.
 
 const CHANNEL_LEAD_PROFILE = {
   name: "Lead",
@@ -80,10 +81,19 @@ export type FakeToyBox = {
   readonly runs: readonly FakeRun[];
   readonly streamRequests: readonly FakeStreamRequest[];
   readonly refusedStreams: readonly FakeRefusedStream[];
+  /** How many times the catalog was asked for. */
+  readonly catalogReads: number;
   /** Adds a channel whose lead runs on `provider`, and returns its ID, which its lead shares. */
   addChannel(options?: { provider?: string; name?: string }): string;
-  /** Adds a member to a channel and returns its session ID. */
+  /** Adds a member to a channel and returns its session ID, announcing it as createMember does. */
   addMember(channelId: string, name: string): string;
+  /** Removes a member, announcing it as deleteMember does. */
+  removeMember(memberId: string): void;
+  /**
+   * Reads the catalog as each request arrives but holds every answer until the returned release
+   * is called, so a test can change members while a read is on its way back.
+   */
+  holdCatalog(): () => void;
   scheduleRoutine(channelId: string, routine: Omit<FakeRoutine, "id">): FakeRoutine;
   editRoutine(
     channelId: string,
@@ -128,6 +138,8 @@ export function startFakeToyBox(options: { now?: () => number } = {}): FakeToyBo
   const runs: FakeRun[] = [];
   const streamRequests: FakeStreamRequest[] = [];
   const refusedStreams: FakeRefusedStream[] = [];
+  let catalogReads = 0;
+  let catalogHeld: Promise<void> | undefined;
   const failures: number[] = [];
   let refusal: number | undefined;
   let server = serve(0);
@@ -142,7 +154,9 @@ export function startFakeToyBox(options: { now?: () => number } = {}): FakeToyBo
     const [api, version, resource, channelId, routines, routineId, run] = path;
     if (api !== "api" || version !== "v1" || resource !== "channels") return notFound();
     if (request.method === "GET" && (channelId === undefined || channelId === "")) {
-      return catalog();
+      catalogReads += 1;
+      const answer = catalog();
+      return catalogHeld ? catalogHeld.then(() => answer) : answer;
     }
     if (request.method === "GET" && path.length === 4) return stream(channelId!, request);
     if (
@@ -354,11 +368,32 @@ export function startFakeToyBox(options: { now?: () => number } = {}): FakeToyBo
       });
       return id;
     },
+    get catalogReads() {
+      return catalogReads;
+    },
     addMember(channelId, name) {
       const channel = requireChannel(channelId);
-      const id = crypto.randomUUID();
-      channel.members.push({ id, channelId, name });
-      return id;
+      const member = { id: crypto.randomUUID(), channelId, name };
+      channel.members.push(member);
+      postMessage(channel, { type: "system" }, { type: "member_joined", member });
+      return member.id;
+    },
+    removeMember(memberId) {
+      const channel = [...channels.values()].find(({ members }) =>
+        members.some(({ id }) => id === memberId),
+      );
+      if (!channel) throw new Error(`The fake Toy Box has no member ${memberId}.`);
+      const member = channel.members.find(({ id }) => id === memberId)!;
+      channel.members = channel.members.filter(({ id }) => id !== memberId);
+      postMessage(channel, { type: "system" }, { type: "member_left", member });
+    },
+    holdCatalog() {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      catalogHeld = promise;
+      return () => {
+        if (catalogHeld === promise) catalogHeld = undefined;
+        resolve();
+      };
     },
     scheduleRoutine(channelId, input) {
       const channel = requireChannel(channelId);

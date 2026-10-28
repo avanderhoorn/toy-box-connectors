@@ -6,6 +6,7 @@
 
 import {
   agentPresenceSchema,
+  memberChangeSchema,
   publishCommand,
   routineChangeSchema,
   routineState,
@@ -18,13 +19,17 @@ import {
 } from ".";
 import { observeLeadPresence, type LeadPresence } from "./presence";
 
-/** What one frame says. Live presence came from an event rather than from a snapshot after a gap. */
+/**
+ * What one frame says. Live presence came from an event rather than from a snapshot after a gap.
+ * `members` says the channel's members may have changed, which a snapshot can't rule out.
+ */
 export type ChannelObservation = {
   revision?: number;
   provider?: string;
   lead?: { presence: AgentPresence; live: boolean };
   ownerSpokeAt?: number;
   routines?: { all: readonly ToyBoxRoutine[] } | RoutineChange;
+  members?: true;
   deleted?: true;
 };
 
@@ -63,6 +68,7 @@ export function observeChannelFrame(frame: ChannelFrame, leadId: string): Channe
         lead: leadPresence(state.presence, leadId, false),
         ownerSpokeAt: latestOwnerMessage(state.messages),
         routines: { all: state.routines },
+        members: true,
       };
     }
     case "resumed":
@@ -74,7 +80,7 @@ export function observeChannelFrame(frame: ChannelFrame, leadId: string): Channe
     case "model":
       return { revision: frame.revision, provider: frame.model.provider };
     case "deleted":
-      return { deleted: true };
+      return { members: true, deleted: true };
     default:
       return { revision: frame.revision };
   }
@@ -140,7 +146,8 @@ function observeMessage(message: ToyBoxMessage): ChannelObservation {
   if (message.sender.type === "user") return { ownerSpokeAt: parseInstant(message.timestamp) };
   if (message.sender.type !== "system") return {};
   const change = routineChangeSchema.safeParse(message.content);
-  return change.success ? { routines: change.data } : {};
+  if (change.success) return { routines: change.data };
+  return memberChangeSchema.safeParse(message.content).success ? { members: true } : {};
 }
 
 function latestOwnerMessage(messages: readonly ToyBoxMessage[]): number | undefined {

@@ -54,6 +54,7 @@ describe("observing a frame", () => {
       lead: { presence: { state: "working" }, live: false },
       ownerSpokeAt: Date.parse("2026-10-27T16:05:00.000Z"),
       routines: { all: [routine] },
+      members: true,
     });
   });
 
@@ -126,8 +127,22 @@ describe("observing a frame", () => {
       observeChannelFrame({ type: "model", revision: 17, model: { provider: "claude" } }, "l"),
     ).toEqual({ revision: 17, provider: "claude" });
     expect(observeChannelFrame({ type: "deleted", channelId: "l" }, "l")).toEqual({
+      members: true,
       deleted: true,
     });
+  });
+
+  test("a member joining or leaving says the members changed", () => {
+    const at = "2026-10-27T16:00:00.000Z";
+    const member = { id: "member-1", name: "Reviewer" };
+    for (const type of ["member_joined", "member_left"]) {
+      expect(
+        observeChannelFrame(
+          { type: "message", revision: 19, message: message("system", at, { type, member }) },
+          "lead-1",
+        ),
+      ).toEqual({ revision: 19, members: true });
+    }
   });
 
   test("any other detail only moves the revision", () => {
