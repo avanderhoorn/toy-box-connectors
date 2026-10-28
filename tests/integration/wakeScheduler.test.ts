@@ -158,6 +158,7 @@ test("a burst of requests wakes the lead once, after the latest has settled", as
 test("a wake the lead ignores is repeated on the backoff, then stalls until a request is new", async () => {
   const { toyBox, database, channelId, now, startWaking } = await linkFakeChannel();
   const { scheduler } = await startWaking();
+  await waitFor(() => expect(scheduler.decision("link")).toEqual({ kind: "idle" }));
   await storeRequest(database, now());
   scheduler.reconsider();
 
@@ -171,6 +172,7 @@ test("a wake the lead ignores is repeated on the backoff, then stalls until a re
   }
   await Bun.sleep(TIMINGS.backoff[2] + 100);
   expect(toyBox.runs).toHaveLength(4);
+  expect(scheduler.decision("link")).toEqual({ kind: "stalled" });
 
   await storeRequest(database, now());
   scheduler.reconsider();

@@ -66,8 +66,10 @@ function proposal(changes: Partial<ProposalDebt> = {}): ProposalDebt {
   };
 }
 
-function plan(
-  pass: { links?: ScheduledLink[]; proposals?: ProposalDebt[]; ran?: RanWake[] },
+type Pass = { links?: ScheduledLink[]; proposals?: ProposalDebt[]; ran?: RanWake[] };
+
+function planPass(
+  pass: Pass,
   toyBox: (channelId: string) => ToyBoxView = idle,
   busyUntil: ReadonlyMap<string, number> = notBusy,
 ) {
@@ -77,6 +79,12 @@ function plan(
     toyBox,
     busyUntil,
   );
+}
+
+/** The pass's runs and next decision, leaving its decisions to the tests about them. */
+function plan(...args: Parameters<typeof planPass>) {
+  const { wakes, decideAt } = planPass(...args);
+  return { wakes, decideAt };
 }
 
 describe("planning a pass", () => {
@@ -166,6 +174,30 @@ describe("planning a pass", () => {
           ? workingLead
           : idleLead;
     expect(plan({ links }, toyBox)).toEqual({ wakes: [], decideAt: null });
+  });
+
+  test("keeps what it decided for each link whose channel isn't busy, for status to show", () => {
+    const due = scheduled({ requests: [request()] });
+    const debounced = scheduled({
+      id: "link-2",
+      channelId: "channel-2",
+      requests: [request({ changedAt: seconds(-4) })],
+    });
+    const stalled = scheduled({
+      id: "link-3",
+      channelId: "channel-3",
+      requests: [request({ changedAt: minutes(-60) })],
+      lastWakeAt: minutes(-30),
+      wakesSinceInbox: 4,
+    });
+    const busy = scheduled({ id: "link-4", channelId: "channel-4", requests: [request()] });
+    const inFlight = new Map([["channel-4", Infinity]]);
+    const { decisions } = planPass({ links: [due, debounced, stalled, busy] }, idle, inFlight);
+    expect(Object.fromEntries(decisions)).toEqual({
+      "link-1": { kind: "wake", reason: "requests" },
+      "link-2": { kind: "wait", until: seconds(6) },
+      "link-3": { kind: "stalled" },
+    });
   });
 
   describe("runs at most one routine per channel", () => {

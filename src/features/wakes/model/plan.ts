@@ -63,8 +63,15 @@ export type Wake = {
   reminded: readonly number[];
 };
 
-/** The routines to run now, and when to decide again. Null waits for something to change. */
-export type WakePlan = { wakes: Wake[]; decideAt: number | null };
+/**
+ * The routines to run now, what the pass decided for each link whose channel wasn't busy, and when
+ * to decide again. Null waits for something to change.
+ */
+export type WakePlan = {
+  wakes: Wake[];
+  decisions: Map<string, WakeDecision>;
+  decideAt: number | null;
+};
 
 /**
  * Plans one pass. `busyUntil` holds each channel whose run is in flight, as Infinity, or landed
@@ -79,6 +86,7 @@ export function planWakes(
 ): WakePlan {
   const ran = [...pass.ran];
   const wakes: Wake[] = [];
+  const decisions = new Map<string, WakeDecision>();
   let decideAt: number | null = null;
   const decideBy = (at: number) => {
     decideAt = Math.min(decideAt ?? at, at);
@@ -102,7 +110,9 @@ export function planWakes(
   for (const link of pass.links) {
     if (!free(link.channelId)) continue;
     const view = toyBox(link.channelId);
-    const reason = wakeNow(decideWake(now, link, view, wakeBudget(ran), timings));
+    const decision = decideWake(now, link, view, wakeBudget(ran), timings);
+    decisions.set(link.id, decision);
+    const reason = wakeNow(decision);
     if (reason) {
       start({
         kind: reason,
@@ -149,7 +159,7 @@ export function planWakes(
     });
   }
 
-  return { wakes, decideAt };
+  return { wakes, decisions, decideAt };
 }
 
 function byId({ id }: { id: number }): number {

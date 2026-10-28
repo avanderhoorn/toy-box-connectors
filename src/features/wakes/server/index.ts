@@ -11,13 +11,15 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { expireRequests } from "@requests/server/lifecycle";
 import type { RoutineRunOutcome } from "@toybox/model";
 import type { ToyBoxClient } from "@toybox/server";
-import { defaultWakeTimings, type WakeTimings } from "@wakes/model";
+import { defaultWakeTimings, type WakeDecision, type WakeTimings } from "@wakes/model";
 import { planWakes, type Wake } from "@wakes/model/plan";
 import { readWakePass, recordWake } from "./database";
 
 export interface WakeScheduler {
   /** Decides again, because something a wake decision reads changed. */
   reconsider(): void;
+  /** What the latest pass decided about waking a link's lead, or null before one has. */
+  decision(linkId: string): WakeDecision | null;
   /** Stops once the pass and the runs in flight have recorded what they did. */
   stop(): Promise<void>;
 }
@@ -46,6 +48,7 @@ export function startWakeScheduler(
 ): WakeScheduler {
   // Infinity while a channel's run is in flight, then when its turn should show in presence.
   const busyUntil = new Map<string, number>();
+  let decisions = new Map<string, WakeDecision>();
   const runs = new Set<Promise<void>>();
   let timer: Timer | undefined;
   let deciding: Promise<void> | undefined;
@@ -80,6 +83,13 @@ export function startWakeScheduler(
     if (stopped) return;
     for (const [channelId, until] of busyUntil) if (until <= at) busyUntil.delete(channelId);
     const plan = planWakes(at, pass, toyBox.view, busyUntil, timings);
+    // A link whose channel is busy keeps the decision that started the run.
+    const previous = decisions;
+    decisions = new Map();
+    for (const { id } of pass.links) {
+      const decision = plan.decisions.get(id) ?? previous.get(id);
+      if (decision) decisions.set(id, decision);
+    }
     for (const wake of plan.wakes) start(wake);
     const wait = Math.min((plan.decideAt ?? Infinity) - now(), MAX_WAIT);
     timer = setTimeout(reconsider, Math.max(wait, 0));
@@ -121,6 +131,9 @@ export function startWakeScheduler(
   reconsider();
   return {
     reconsider,
+    decision(linkId) {
+      return decisions.get(linkId) ?? null;
+    },
     async stop() {
       stopped = true;
       clearTimeout(timer);
