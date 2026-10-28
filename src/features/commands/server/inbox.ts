@@ -3,14 +3,16 @@
 // Inbox reads and serves the caller's link in one transaction, so what it marks read is exactly
 // what it returns. It reports each proposal that ended once, shows each request that wakes the lead
 // with every message the request holds and marks it read at that revision, lists the requests the
-// lead read and hasn't answered, and records the read, which ends the link's wake backoff and any
-// stall. Roles, names and files are read as they are now, not as they were when someone asked.
+// lead read and hasn't answered, reports once each one it read that was cancelled or expired, and
+// records the read, which ends the link's wake backoff and any stall. Roles, names and files are
+// read as they are now, not as they were when someone asked.
 
 import type { BridgeDatabase } from "@bridge/server/database";
 import type { CommandHandler } from "@commands/model/contract";
 import {
   inboxResultSchema,
   listRequests,
+  type EndedRequest,
   type InboxResult,
   type inboxContract,
   type ServedRequest,
@@ -18,6 +20,7 @@ import {
   type SettingOutcome,
   type WaitingRequest,
 } from "@commands/model/inbox";
+import { isCancelReason } from "@commands/model/requests";
 import {
   oneLine,
   renderSlackText,
@@ -34,8 +37,13 @@ import {
 } from "@links/model/approvals";
 import { readApproval, saveApproval } from "@links/server/approvals";
 import { readChannelLink } from "@links/server/database";
-import { serveRequest } from "@requests/model/lifecycle";
-import { readActiveRequests, saveRequest, type StoredRequest } from "@requests/server/database";
+import { reportEnding, serveRequest } from "@requests/model/lifecycle";
+import {
+  readActiveRequests,
+  readUnreportedEndings,
+  saveRequest,
+  type StoredRequest,
+} from "@requests/server/database";
 import type { SlackFile } from "@slackapi/model/messages";
 import { compareTs, type SlackTs } from "@slackapi/model/ts";
 import { currentChannelId, readChannelInfo } from "@slackapi/server/channels";
@@ -68,7 +76,14 @@ export function inboxCommand({
         SELECT id, slack_channel_id AS slackChannelId FROM links
         WHERE toybox_channel_id = ${caller.channelId}
       `;
-      const unlinked = { requests: [], more: 0, waiting: [], moreWaiting: 0 };
+      const unlinked = {
+        requests: [],
+        more: 0,
+        waiting: [],
+        moreWaiting: 0,
+        ended: [],
+        moreEnded: 0,
+      };
       if (!link) return checked({ linked: false, settings, ...unlinked });
 
       const installation = await readInstallation(transaction);
@@ -92,9 +107,10 @@ export function inboxCommand({
       }
       const waiting: WaitingRequest[] = [];
       for (const request of listed.waiting) waiting.push(await waitingRequest(reading, request));
+      const endings = await reportEndings(reading, link.id, limit, at);
       await recordInbox(transaction, link.id, at);
       const { more, moreWaiting } = listed;
-      return checked({ linked: true, settings, requests, more, waiting, moreWaiting });
+      return checked({ linked: true, settings, requests, more, waiting, moreWaiting, ...endings });
     });
     wakes.reconsider();
     return inbox;
@@ -249,6 +265,31 @@ async function waitingRequest(
     heldAt: request.heldAt,
     snippet: await snippet(reading, rows),
   };
+}
+
+/**
+ * The requests the lead read that were cancelled or expired since inbox last said so, oldest first
+ * and up to `limit`, each now reported. Each says who asked and why it ended, never what they said.
+ */
+async function reportEndings(
+  { sql, names }: Reading,
+  linkId: string,
+  limit: number,
+  at: number,
+): Promise<Pick<InboxResult, "ended" | "moreEnded">> {
+  const unreported = await readUnreportedEndings(sql, linkId);
+  const ended: EndedRequest[] = [];
+  for (const request of unreported.slice(0, limit)) {
+    const reported = reportEnding(request, at);
+    await saveRequest(sql, reported);
+    ended.push({
+      id: reported.id,
+      requester: await names.person(reported.requesterUserId),
+      state: reported.state,
+      reason: isCancelReason(reported.closedReason) ? reported.closedReason : null,
+    });
+  }
+  return { ended, moreEnded: Math.max(0, unreported.length - limit) };
 }
 
 /**

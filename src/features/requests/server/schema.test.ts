@@ -1,6 +1,7 @@
-import { expect, test } from "bun:test";
-import type { BridgeDatabase } from "@bridge/server/database";
-import { openTestDatabase } from "@bridge/server/testFixtures";
+import { expect, onTestFinished, test } from "bun:test";
+import { join } from "node:path";
+import { bridgeMigrations, openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
+import { createTestFolder, openTestDatabase } from "@bridge/server/testFixtures";
 
 const ACTIVE_STATES = ["open", "seen", "in_progress", "answering"];
 const CLOSED_STATES = ["answered", "dismissed", "cancelled", "expired"];
@@ -122,6 +123,94 @@ test("a request says why it closed exactly when it was dismissed or cancelled", 
       closing,
     );
   }
+});
+
+test("inbox reports only a request the lead read that was then cancelled or expired", async () => {
+  const database = await openTestDatabase();
+  const reporting =
+    "CHECK constraint failed: closed_reported_at IS NULL OR (state IN ('cancelled', 'expired') AND seen_at IS NOT NULL)";
+
+  for (const state of [...ACTIVE_STATES, "answered", "dismissed"]) {
+    await expect(insertRequest(database, { state, closed_reported_at: 1 })).rejects.toThrow(
+      reporting,
+    );
+  }
+  for (const state of ["cancelled", "expired"]) {
+    await expect(
+      insertRequest(database, { state, seen_at: null, closed_reported_at: 1 }),
+    ).rejects.toThrow(reporting);
+    await insertRequest(database, { state, closed_reported_at: 1 });
+  }
+});
+
+test("never hands out a request's number again, even once its row is gone", async () => {
+  const database = await openTestDatabase();
+  await insertRequest(database, { state: "answered" });
+  const newest = await insertRequest(database);
+
+  await database.write((transaction) => transaction`DELETE FROM requests WHERE id = ${newest}`);
+  expect(await insertRequest(database)).toBe(newest + 1);
+  await database.write((transaction) => transaction`DELETE FROM requests`);
+  expect(await insertRequest(database)).toBe(newest + 2);
+});
+
+test("a version 3 file keeps every request and its messages as they were, and gives the next a number no request has had", async () => {
+  const path = join(createTestFolder(), "bridge.db");
+  const old = await openBridgeDatabase(path, bridgeMigrations.slice(0, 3));
+  const answered = await insertRequest(old, {
+    id: 3,
+    state: "answered",
+    touched_at: 5,
+    reminded_at: 6,
+    late: 1,
+    progress_ts: "1700000150.000100",
+  });
+  const cancelled = await insertRequest(old, {
+    id: 5,
+    state: "cancelled",
+    root_ts: "1700000300.000100",
+  });
+  const active = await insertRequest(old, {
+    id: 9,
+    state: "in_progress",
+    root_ts: "1700000200.000100",
+    input_rev: 3,
+    served_rev: 2,
+    attention: "updated",
+    source_unverified_at: 7,
+    held_at: 8,
+    hold_reason: "Asked Alice",
+  });
+  await old.write(
+    (transaction) => transaction`
+      INSERT INTO request_messages (request_id, channel_id, ts) VALUES
+        (${answered}, 'C-link', '1700000100.000100'),
+        (${cancelled}, 'C-link', '1700000300.000100'),
+        (${active}, 'C-link', '1700000200.000100'),
+        (${active}, 'C-link', '1700000210.000100')
+    `,
+  );
+  const requests = await old.read((sql) => sql`SELECT * FROM requests ORDER BY id`);
+  const messages = await old.read(
+    (sql) => sql`SELECT * FROM request_messages ORDER BY request_id, ts`,
+  );
+  await old.close();
+
+  const database = await openBridgeDatabase(path);
+  onTestFinished(() => database.close());
+
+  expect(await database.read((sql) => sql`SELECT * FROM requests ORDER BY id`)).toEqual(
+    requests.map((request: Record<string, unknown>) => ({ ...request, closed_reported_at: null })),
+  );
+  expect(
+    await database.read((sql) => sql`SELECT * FROM request_messages ORDER BY request_id, ts`),
+  ).toEqual(messages);
+  // Deleting a request still takes its messages with it, and its number isn't handed out again.
+  await database.write((transaction) => transaction`DELETE FROM requests WHERE id = ${active}`);
+  expect(
+    await database.read((sql) => sql`SELECT request_id FROM request_messages ORDER BY request_id`),
+  ).toEqual([{ request_id: answered }, { request_id: cancelled }]);
+  expect(await insertRequest(database)).toBe(active + 1);
 });
 
 test("a requester has at most one active request in a thread", async () => {

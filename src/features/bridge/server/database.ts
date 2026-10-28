@@ -14,7 +14,7 @@ import {
   initializeOutboxSchema,
   numberOutboxItemsOnce,
 } from "@outbox/server/schema";
-import { initializeRequestSchema } from "@requests/server/schema";
+import { initializeRequestSchema, rebuildRequestSchema } from "@requests/server/schema";
 import { initializeSlackApiSchema } from "@slackapi/server/schema";
 import { initializeToyBoxSchema } from "@toybox/server/schema";
 import { initializeWakeSchema } from "@wakes/server/schema";
@@ -47,6 +47,7 @@ export const bridgeMigrations: readonly Migration[] = [
     await numberApprovalsOnce(transaction);
     await numberGapsOnce(transaction);
   },
+  rebuildRequestSchema,
 ];
 
 /** The settings that keep an acked event on disk through a power loss and keep references whole. */

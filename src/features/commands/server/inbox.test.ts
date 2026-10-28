@@ -7,8 +7,16 @@ import type { ChannelCaller } from "@commands/model/callers";
 import { inboxContract } from "@commands/model/inbox";
 import { pendingApproval } from "@links/model/testFixtures";
 import { createStoredApproval, createStoredLink } from "@links/server/testFixtures";
-import { beginAnswer, holdRequest } from "@requests/model/lifecycle";
-import { readRequest, saveRequest } from "@requests/server/database";
+import {
+  beginAnswer,
+  cancelRequest,
+  dismissRequest,
+  holdRequest,
+  requestLifetimeMs,
+  serveRequest,
+} from "@requests/model/lifecycle";
+import { readRequest, saveRequest, type StoredRequest } from "@requests/server/database";
+import { expireRequests } from "@requests/server/lifecycle";
 import type { SlackMessage, SlackMessageEvent } from "@slackapi/model/messages";
 import {
   askMessage,
@@ -92,6 +100,22 @@ function readWakeState(database: BridgeDatabase) {
   );
 }
 
+/** Applies a lifecycle step to stored request `id`, without anything else the bridge would do. */
+function change(
+  database: BridgeDatabase,
+  id: number,
+  step: (request: StoredRequest) => StoredRequest,
+) {
+  return database.write(async (transaction) => {
+    const request = await readRequest(transaction, id);
+    await saveRequest(transaction, step(request!));
+  });
+}
+
+function deleted(message: SlackMessage): SlackMessageEvent {
+  return { kind: "deleted", channelId: message.channelId, ts: message.ts };
+}
+
 describe("reading requests", () => {
   test("shows a new request with every message it holds, and serves it at that revision", async () => {
     const database = await openInbox();
@@ -137,6 +161,8 @@ describe("reading requests", () => {
       more: 0,
       waiting: [],
       moreWaiting: 0,
+      ended: [],
+      moreEnded: 0,
     });
     expect(await database.read((sql) => readRequest(sql, 1))).toMatchObject({
       state: "seen",
@@ -336,6 +362,10 @@ describe("reading requests", () => {
   test("marks nothing read when its answer can't be given", async () => {
     const database = await openInbox();
     await ingest(database, posted(ask));
+    await ingest(database, posted(askMessage("1700000300.000100", { userId: "U-allowed" })));
+    await change(database, 2, (request) =>
+      cancelRequest(serveRequest(request, NOW), "requester_denied"),
+    );
     await createStoredApproval(database, {
       state: "rejected",
       decidedBy: "U-owner",
@@ -358,8 +388,93 @@ describe("reading requests", () => {
     expect(await database.read((sql) => sql`SELECT reported_at FROM approvals`)).toEqual([
       { reported_at: null },
     ]);
+    expect(await database.read((sql) => sql`SELECT closed_reported_at FROM requests`)).toEqual([
+      { closed_reported_at: null },
+      { closed_reported_at: null },
+    ]);
     expect(await readWakeState(database)).toEqual([]);
     expect(inbox.reconsidered()).toBe(0);
+  });
+});
+
+describe("reporting requests that ended", () => {
+  test("tells the lead once, oldest first, which requests it read were cancelled or expired", async () => {
+    const database = await openInbox();
+    const bobs = askMessage("1700000300.000100", { userId: "U-allowed" });
+    await ingest(database, posted(ask));
+    await ingest(database, posted(bobs));
+    await ingest(database, posted(askMessage("1700000500.000100")), NOW + MINUTE);
+    const inbox = inboxFor(database);
+    await inbox.read();
+    await ingest(database, deleted(bobs), AT + MINUTE);
+    const expiry = NOW + requestLifetimeMs;
+    await database.write((transaction) => expireRequests(transaction, expiry));
+
+    const result = await inbox.read(lead, expiry + MINUTE);
+    expect(result.ended).toEqual([
+      { id: 1, requester: owner, state: "expired", reason: null },
+      {
+        id: 2,
+        requester: { userId: "U-allowed", name: "Bob Diaz" },
+        state: "cancelled",
+        reason: "source_deleted",
+      },
+    ]);
+    expect(result.moreEnded).toBe(0);
+    expect(result.waiting.map(({ id }) => id)).toEqual([3]);
+    expect(
+      await database.read((sql) => sql`SELECT id, closed_reported_at FROM requests ORDER BY id`),
+    ).toEqual([
+      { id: 1, closed_reported_at: expiry + MINUTE },
+      { id: 2, closed_reported_at: expiry + MINUTE },
+      { id: 3, closed_reported_at: null },
+    ]);
+    expect((await inbox.read(lead, expiry + 2 * MINUTE)).ended).toEqual([]);
+  });
+
+  test("says nothing of one the lead never read or dismissed, or of another channel's", async () => {
+    const database = await openInbox();
+    await createStoredLink(database, "other");
+    const others = askMessage("1700000200.000100", { channelId: "C-other" });
+    const unread = askMessage("1700000300.000100");
+    await ingest(database, posted(ask));
+    await ingest(database, posted(others));
+    const inbox = inboxFor(database);
+    await inbox.read();
+    await change(database, 2, (request) => serveRequest(request, AT));
+    await ingest(database, posted(unread), AT);
+    await change(database, 1, (request) => dismissRequest(request, "Answered in the standup"));
+    await ingest(database, deleted(others), AT);
+    await ingest(database, deleted(unread), AT);
+
+    expect(
+      await database.read((sql) => sql`SELECT id, link_id, state, seen_at FROM requests`),
+    ).toEqual([
+      { id: 1, link_id: "link", state: "dismissed", seen_at: AT },
+      { id: 2, link_id: "other", state: "cancelled", seen_at: AT },
+      { id: 3, link_id: "link", state: "cancelled", seen_at: null },
+    ]);
+    expect(await inbox.read(lead, AT + MINUTE)).toMatchObject({ ended: [], moreEnded: 0 });
+    const elsewhere = await inbox.read({ ...lead, channelId: "toybox-other" }, AT + MINUTE);
+    expect(elsewhere.ended.map(({ id }) => id)).toEqual([2]);
+  });
+
+  test("reports at most the limit, and leaves the rest for the next inbox", async () => {
+    const database = await openInbox();
+    const asks = ["1700000100.000100", "1700000200.000100", "1700000300.000100"].map((ts) =>
+      askMessage(ts),
+    );
+    for (const message of asks) await ingest(database, posted(message));
+    const inbox = inboxFor(database);
+    await inbox.read();
+    for (const message of asks) await ingest(database, deleted(message), AT);
+
+    const first = await inbox.read(lead, AT + MINUTE, 2);
+    expect(first.ended.map(({ id }) => id)).toEqual([1, 2]);
+    expect(first.moreEnded).toBe(1);
+    const second = await inbox.read(lead, AT + 2 * MINUTE, 2);
+    expect(second.ended.map(({ id }) => id)).toEqual([3]);
+    expect(second.moreEnded).toBe(0);
   });
 });
 
@@ -520,6 +635,8 @@ describe("reporting settings", () => {
       more: 0,
       waiting: [],
       moreWaiting: 0,
+      ended: [],
+      moreEnded: 0,
     });
     expect(inboxContract.present(result, { at: AT })).toBe(
       [

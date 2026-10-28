@@ -43,6 +43,7 @@ type RequestRow = {
   progress_ts: SlackTs | null;
   expires_at: number;
   closed_reason: string | null;
+  closed_reported_at: number | null;
 };
 
 type InputRow = { ts: SlackTs; deleted: number; content_hash: string | null };
@@ -82,6 +83,23 @@ export async function readOverdueRequests(sql: Bun.SQL, now: number): Promise<St
   const rows = await sql<RequestRow[]>`
     SELECT * FROM requests
     WHERE state IN ${sql(activeStates)} AND expires_at <= ${now} ORDER BY id
+  `;
+  return rows.map(requestFromRow);
+}
+
+/**
+ * A link's requests the lead read that were cancelled or expired since inbox last said so, oldest
+ * first.
+ */
+export async function readUnreportedEndings(
+  sql: Bun.SQL,
+  linkId: string,
+): Promise<StoredRequest[]> {
+  const rows = await sql<RequestRow[]>`
+    SELECT * FROM requests
+    WHERE link_id = ${linkId} AND state IN ('cancelled', 'expired') AND seen_at IS NOT NULL
+      AND closed_reported_at IS NULL
+    ORDER BY id
   `;
   return rows.map(requestFromRow);
 }
@@ -212,6 +230,7 @@ function requestFromRow(row: RequestRow): StoredRequest {
     progressTs: row.progress_ts,
     expiresAt: row.expires_at,
     closedReason: row.closed_reason,
+    closedReportedAt: row.closed_reported_at,
   };
 }
 
@@ -240,5 +259,6 @@ function requestColumns(request: Request): Omit<RequestRow, "id"> {
     progress_ts: request.progressTs,
     expires_at: request.expiresAt,
     closed_reason: request.closedReason,
+    closed_reported_at: request.closedReportedAt,
   };
 }

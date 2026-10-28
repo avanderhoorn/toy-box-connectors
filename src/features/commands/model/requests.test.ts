@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { RequestState } from "@requests/model/lifecycle";
 import {
+  isCancelReason,
   REASON_LIMIT,
   reasonSchema,
   requestEnding,
@@ -99,6 +100,13 @@ describe("how a request ended", () => {
     ["constructor", "cancelled"],
   ])("cancelled for %p reads as why", (closedReason, clause) => {
     expect(requestEnding({ state: "cancelled", closedReason }).clause).toBe(clause);
+  });
+
+  test("tells why the bridge cancelled a request from why the lead dismissed one", () => {
+    expect(isCancelReason("requester_denied")).toBe(true);
+    for (const reason of [null, "answered in standup", "constructor"]) {
+      expect(isCancelReason(reason)).toBe(false);
+    }
   });
 
   test("only a deleted message cautions against repeating it", () => {

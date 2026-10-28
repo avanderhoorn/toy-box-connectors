@@ -3,9 +3,11 @@
 // Inbox is how the lead reads Slack. It shows each request that's new or changed since the lead
 // last read it, with every message the request holds, then the requests the lead has read and not
 // answered yet. Above them it reports, once each, how the owner decided the proposals the lead
-// made, and which ended without a decision. Reading serves what it shows, so the next inbox shows
-// only what changed since. Slack text is fenced and labeled with its author's role now, which only
-// the bridge can write, and every name is one line that can't pass for a label.
+// made, and which ended without a decision. Below them it reports, once each, the requests the
+// lead read that were cancelled or expired, with why but never what they said, so it stops work on
+// them. Reading serves what it shows, so the next inbox shows only what changed since. Slack text
+// is fenced and labeled with its author's role now, which only the bridge can write, and every
+// name is one line that can't pass for a label.
 
 import { z } from "zod";
 import type { StaleReason } from "@links/model/approvals";
@@ -13,7 +15,7 @@ import { staleReasons } from "@links/model/cards";
 import type { Request } from "@requests/model/lifecycle";
 import { isPending, type WakeRequest } from "@wakes/model";
 import { commandContract, type PresentContext } from "./contract";
-import { requestIdSchema } from "./requests";
+import { cancelReasonSchema, requestEnding, requestIdSchema } from "./requests";
 import { fenceFor, NAME_LIMIT, oneLine, personName } from "./slackText";
 import { ago, count, duration } from "./wording";
 
@@ -132,6 +134,19 @@ const waitingRequestSchema = z
   .strict();
 export type WaitingRequest = z.output<typeof waitingRequestSchema>;
 
+const endedRequestSchema = z
+  .object({
+    id: requestIdSchema,
+    requester: personSchema,
+    state: z.enum(["cancelled", "expired"]),
+    reason: cancelReasonSchema
+      .nullable()
+      .describe("Why the bridge cancelled it, or null once expired"),
+  })
+  .strict()
+  .describe("A request the lead read that ended without an answer");
+export type EndedRequest = z.output<typeof endedRequestSchema>;
+
 export const inboxResultSchema = z
   .object({
     linked: z.boolean().describe("Whether the caller's Toy Box channel is linked to Slack"),
@@ -140,6 +155,14 @@ export const inboxResultSchema = z
     more: z.number().int().nonnegative().describe("New or changed requests past the limit"),
     waiting: z.array(waitingRequestSchema).describe("Read requests without an answer yet"),
     moreWaiting: z.number().int().nonnegative().describe("Read requests past the limit"),
+    ended: z
+      .array(endedRequestSchema)
+      .describe("Read requests that were cancelled or expired since, now reported, oldest first"),
+    moreEnded: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe("Ended requests past the limit, left for the next inbox"),
   })
   .strict();
 export type InboxResult = z.output<typeof inboxResultSchema>;
@@ -194,7 +217,10 @@ function isRead<T extends ListedRequest>(
   return request.state !== "open" && !isPending(request);
 }
 
-/** Inbox as Markdown: settings, then each new or changed request, then what still waits. */
+/**
+ * Inbox as Markdown: settings, then each new or changed request, then what still waits, then what
+ * no longer needs the lead.
+ */
 export function presentInbox(inbox: InboxResult, { at }: PresentContext): string {
   const sections: string[] = [];
   if (inbox.settings.length > 0) {
@@ -225,6 +251,7 @@ export function presentInbox(inbox: InboxResult, { at }: PresentContext): string
     const rows = waiting.map((request) => presentWaiting(request, at));
     sections.push(["## Still waiting on you", ...rows, ...more].join("\n"));
   }
+  if (inbox.ended.length > 0) sections.push(presentEnded(inbox));
   const example = requests[0] ?? waiting[0];
   if (example) sections.push(presentFooter(inbox, example));
   return sections.join("\n\n");
@@ -404,6 +431,21 @@ function presentWaiting(request: WaitingRequest, at: number): string {
     status,
     request.snippet ? `"${request.snippet.replaceAll('"', "'")}"` : "no text to show",
   ].join(" · ");
+}
+
+/** The requests the lead read that ended without an answer, with why but never what they said. */
+function presentEnded({ ended, moreEnded }: InboxResult): string {
+  const rows = ended.map((request) => {
+    const { clause, caution } = requestEnding({
+      state: request.state,
+      closedReason: request.reason,
+    });
+    const why = caution ? `${clause}. ${caution}` : clause;
+    return `- r${request.id} · ${named(request.requester)} · ${why}`;
+  });
+  const more = moreEnded > 0 ? [`- and ${moreEnded} more, which the next inbox lists`] : [];
+  const stop = "Stop any work on these. A reply you queued for one won't post.";
+  return ["## No longer needed", ...rows, ...more, stop].join("\n");
 }
 
 function presentFooter(inbox: InboxResult, example: { id: number; revision: number }): string {

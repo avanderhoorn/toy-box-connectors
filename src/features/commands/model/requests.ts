@@ -117,6 +117,16 @@ const cancelReasons: Record<CancelReason, string> = {
   thread_gone: "Slack could not deliver to its thread",
 };
 
+/** Why the bridge cancelled a request. */
+export const cancelReasonSchema = z.enum(
+  Object.keys(cancelReasons) as [CancelReason, ...CancelReason[]],
+);
+
+/** Whether a closed reason is why the bridge cancelled a request, not why the lead dismissed it. */
+export function isCancelReason(reason: string | null): reason is CancelReason {
+  return reason !== null && Object.hasOwn(cancelReasons, reason);
+}
+
 const DAY = 24 * 60 * 60_000;
 
 /** Why a cancelled or expired request ended. */
@@ -128,11 +138,9 @@ export function requestEnding({
     const days = Math.round(requestLifetimeMs / DAY);
     return { clause: `expired after ${days} days without an answer`, caution: null };
   }
-  if (closedReason === null || !Object.hasOwn(cancelReasons, closedReason)) {
-    return { clause: "cancelled", caution: null };
-  }
+  if (!isCancelReason(closedReason)) return { clause: "cancelled", caution: null };
   return {
-    clause: `cancelled because ${cancelReasons[closedReason as CancelReason]}`,
+    clause: `cancelled because ${cancelReasons[closedReason]}`,
     caution: closedReason === "source_deleted" ? "Don't repeat what it said." : null,
   };
 }

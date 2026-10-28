@@ -17,6 +17,7 @@ const MINUTE = 60_000;
 const alice = { userId: "U0ALICE", name: "Alice Chen" };
 const bob = { userId: "U0BOB", name: "Bob Diaz" };
 const carol = { userId: "U0CAROL", name: "Carol Ng" };
+const dana = { userId: "U0DANA", name: "Dana Wu" };
 const releaseEng = { id: "C0RELEASE", name: "release-eng" };
 
 const r14: ServedRequest = {
@@ -101,6 +102,8 @@ function inbox(changes: Partial<InboxResult> = {}): InboxResult {
     more: 0,
     waiting: [],
     moreWaiting: 0,
+    ended: [],
+    moreEnded: 0,
     ...changes,
   };
 }
@@ -132,6 +135,10 @@ describe("presenting inbox", () => {
       requests: [r14, r15],
       more: 1,
       waiting: [r9, r11],
+      ended: [
+        { id: 7, requester: dana, state: "cancelled", reason: "source_deleted" },
+        { id: 8, requester: bob, state: "expired", reason: null },
+      ],
     });
     expect(present(result)).toBe(
       [
@@ -160,6 +167,11 @@ describe("presenting inbox", () => {
         "## Still waiting on you",
         '- r9 · revision 2 · Alice Chen (owner) · in progress, asked 2 hours ago · "draft the migration plan"',
         '- r11 · revision 1 · Carol Ng · held 40 minutes for the owner\'s decision · "can you rotate the staging keys?"',
+        "",
+        "## No longer needed",
+        "- r7 · Dana Wu · cancelled because the message was deleted in Slack. Don't repeat what it said.",
+        "- r8 · Bob Diaz · expired after 7 days without an answer",
+        "Stop any work on these. A reply you queued for one won't post.",
         "",
         "---",
         "1 more request is waiting. Run `toy-box-slack inbox` again once you've handled these.",
@@ -211,6 +223,25 @@ describe("presenting inbox", () => {
     );
     expect(output).toContain("toy-box-slack reply r11 --revision 1 <<'EOF'");
     expect(output).toContain("then run `toy-box-slack hold <id> --reason <why>`.");
+  });
+
+  test("with only requests that ended, lists them and counts the rest for the next inbox", () => {
+    const denied = {
+      id: 3,
+      requester: carol,
+      state: "cancelled",
+      reason: "requester_denied",
+    } as const;
+    expect(present(inbox({ ended: [denied], moreEnded: 2 }))).toBe(
+      [
+        "No Slack requests need you right now.",
+        "",
+        "## No longer needed",
+        "- r3 · Carol Ng · cancelled because the person who asked is no longer allowed",
+        "- and 2 more, which the next inbox lists",
+        "Stop any work on these. A reply you queued for one won't post.",
+      ].join("\n"),
+    );
   });
 
   test("a seen request says when it was asked, and a quote in its snippet can't end the quote", () => {

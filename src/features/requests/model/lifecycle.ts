@@ -88,6 +88,8 @@ export type Request = {
   expiresAt: number;
   /** The lead's reason for a dismissal, or the cancel reason. */
   closedReason: string | null;
+  /** When inbox told the lead a request it read was cancelled or expired, so it says so once. */
+  closedReportedAt: number | null;
 };
 
 /** What opening a request needs from the message that started it. */
@@ -144,6 +146,7 @@ export function openRequest(request: NewRequest, now: number): Request {
     progressTs: null,
     expiresAt: now + requestLifetimeMs,
     closedReason: null,
+    closedReportedAt: null,
   };
 }
 
@@ -262,6 +265,24 @@ export function expireRequest<T extends Request>(request: T, now: number): T {
     throw new RangeError(`The request expires at ${request.expiresAt}, not ${now}`);
   }
   return move(request, "expired", closing(null));
+}
+
+/**
+ * Records that inbox told the lead a request it read was cancelled or expired, so it stops work on
+ * it. A request the lead never read needs no word.
+ */
+export function reportEnding<T extends Request>(
+  request: T,
+  now: number,
+): T & { state: "cancelled" | "expired" } {
+  const { state } = request;
+  if (state !== "cancelled" && state !== "expired") {
+    throw new RequestStateError(state, "be reported as no longer needed");
+  }
+  if (request.seenAt === null) {
+    throw new RequestStateError(state, "be reported to a lead that never read it");
+  }
+  return { ...request, state, closedReportedAt: now };
 }
 
 /** Stops reminders while the lead waits for the owner to decide. Holding again replaces the reason. */

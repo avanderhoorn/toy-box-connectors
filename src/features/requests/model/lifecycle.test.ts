@@ -13,6 +13,7 @@ import {
   markSourceUnverified,
   openRequest,
   releaseHold,
+  reportEnding,
   requestLifetimeMs,
   RequestStateError,
   requestStates,
@@ -94,6 +95,7 @@ describe("opening", () => {
       touchedAt: null,
       expiresAt: openedAt + 7 * 24 * 60 * 60_000,
       closedReason: null,
+      closedReportedAt: null,
     });
     expect(requestLifetimeMs).toBe(604_800_000);
   });
@@ -304,6 +306,34 @@ describe("closing", () => {
 
   test("a request can't expire early", () => {
     expect(() => expireRequest(inState("seen"), opened.expiresAt - 1)).toThrow(RangeError);
+  });
+
+  test("the lead is told once that a request it read was cancelled or expired", () => {
+    const ended = [
+      cancelRequest(inState("in_progress"), "requester_denied"),
+      expireRequest(inState("seen"), opened.expiresAt),
+    ];
+    for (const request of ended) {
+      expect<Request>(reportEnding(request, later)).toEqual({
+        ...request,
+        closedReportedAt: later,
+      });
+    }
+  });
+
+  test("only a request that ended without an answer, after the lead read it, is reported", () => {
+    for (const state of requestStates.filter(
+      (state) => !["cancelled", "expired"].includes(state),
+    )) {
+      expect(() => reportEnding(inState(state), later)).toThrow(
+        `A request that's ${state.replace("_", " ")} can't be reported as no longer needed.`,
+      );
+    }
+    for (const state of ["cancelled", "expired"] as const) {
+      expect(() => reportEnding(inState(state, { seenAt: null }), later)).toThrow(
+        `A request that's ${state} can't be reported to a lead that never read it.`,
+      );
+    }
   });
 });
 
