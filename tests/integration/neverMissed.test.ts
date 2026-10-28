@@ -4,6 +4,7 @@ import { expect, test } from "bun:test";
 import { createStoredMessage } from "@activity/server/testFixtures";
 import { askMessage } from "@slackapi/model/testFixtures";
 import type { SlackTs } from "@slackapi/model/ts";
+import { markConnected } from "@slackapi/server/installation";
 import { withDatabase } from "./bridgeProcess";
 import { ALICE, BOT, connectedBridge, posted, said, timestamps } from "./connectedBridge";
 import { waitFor } from "./waitFor";
@@ -54,8 +55,13 @@ test("a request the bridge acked survives a crash, and the next bridge wakes the
 }, 15_000);
 
 test("what Slack kept while the bridge was down reaches the lead once it's back, from the link on", async () => {
-  const [threadTs] = timestamps(1, Date.now() - 600_000);
-  const [beforeTs, linkedTs, askedTs, editedTs, repliedTs, missedTs, followedTs] = timestamps(7);
+  // Slack's last hello to the bridge came long before it went down, so catch-up reads back to it.
+  const hello = Date.now() - 45 * 60_000;
+  const [threadTs] = timestamps(1, hello - 600_000);
+  const [beforeTs, linkedTs, askedTs, editedTs, repliedTs, missedTs, followedTs] = timestamps(
+    7,
+    hello + 60_000,
+  );
   const { slack, toyBox, dataFolder, inbox, post, crash, stop, saying } = await connectedBridge({
     link: { linked_at_ts: linkedTs },
   });
@@ -77,7 +83,10 @@ test("what Slack kept while the bridge was down reaches the lead once it's back,
   slack.setMessage("C-link", said(ALICE, missedTs, `<@${BOT}> and the release notes?`));
   slack.setMessage("C-link", said(ALICE, followedTs, "It's up now.", { thread_ts: threadTs }));
   // The fixture's message is from 2023, long past the 30 days the ledger keeps one.
-  await crash((database) => createStoredMessage(database, askMessage()));
+  await crash(async (database) => {
+    await createStoredMessage(database, askMessage());
+    await database.write((transaction) => markConnected(transaction, hello));
+  });
 
   await waitFor(() => expect(toyBox.runs).toHaveLength(2), 5_000);
   expect(await inbox()).toMatchObject({
