@@ -216,8 +216,7 @@ export function consecutiveFailures(outcomes: readonly WakeOutcome[]): number {
   return settled === -1 ? outcomes.length : settled;
 }
 
-// Answering requests wait on the outbox, and an unverified source waits on repair, not the lead.
-// Repair flags the request updated if it changed while unverified.
+// Answering requests wait on the outbox, not the lead.
 function isPending({ state, attention }: WakeRequest): boolean {
   return state === "open" || attention === "updated" || attention === "reply_failed";
 }

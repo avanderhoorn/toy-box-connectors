@@ -166,25 +166,6 @@ describe("deciding whether to wake a link's lead", () => {
       });
     });
 
-    test("an unverified source waits on repair, so only an open request or a reminder wakes the lead", () => {
-      const unverified = (state: WakeRequest["state"]) =>
-        link({
-          requests: [request({ state, attention: "source_unverified", seenAt: minutes(-9) })],
-        });
-      expect(decideWake(now, unverified("open"), idleLead, open)).toEqual({
-        kind: "wake",
-        reason: "requests",
-      });
-      expect(decideWake(now, unverified("seen"), idleLead, open)).toEqual({
-        kind: "wait",
-        until: minutes(21),
-      });
-      expect(decideWake(now, unverified("in_progress"), idleLead, open)).toEqual({
-        kind: "wait",
-        until: minutes(111),
-      });
-    });
-
     test("one wake covers a burst, 10 seconds after the latest and at most 30 after the oldest", () => {
       const burst = (oldest: number) =>
         link({
