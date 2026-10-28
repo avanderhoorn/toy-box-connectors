@@ -85,6 +85,7 @@ settings:
       - member_left_channel
       - channel_archive
       - channel_deleted
+      - group_deleted
       - channel_rename
       - group_rename
       - app_uninstalled
@@ -197,7 +198,7 @@ route in every Slack client.
 [Manifest app-home fields](https://docs.slack.dev/reference/app-manifest/#features).
 
 **Subscribe to lifecycle signals, but also reconcile channel metadata.** The
-manifest includes public archive/delete, public/private rename, membership,
+manifest includes public archive, public/private delete and rename, membership,
 sharing, and ID-change events. Compare `member_left_channel.user` with the bot's
 authenticated user ID to suspend a binding immediately. Public-to-private
 conversion arrives as a `message` subtype already covered by message
@@ -216,6 +217,7 @@ failures. A rename changes display metadata, not our authorization key.
 [join](https://docs.slack.dev/reference/events/member_joined_channel/),
 [public archive](https://docs.slack.dev/reference/events/channel_archive/),
 [public delete](https://docs.slack.dev/reference/events/channel_deleted/),
+[private delete](https://docs.slack.dev/reference/events/group_deleted/),
 [public rename](https://docs.slack.dev/reference/events/channel_rename/),
 [private rename](https://docs.slack.dev/reference/events/group_rename/),
 [private archive limitation](https://docs.slack.dev/reference/events/group_archive/),

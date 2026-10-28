@@ -76,6 +76,7 @@ describe("reading events", () => {
     const changes = [
       [{ type: "channel_archive", channel: "C1", user: "UALICE" }, "archived"],
       [{ type: "channel_deleted", channel: "C1" }, "deleted"],
+      [{ type: "group_deleted", channel: "C1" }, "deleted"],
       [{ type: "channel_rename", channel: { id: "C1", name: "new", created: 1 } }, "renamed"],
       [{ type: "group_rename", channel: { id: "C1", name: "new", created: 1 } }, "renamed"],
       [{ type: "channel_shared", connected_team_id: "TOTHER", channel: "C1" }, "shared"],

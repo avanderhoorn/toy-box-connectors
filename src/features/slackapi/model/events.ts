@@ -77,6 +77,7 @@ const eventSchemas = {
   member_left_channel: membershipEvent("left"),
   channel_archive: channelEvent("archived"),
   channel_deleted: channelEvent("deleted"),
+  group_deleted: channelEvent("deleted"),
   channel_rename: renameEvent,
   group_rename: renameEvent,
   channel_shared: channelEvent("shared"),

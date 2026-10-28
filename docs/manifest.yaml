@@ -38,6 +38,7 @@ settings:
       - member_left_channel
       - channel_archive
       - channel_deleted
+      - group_deleted
       - channel_rename
       - group_rename
       - app_uninstalled
