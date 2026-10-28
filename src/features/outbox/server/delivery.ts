@@ -50,7 +50,47 @@ export async function settleDelivery(
     await cancelThreadRequest(tx, settled, now);
   }
   if (item.requestId !== null) await settleRequestAnswer(tx, item.requestId, now);
+  await purgeRemovedLinkItem(tx, settled);
   return settled;
+}
+
+/** A linkless card is not an orphan of a link that was removed. */
+export async function linkWasRemoved(tx: Bun.SQL, linkId: string | null): Promise<boolean> {
+  if (linkId === null) return false;
+  const [link] = await tx`SELECT id FROM links WHERE id = ${linkId}`;
+  return !link;
+}
+
+async function purgeRemovedLinkItem(tx: Bun.SQL, item: OutboxItem): Promise<void> {
+  if (!(await linkWasRemoved(tx, item.linkId))) return;
+  if (["queued", "sending", "delivery_unknown", "stray"].includes(item.state)) {
+    if (item.kind === "card" || item.state !== "queued") return;
+  }
+  if (item.kind === "card") {
+    if (item.phase === "post" && item.state === "sent") return;
+    if (item.approvalId !== null) {
+      const [pending] = await tx`
+        SELECT id FROM outbox WHERE kind = 'card' AND phase = 'post'
+          AND approval_id = ${item.approvalId} AND state IN ('queued', 'sending', 'delivery_unknown')
+        LIMIT 1
+      `;
+      if (pending) return;
+      if (item.phase === "post") {
+        const [posted] = await tx`SELECT id FROM approvals
+          WHERE id = ${item.approvalId} AND card_ts IS NOT NULL`;
+        if (posted) return;
+      }
+      await tx`UPDATE outbox SET payload = '{"redacted":"unlink"}'
+        WHERE kind = 'card' AND approval_id = ${item.approvalId} AND state = 'stray'`;
+      await tx`DELETE FROM outbox WHERE kind = 'card' AND approval_id = ${item.approvalId}
+        AND state <> 'stray'`;
+      await tx`DELETE FROM approvals WHERE id = ${item.approvalId} AND link_id = ${item.linkId}`;
+    } else {
+      await tx`DELETE FROM outbox WHERE id = ${item.id}`;
+    }
+  } else if (["reply", "progress", "publication"].includes(item.kind)) {
+    await tx`DELETE FROM outbox WHERE id = ${item.id}`;
+  }
 }
 
 /** A refused or misplaced reply closes only an active request in its own scope. */
@@ -90,6 +130,7 @@ export async function settleQueuedDelivery(
   if (item.kind === "reply" && item.phase === "final" && item.requestId !== null) {
     await settleRequestAnswer(tx, item.requestId, now);
   }
+  if (settled) await purgeRemovedLinkItem(tx, settled);
   return settled;
 }
 

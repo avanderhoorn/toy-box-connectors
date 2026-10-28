@@ -13,6 +13,7 @@ import { createBotClient, type BotClient } from "@slackapi/server/botClient";
 import { writeChannelInfo } from "@slackapi/server/channels";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../../../../tests/fakes/slack";
+import { outboxMetadata } from "../model/delivery";
 import { renderMarkdown } from "../model/rendering";
 import { settleRequestAnswer } from "./answers";
 import {
@@ -21,9 +22,12 @@ import {
   readDueReconciliations,
   readOutboxItem,
   readReadyOutbox,
+  settleOutboxAttempt,
+  startOutboxAttempt,
 } from "./database";
 import { createPostDelivery } from "./posts";
 import { createReconciliation } from "./reconcile";
+import { createRetraction } from "./retract";
 
 async function setup({
   kind = "reply",
@@ -135,6 +139,196 @@ async function setup({
     },
   };
 }
+
+test.each(["reply", "publication"] as const)(
+  "a redacted orphan %s is forgotten after proof, without withdrawing its valid Slack post",
+  async (kind) => {
+    const { database, slack, item, posted, read, reconcile } = await setup({ kind });
+    await database.write(async (tx) => {
+      await tx`UPDATE outbox SET payload = '{"redacted":"unlink"}' WHERE id = ${item.id}`;
+      await tx`DELETE FROM requests`;
+      await tx`DELETE FROM links`;
+    });
+    expect(await reconcile(item.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "sent", payload: { redacted: "unlink" }, payloadHash: item.payloadHash },
+    });
+    expect(await read()).toBeNull();
+    expect(slack.getMessages("C-link").some((message) => message.ts === posted.ts)).toBe(true);
+    expect(slack.calls.filter((call) => call.method === "chat.delete")).toEqual([]);
+  },
+);
+
+test("a redacted orphan misplaced reply still gets withdrawn before both rows are forgotten", async () => {
+  const { database, slack, bot, item, posted, now, read, reconcile } = await setup({
+    misplaced: true,
+  });
+  await database.write(async (tx) => {
+    await tx`UPDATE outbox SET payload = '{"redacted":"unlink"}' WHERE id = ${item.id}`;
+    await tx`DELETE FROM requests`;
+    await tx`DELETE FROM links`;
+  });
+  expect(await reconcile(item.id)).toMatchObject({ kind: "settled", item: { state: "stray" } });
+  expect(await read()).toMatchObject({ state: "stray", payload: { redacted: "unlink" } });
+  const cleanup = (await database.read((sql) => readReadyOutbox(sql, now()))).find(
+    (row) => row.kind === "retract",
+  );
+  if (!cleanup) throw new Error("The stray needs withdrawal.");
+  expect(await createRetraction(database, bot, { now }).retract(cleanup.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "sent" },
+  });
+  expect(await read()).toBeNull();
+  expect(await database.read((sql) => readOutboxItem(sql, cleanup.id))).toBeNull();
+  expect(slack.getMessages("C-link").some((message) => message.ts === posted.ts)).toBe(false);
+});
+
+test.each(["not_in_channel", "channel_not_found", "team_access_not_granted"])(
+  "a channel-refused orphan is forgotten instead of waiting for a link to reactivate: %s",
+  async (error) => {
+    const { database, slack, item, read, reconcile } = await setup();
+    await database.write((tx) => tx`DELETE FROM links`);
+    slack.failNext("conversations.replies", { error });
+    expect(await reconcile(item.id)).toEqual({ kind: "changed" });
+    expect(await read()).toBeNull();
+    const calls = slack.calls.length;
+    expect(await reconcile(item.id)).toEqual({ kind: "changed" });
+    expect(slack.calls).toHaveLength(calls);
+  },
+);
+
+test("unlink makes an already channel-held item due for local disposal without another read", async () => {
+  const { database, slack, item, now, read, reconcile } = await setup();
+  slack.failNext("conversations.replies", { error: "not_in_channel" });
+  expect(await reconcile(item.id)).toMatchObject({
+    kind: "waiting",
+    reason: "not_in_channel",
+    until: null,
+  });
+  await database.write((tx) => tx`DELETE FROM links`);
+  expect(await database.read((sql) => readDueReconciliations(sql, now()))).toHaveLength(1);
+  const calls = slack.calls.length;
+  expect(await reconcile(item.id)).toEqual({ kind: "changed" });
+  expect(await read()).toBeNull();
+  expect(slack.calls).toHaveLength(calls);
+});
+
+test("a final empty pass forgets an orphan instead of retaining an unresolvable item", async () => {
+  const { database, slack, item, posted, read, reconcile, advance } = await setup();
+  slack.deleteMessage("C-link", posted.ts);
+  await database.write((tx) => tx`DELETE FROM links`);
+  expect(await reconcile(item.id)).toMatchObject({ kind: "settled", item: { reconcilePass: 1 } });
+  advance(50_000);
+  expect(await reconcile(item.id)).toMatchObject({ kind: "settled", item: { reconcilePass: 2 } });
+  advance(60_000);
+  expect(await reconcile(item.id)).toEqual({ kind: "changed" });
+  expect(await read()).toBeNull();
+  expect(slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
+});
+
+test.each([
+  { reconcile_pass: 3, next_attempt_at: null },
+  { error: "invalid_update_target", next_attempt_at: null },
+])("an orphan that stopped before unlink is locally discarded: %j", async (changes) => {
+  const { database, slack, item, now, read, reconcile } = await setup();
+  await database.write(async (tx) => {
+    await tx`UPDATE outbox SET ${tx(changes)} WHERE id = ${item.id}`;
+    await tx`DELETE FROM links`;
+  });
+  expect(await database.read((sql) => readDueReconciliations(sql, now()))).toHaveLength(1);
+  const calls = slack.calls.length;
+  expect(await reconcile(item.id)).toEqual({ kind: "changed" });
+  expect(await read()).toBeNull();
+  expect(slack.calls).toHaveLength(calls);
+});
+
+test("a redacted old-message edit keeps its target ts and can be proved after unlink", async () => {
+  const { database, bot, item, posted, now, advance, reconcile } = await setup();
+  await reconcile(item.id);
+  const rendered = renderMarkdown("Progress");
+  if (rendered.kind !== "rendered") throw new Error("The edit needs rendered output.");
+  const { text, blocks, parse } = rendered.message;
+  const payload = { text, blocks, parse, ts: posted.ts };
+  const queued = await database.write((tx) =>
+    queueItem(
+      tx,
+      {
+        kind: "progress",
+        linkId: "link",
+        channelId: "C-link",
+        threadTs: item.threadTs,
+        payload,
+      },
+      now(),
+    ),
+  );
+  const sending = await database.write(async (tx) => {
+    const row = await readOutboxItem(tx, queued.id);
+    if (!row) throw new Error("The edit disappeared.");
+    const result = await startOutboxAttempt(tx, row, payload, "chat.update", now());
+    if (result.kind !== "started") throw new Error("The edit should start.");
+    return result.item;
+  });
+  await bot.call("chat.update", (client) =>
+    client.chat.update({
+      channel: sending.channelId,
+      ...payload,
+      metadata: outboxMetadata(sending),
+    }),
+  );
+  await database.write(async (tx) => {
+    await settleOutboxAttempt(
+      tx,
+      sending,
+      {
+        state: "delivery_unknown",
+        nextAttemptAt: now() + 10_000,
+        error: "interrupted",
+      },
+      now(),
+    );
+    await tx`UPDATE outbox SET payload = ${JSON.stringify({ redacted: "unlink", ts: posted.ts })}
+      WHERE id = ${queued.id}`;
+    await tx`DELETE FROM links`;
+  });
+  advance(10_000);
+  expect(await reconcile(queued.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "sent", slackTs: posted.ts, evidence: "metadata" },
+  });
+  expect(await database.read((sql) => readOutboxItem(sql, queued.id))).toBeNull();
+});
+
+test("an unlinked unknown card post survives until its stale update can follow proved delivery", async () => {
+  const { database, slack, item, approval, delivery, now, read, reconcile } = await setup({
+    kind: "card",
+  });
+  if (!approval) throw new Error("The fixture needs an approval.");
+  await database.write(async (tx) => {
+    await staleApprovals(tx, [approval], "link_changed", now());
+    await tx`DELETE FROM links`;
+  });
+  const update = (await database.read((sql) => readReadyOutbox(sql, now()))).find(
+    (row) => row.kind === "card" && row.phase === "update",
+  );
+  if (!update) throw new Error("The card needs its stale update.");
+  expect(await delivery.updateCard(update.id)).toMatchObject({
+    kind: "waiting",
+    reason: "card_not_posted",
+  });
+  expect(await reconcile(item.id)).toMatchObject({ kind: "settled", item: { state: "sent" } });
+  expect(await read()).not.toBeNull();
+  expect(await delivery.updateCard(update.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "sent" },
+  });
+  expect(await database.read((sql) => sql`SELECT id FROM outbox WHERE link_id = 'link'`)).toEqual(
+    [],
+  );
+  expect(await database.read((sql) => readApproval(sql, approval.id))).toBeNull();
+  const card = slack.getMessages("C-link").find((message) => message.bot_id === "B-bot");
+  expect(card?.blocks).not.toContainEqual(expect.objectContaining({ type: "actions" }));
+});
 
 test("a complete thread read finds exact metadata, commits proof and answers in one transaction", async () => {
   const { database, slack, item, request, reconcile } = await setup({ pageSize: 1 });

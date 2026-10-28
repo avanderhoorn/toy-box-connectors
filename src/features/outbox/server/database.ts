@@ -148,20 +148,23 @@ export async function readReadyOutbox(sql: Bun.SQL, now: number): Promise<Outbox
   return rows.map(outboxItem);
 }
 
-/** Exhausted unknowns remain unknown, but no longer trigger automatic reads. */
+/** Exhausted linked work stops; stopped orphans remain due for local disposal. */
 export async function readDueReconciliations(sql: Bun.SQL, now: number): Promise<OutboxItem[]> {
   const rows = await sql<(OutboxRow & { link_status: string | null })[]>`
     SELECT outbox.*, links.status AS link_status FROM outbox
     LEFT JOIN links ON links.id = outbox.link_id
-    WHERE outbox.state = 'delivery_unknown' AND outbox.reconcile_pass < 3
+    WHERE outbox.state = 'delivery_unknown' AND (outbox.reconcile_pass < 3
+      OR (outbox.link_id IS NOT NULL AND links.id IS NULL))
       AND (outbox.next_attempt_at IS NULL OR outbox.next_attempt_at <= ${now})
     ORDER BY outbox.next_attempt_at, outbox.number
   `;
   return rows
-    .filter((row) =>
-      channelFailureReason(row.error ?? "") !== null
-        ? row.link_status === "active"
-        : row.next_attempt_at !== null,
+    .filter(
+      (row) =>
+        (row.link_id !== null && row.link_status === null) ||
+        (channelFailureReason(row.error ?? "") !== null
+          ? row.link_status === "active"
+          : row.next_attempt_at !== null),
     )
     .map(outboxItem);
 }

@@ -3,6 +3,9 @@ import { join } from "node:path";
 import { bridgeMigrations, openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
 import { createTestFolder, openTestDatabase } from "@bridge/server/testFixtures";
 import { purgeForUninstall } from "@links/server/purge";
+import { createStoredLink } from "@links/server/testFixtures";
+import { readRequest } from "@requests/server/database";
+import { createStoredRequest } from "@requests/server/testFixtures";
 import type { OutboxMethod } from "../model/delivery";
 import {
   advanceReconciliation,
@@ -20,7 +23,7 @@ import {
   type OutboxItem,
   type OutboxSettlement,
 } from "./database";
-import { settleQueuedDelivery } from "./delivery";
+import { cancelThreadRequest, settleDelivery, settleQueuedDelivery } from "./delivery";
 
 async function item(database: BridgeDatabase, reference: string | number): Promise<OutboxItem> {
   const found = await database.read((sql) => readOutboxItem(sql, reference));
@@ -83,6 +86,68 @@ test.each([{ attempts: 1 }, { payload_hash: "edited" }])(
       ),
     ).toBeNull();
     expect(await item(database, queued.id)).toEqual(changed);
+  },
+);
+
+test.each([
+  { state: "failed", error: "thread_not_found" },
+  {
+    state: "stray",
+    slackTs: "1700000200.000100",
+    evidence: "response",
+    error: "wrong_thread",
+    metadataOk: true,
+    nextAttemptAt: 1_000,
+  },
+] satisfies OutboxSettlement[])(
+  "a refused or misplaced progress post cancels its request: %j",
+  async (outcome) => {
+    const database = await openTestDatabase();
+    await createStoredLink(database);
+    const request = await createStoredRequest(database, { state: "in_progress", seenAt: 1 });
+    const queued = await queue(database, {
+      kind: "progress",
+      linkId: request.linkId,
+      channelId: request.channelId,
+      threadTs: request.rootTs,
+      requestId: request.id,
+    });
+    const sending = await start(database, queued);
+    await database.write((tx) => settleDelivery(tx, sending, outcome, 1_000));
+    expect(await database.read((sql) => readRequest(sql, request.id))).toMatchObject({
+      state: "cancelled",
+      closedReason: "thread_gone",
+      attention: null,
+    });
+    expect(
+      await database.read(
+        (sql) => sql`SELECT request_id, payload FROM outbox
+      WHERE kind = 'reaction'`,
+      ),
+    ).toEqual([
+      {
+        request_id: request.id,
+        payload: JSON.stringify({ action: "remove", name: "eyes", timestamp: request.sourceTs }),
+      },
+    ]);
+  },
+);
+
+test.each(["reaction", "status"] as const)(
+  "a %s with a request's exact thread scope cannot cancel it",
+  async (kind) => {
+    const database = await openTestDatabase();
+    const request = await createStoredRequest(database, { state: "in_progress", seenAt: 1 });
+    const item = await queue(database, {
+      kind,
+      linkId: request.linkId,
+      channelId: request.channelId,
+      threadTs: request.rootTs,
+      requestId: request.id,
+    });
+    await database.write((tx) => cancelThreadRequest(tx, item, 1_000));
+    expect(await database.read((sql) => readRequest(sql, request.id))).toEqual(request);
+    expect(await database.read((sql) => sql`SELECT id FROM outbox`)).toHaveLength(1);
   },
 );
 

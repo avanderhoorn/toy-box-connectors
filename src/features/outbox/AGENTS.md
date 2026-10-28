@@ -50,6 +50,11 @@ the read deadline. The due reader selects it again only once its link is active,
 releases that hold conditionally before reading. A refused linkless card needs manual resolution.
 `slackapi/model/history.ts` keeps raw messages intact for their owning decoder and distinguishes
 an empty page from an exhausted cursor.
+After unlink, redacted sending or unknown posts still settle against their original hash.
+An edit retains its frozen ts beside the redaction marker. Valid late deliveries are purged,
+not withdrawn. A misplaced one still gets withdrawn first. Channel-refused and exhausted
+orphans are purged, including a hold or final pass that predates unlink. The due reader keeps
+these stopped orphans eligible for local disposal without another Slack call.
 
 `server/delivery.ts` commits both response and read proof through the same settlement path:
 the initial card ts, misplaced cleanup and request settlement cannot be lost between them.
@@ -77,6 +82,9 @@ A retained unlink target needs no message body. Once confirmed absent, a target 
 link ID no longer exists is purged with its operation. Failed orphan cleanup keeps its redacted
 stray for the operator. Cleanup settles a final's request only if its link, channel and thread
 still match, and a local cleanup refusal never settles a reply merely by its numeric request ID.
+An unlinked card's initial delivery remains until its stale update settles, then its approval
+and card rows are purged. A card that never started is dropped without posting a new stale card.
+Stray card targets survive that purge, redacted, until withdrawal finishes.
 
 `model/posting.ts` checks the current installation, link, destination, requester and request
 revision. Only explicit follow-ups reach answered, dismissed or expired requests, and none

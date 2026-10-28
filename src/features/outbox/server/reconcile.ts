@@ -11,7 +11,7 @@ import { readInstallation } from "@slackapi/server/installation";
 import { ZodError } from "zod";
 import { reconciliationReceipt } from "../model/delivery";
 import { advanceReconciliation, readOutboxItem, type OutboxItem } from "./database";
-import { settleDelivery } from "./delivery";
+import { linkWasRemoved, settleDelivery } from "./delivery";
 import type { PostStep } from "./posts";
 
 type Preparation =
@@ -51,9 +51,17 @@ export function createReconciliation(
 
   async function prepare(id: string): Promise<Preparation> {
     if (closed) return { kind: "waiting", reason: "closed", until: null };
-    return database.read(async (sql) => {
+    return database.write(async (sql) => {
       const item = await readOutboxItem(sql, id);
       if (!item || item.state !== "delivery_unknown") return { kind: "changed" };
+      if (
+        (item.reconcilePass === 3 ||
+          item.nextAttemptAt === null ||
+          channelFailureReason(item.error ?? "") !== null) &&
+        (await forgetStoppedOrphan(sql, item))
+      ) {
+        return { kind: "changed" };
+      }
       if (item.reconcilePass === 3) {
         return { kind: "waiting", reason: "reconciliation_stopped", until: null };
       }
@@ -265,6 +273,9 @@ export function createReconciliation(
     backoffs.delete(id);
     return database.write(async (tx) => {
       const advanced = await advanceReconciliation(tx, item, now());
+      if (advanced?.reconcilePass === 3 && (await forgetStoppedOrphan(tx, advanced))) {
+        return { kind: "changed" };
+      }
       return advanced ? { kind: "settled", item: advanced } : { kind: "changed" };
     });
   }
@@ -296,6 +307,9 @@ export function createReconciliation(
   async function hold(item: OutboxItem, reason: string, until: number | null): Promise<PostStep> {
     return database.write(async (tx) => {
       const at = now();
+      if (until === null && (await forgetStoppedOrphan(tx, item))) {
+        return { kind: "changed" };
+      }
       const next = until === null ? null : Math.max(until, item.nextAttemptAt ?? 0);
       const changed = await tx`
         UPDATE outbox SET error = ${reason}, next_attempt_at = ${next}, updated_at = ${at}
@@ -320,6 +334,21 @@ export function createReconciliation(
   }
 
   return { reconcile, close };
+}
+
+async function forgetStoppedOrphan(tx: Bun.SQL, item: OutboxItem): Promise<boolean> {
+  if (
+    !["reply", "progress", "publication", "card"].includes(item.kind) ||
+    !(await linkWasRemoved(tx, item.linkId))
+  )
+    return false;
+  const deleted = await tx`
+    DELETE FROM outbox WHERE id = ${item.id} AND state = 'delivery_unknown'
+      AND attempts = ${item.attempts} AND payload_hash = ${item.payloadHash}
+      AND reconcile_pass = ${item.reconcilePass}
+    RETURNING id
+  `;
+  return deleted.length > 0;
 }
 
 function sameRead(left: OutboxItem, right: OutboxItem): boolean {

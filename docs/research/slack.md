@@ -150,15 +150,33 @@ preemptively.
 
 ## V1 decisions settled for app creation
 
-**Channel-thread status is in, agent container and streaming are out.** On
-March 5, 2026 Slack explicitly enabled `assistant.threads.setStatus` with
-`chat:write`, without `assistant:write` or the AI split-view container.
-Use that existing method for a short "is working on your request..." indicator,
-refresh sparingly for long jobs, and clear it explicitly on failure/cancellation.
-It clears automatically on a reply or after a two-minute timeout. Its currently
-documented default limit is 600 calls/minute/app/workspace.
+**No agent container or streaming in v1. Channel-thread status needs fresh
+live qualification.** On March 5, 2026 Slack enabled `assistant.threads.setStatus`
+with `chat:write`. Its method reference still describes a custom text indicator
+that clears on reply or after two minutes, at a default 600 calls/minute/app/workspace.
 [Scope change](https://docs.slack.dev/changelog/2026/03/05/set-status-scope-update/),
 [method contract](https://docs.slack.dev/reference/methods/assistant.threads.setStatus/).
+
+**Compatibility caveat, verified October 28, 2026.** The current migration guide
+says Slack bridges non-empty legacy status to session `processing`, and empty
+status to `active`. It plans deprecation of the legacy methods. The sessions guide
+says only declared agent apps create sessions, that processing shows "Working..."
+without custom loading text, and that it lasts up to an hour without an explicit
+transition. A normal reply does not end a native session's processing.
+The new method is Tier 3 (50+/minute), not the legacy default 600/minute.
+[Compatibility bridge](https://docs.slack.dev/ai/migrating-to-agent-messaging/#compatibility-bridge),
+[session contract](https://docs.slack.dev/ai/agent-sessions/),
+[new method and limits](https://docs.slack.dev/reference/methods/agents.sessions.setStatus/).
+
+The visible behavior of either call in a regular channel with no `agent_view`
+declaration remains **unverified**. No live call was made under the standing
+credential/live-test restriction. A protocol fake cannot prove custom text,
+manifest eligibility, residual titles or session visibility after clearing.
+A permitted probe should compare fresh threads with both methods, record what
+another channel member sees before and after clearing, and record exact refusals.
+Do not toggle `agent_view` on the existing app merely to probe it: Slack documents
+that migration as irreversible.
+[Migration constraints](https://docs.slack.dev/ai/migrating-to-agent-messaging/).
 
 `chat.startStream` currently lists only `chat:write`. Channel streaming requires
 the root `thread_ts`, `recipient_user_id`, and `recipient_team_id`. However, the
@@ -715,6 +733,10 @@ read deadline and waits for its suspended link to become active, rather than
 polling Slack. Refused linkless cards require manual resolution.
 Exhaustion never authorizes an automatic repost. This is a local conservative
 policy, not Slack's exactly-once guarantee.
+After unlink, sending and unknown posts retain only correlation and target metadata.
+An edit keeps its target ts beside the redaction marker. Proof of valid delivery purges the
+local row without withdrawing the Slack message. A channel refusal or the final empty pass
+ends an orphan's reads by purging it. Misplaced posts still go through withdrawal.
 [Reconciliation implementation](../../src/features/outbox/server/reconcile.ts),
 [credential-free protocol cases](../../src/features/outbox/server/reconcile.test.ts).
 
@@ -1347,8 +1369,8 @@ credentials and test that exact combination.
 
 **Targets:** `slack-feedback`, `outbound`, `s6`, `test-live`.
 
-The no-container `assistant.threads.setStatus` choice is correct with
-`chat:write`. Setting it only once at `inbox` means a long job looks inactive
+The no-container `assistant.threads.setStatus` choice needs the compatibility
+qualification above. Setting it only once at `inbox` means a long job looks inactive
 after two minutes, while disabling it for any error makes one 429 permanently
 remove the feature. Status is scoped to the app/thread, not to an individual
 request, so one request finishing can incorrectly clear another's status.

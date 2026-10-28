@@ -31,7 +31,12 @@ import {
   type OutboxItem,
   type OutboxSettlement,
 } from "./database";
-import { deferQueuedDelivery, settleDelivery, settleQueuedDelivery } from "./delivery";
+import {
+  deferQueuedDelivery,
+  linkWasRemoved,
+  settleDelivery,
+  settleQueuedDelivery,
+} from "./delivery";
 
 export type PostStep =
   | { kind: "settled"; item: OutboxItem }
@@ -219,6 +224,9 @@ export function createPostDelivery(
     if (item.kind === "card") {
       const approval = item.approvalId === null ? null : await readApproval(tx, item.approvalId);
       if (!approval) return finishQueued(tx, item, "dropped", "approval_removed", at);
+      if (method === "chat.postMessage" && (await linkWasRemoved(tx, item.linkId))) {
+        return finishQueued(tx, item, "dropped", "link_removed", at);
+      }
       if (item.channelId !== approval.card.channelId || item.threadTs !== null) {
         return finishQueued(tx, item, "failed", "destination_changed", at);
       }
