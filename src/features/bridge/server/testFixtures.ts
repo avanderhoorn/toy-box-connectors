@@ -3,10 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { openBridgeDatabase, type BridgeDatabase } from "./database";
 
-/**
- * Create an empty folder that's removed after the test. It sits directly in
- * /tmp because a Unix socket path inside it must stay under 104 bytes.
- */
+/** Create an empty folder that's removed after the test. */
 export function createTestFolder(): string {
   const path = mkdtempSync("/tmp/tbs-");
   onTestFinished(() => rmSync(path, { recursive: true, force: true }));

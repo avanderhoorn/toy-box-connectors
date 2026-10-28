@@ -215,20 +215,34 @@ describe("answering a call", () => {
     expect((await call("peek", operator)).status).toBe(200);
   });
 
-  test("runs only what doesn't need Slack while the bridge can't use it", async () => {
-    const problem = "SLACK_APP_TOKEN isn't set.";
-    const { call } = await startServer({ slack: { connection: "unconfigured", problem } });
+  test.each([
+    ["unconfigured", "SLACK_APP_TOKEN isn't set."],
+    ["auth_failed", "Slack rejected the bot token."],
+    ["refused", "The tokens belong to another Slack app."],
+  ] as const)(
+    "runs only what doesn't need Slack while Slack is %s",
+    async (connection, problem) => {
+      const { call } = await startServer({ slack: { connection, problem } });
 
-    const { status, body } = await call("pause", lead);
-    expect(status).toBe(503);
-    expect(body.banner?.slack).toBe("unconfigured");
-    expect(body.refused).toEqual({
-      rule: "slack_unavailable",
-      message:
-        "`pause` needs Slack, which the bridge can't use right now. SLACK_APP_TOKEN isn't set. Until then it runs only `status` and `doctor`.",
-    });
-    expect((await call("peek", lead)).status).toBe(200);
-  });
+      const { status, body } = await call("pause", lead);
+      expect(status).toBe(503);
+      expect(body.banner?.slack).toBe(connection);
+      expect(body.refused).toEqual({
+        rule: "slack_unavailable",
+        message: `\`pause\` needs Slack, which the bridge can't use right now. ${problem} Until then it runs only \`status\` and \`doctor\`.`,
+      });
+      expect((await call("peek", lead)).status).toBe(200);
+    },
+  );
+
+  test.each(["connecting", "reconnecting"] as const)(
+    "runs every command while Slack is %s, so posts wait for it",
+    async (connection) => {
+      const { call } = await startServer({ slack: { connection, problem: null } });
+
+      expect((await call("pause", lead)).status).toBe(200);
+    },
+  );
 
   test("refuses input its contract doesn't take, naming the option", async () => {
     const { call, database } = await startServer();

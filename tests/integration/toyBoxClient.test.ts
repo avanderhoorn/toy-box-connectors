@@ -512,6 +512,28 @@ test("a catalog read that a member change overtakes answers its callers but isn'
   await waitFor(async () => {
     expect((await readStream(database, channelId)).revision).toBe(revision + 1);
   });
+  release();
+
+  expect((await before).members).toEqual([]);
+  expect(client.catalog()).toBeNull();
+  const after = await client.loadCatalog();
+  expect(toyBox.catalogReads).toBe(2);
+  expect(after.members.map(({ id }) => id)).toEqual([memberId]);
+  expect(client.catalog()).toBe(after);
+});
+
+test("a member change starts a new catalog read instead of sharing the one on its way", async () => {
+  const { toyBox, database, channelId, startClient } = await linkFakeChannel();
+  const client = await startClient();
+  const { revision } = await readStream(database, channelId);
+  const release = toyBox.holdCatalog();
+  const before = client.loadCatalog();
+  await waitFor(() => expect(toyBox.catalogReads).toBe(1));
+
+  const memberId = toyBox.addMember(channelId, "Reviewer");
+  await waitFor(async () => {
+    expect((await readStream(database, channelId)).revision).toBe(revision + 1);
+  });
   const after = client.loadCatalog();
   await waitFor(() => expect(toyBox.catalogReads).toBe(2));
   release();
