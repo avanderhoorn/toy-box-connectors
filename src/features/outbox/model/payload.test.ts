@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import { checkLeadPayload } from "./payload";
 import { renderMarkdown } from "./rendering";
 
-function message(text = "Safe **answer**, literal &lt;, <@U1> and @channel.") {
+function message(
+  text = "Safe **answer**, `Array<string>` and `a && b`, literal &lt;, &#60;@U1&#62;, <@U1> and @channel.",
+) {
   const result = renderMarkdown(text);
   if (result.kind !== "rendered") throw new Error("Expected rendered text");
   return result.message;
@@ -28,7 +30,7 @@ test("a stored snapshot cannot add controls, change parsing or bypass the limit"
     { text: "a".repeat(12_001) },
   ])
     expect(checkLeadPayload({ ...original, ...change }).kind).toBe("refused");
-  for (const text of ["<!here>", "@channel", "&#60;!here&#62;", `xoxb-${"a".repeat(32)}`, " \n"]) {
+  for (const text of ["<!here>", "@channel", "<@U1>", `xoxb-${"a".repeat(32)}`, " \n"]) {
     expect(checkLeadPayload({ ...original, text, blocks: [{ type: "markdown", text }] }).kind).toBe(
       "refused",
     );

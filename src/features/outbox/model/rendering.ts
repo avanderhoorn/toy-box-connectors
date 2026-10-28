@@ -21,9 +21,7 @@ export function renderMarkdown(source: string): RenderResult {
   if (!source.trim()) return { kind: "refused", problem: "empty" };
   const text = source
     .replace(/@\u200b/g, "@")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
+    .replace(/<(?=[@!])/g, "&lt;")
     .replace(/@(here|channel|everyone)\b/gi, "@\u200b$1");
   if (text.length > 12_000) {
     return { kind: "refused", problem: "message_too_long", actual: text.length, limit: 12_000 };

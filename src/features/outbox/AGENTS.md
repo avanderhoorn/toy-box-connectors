@@ -33,9 +33,11 @@ the link's local state rather than leaving an orphan-cleanup subsystem.
 
 ## Text
 
-Send one Slack `markdown` block with an identical escaped fallback, inert mentions, disabled
-automatic parsing and disabled unfurls. Refuse blank output or more than 12,000 escaped
-characters rather than split or truncate it. `outputProblem` refuses recognizable credentials
+Send one Slack `markdown` block with an identical mention-neutralized fallback, disabled
+automatic parsing and disabled unfurls. Escape `<` only before `@` or `!`, break plain broadcast
+words with a zero-width space, and leave other Markdown unchanged, including code.
+Refuse blank output or more than 12,000 escaped characters rather than split or truncate it.
+`outputProblem` refuses recognizable credentials
 by category without repeating them. It is a guardrail, not complete DLP.
 
 The send boundary accepts only canonical renderer output and rechecks secrets without changing

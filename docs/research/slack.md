@@ -30,11 +30,21 @@ records remain too. Reviewers must approve retained output separately.
 On 2026-10-28, Slack Expert posted one `markdown` block in the approved
 #toy-box-private test channel, read it back and deleted it. A heading became a
 header block. A list, fenced TypeScript and an HTTPS link became the corresponding
-rich-text elements. Escaping `&`, `<` and `>` and inserting a zero-width space into
-plain broadcast words made `<!here>`, `@channel` and a bot-user `<@ID>` sample
-ordinary text elements, with no user or broadcast elements. This verifies the
-sanitized payload, not raw mention safety or a person's notification settings.
-The reduced renderer can use that block without its former section-packing code.
+rich-text elements. The initial escaped probe made `<!here>`, `@channel` and a
+bot-user `<@ID>` sample ordinary text elements, with no user or broadcast elements.
+
+Later owner probes that day showed that broad entity escaping breaks code:
+Slack displays `Array&lt;string&gt;` and `a &amp;&amp; b` literally inside code.
+The reduced renderer therefore escapes `<` only before `@` or `!`, retains the
+zero-width break in plain broadcast words, and preserves other Markdown bytes.
+Control openers inside code are escaped too, an accepted limitation.
+
+A follow-up through the actual `renderMarkdown` and payload check in
+#toy-box-test preserved inline `Array<string>`, `a && b`, fenced comparisons
+and a real blockquote. Raw bot-user and `<!date^...>` controls, and their numeric
+entity forms, came back only as text nodes, with no user, date or broadcast
+elements. The post was read back and deleted. These probes verify translation
+of these payloads, not a person's notification settings.
 Slack documents the block's combined 12,000-character limit and translation:
 [Markdown block](https://docs.slack.dev/reference/block-kit/blocks/markdown-block/).
 
@@ -682,11 +692,12 @@ the no-container app renders it identically everywhere.
 [Markdown block](https://docs.slack.dev/reference/block-kit/blocks/markdown-block/).
 
 Supply a top-level fallback `text` containing the important content for
-notifications and screen readers. Escape untrusted `&`, `<`, and `>` before
-inserting them into Slack-formatted text. Build any approved `<@USER>` mentions
-as separate typed elements after escaping, restricted to configured recipients.
-Neutralize `<!channel>`, `<!here>`, `<!everyone>`, and `<!subteam^...>` from model
-output and quoted Slack text. `parse=none`, `link_names=false`, and
+notifications and screen readers. For the reduced `markdown` payload, escape
+only `<` before `@` or `!`, and break plain broadcast words with a zero-width
+space. This neutralizes user, broadcast, group and date controls without
+entity-escaping ordinary code or blockquotes. The live probes above establish
+this behavior; do not apply legacy `mrkdwn` escaping to the Markdown block.
+`parse=none`, `link_names=false`, and
 `verbatim=true` where supported reduce automatic parsing but do not neutralize
 explicit Slack mention syntax by themselves. Do not allow arbitrary model JSON
 to become Block Kit.

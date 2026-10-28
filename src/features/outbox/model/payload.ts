@@ -23,9 +23,7 @@ export function checkLeadPayload(payload: unknown): LeadPayload {
   if (message.blocks[0]!.text !== message.text)
     return { kind: "refused", problem: "invalid_snapshot" };
   const source = message.text
-    .replace(/&gt;/g, ">")
-    .replace(/&lt;/g, "<")
-    .replace(/&amp;/g, "&")
+    .replace(/&lt;(?=[@!])/g, "<")
     .replace(/@\u200b(here|channel|everyone)\b/gi, "@$1");
   const rendered = renderMarkdown(source);
   if (rendered.kind === "refused") return rendered;
