@@ -1,6 +1,6 @@
 import type { BridgeDatabase } from "@bridge/server/database";
-import { judgeChannelLinks } from "@links/server/audience";
-import { readChannelLink, readChannelUses } from "@links/server/database";
+import { judgeChannelLink } from "@links/server/audience";
+import { readChannelLink } from "@links/server/database";
 import { suspendChannelLinks } from "@links/server/lifecycle";
 import { suspendLink } from "@links/server/status";
 import { isActive } from "@requests/model/lifecycle";
@@ -237,7 +237,7 @@ export function createPostDelivery(
     }
     await database.write(async (tx) => {
       if (facts !== null) await writeChannelInfo(tx, facts, readAt);
-      await judgeChannelLinks(tx, channelId, facts, now());
+      await judgeChannelLink(tx, channelId, facts, now());
     });
     return null;
   }
@@ -265,19 +265,11 @@ async function finishQueued(
 
 async function readPostingLink(sql: Bun.SQL, id: string | null): Promise<PostingLink | null> {
   if (id === null) return null;
-  const [row] = await sql<{ slack_channel_id: string; publish_channel_id: string }[]>`
-    SELECT slack_channel_id, publish_channel_id FROM links WHERE id = ${id}
+  const [row] = await sql<{ slack_channel_id: string }[]>`
+    SELECT slack_channel_id FROM links WHERE id = ${id}
   `;
   if (!row) return null;
   const link = await readChannelLink(sql, row.slack_channel_id);
-  const use = (await readChannelUses(sql, row.slack_channel_id)).find(
-    (entry) => entry.linkId === id,
-  );
-  if (!link || link.id !== id || !use) throw new Error("A stored link has no channel or audience.");
-  return {
-    ...link,
-    slackChannelId: row.slack_channel_id,
-    publishChannelId: row.publish_channel_id,
-    approved: use.approved,
-  };
+  if (!link || link.id !== id) throw new Error("A stored link has no channel.");
+  return { ...link, slackChannelId: row.slack_channel_id };
 }

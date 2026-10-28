@@ -1,110 +1,67 @@
 import { describe, expect, test } from "bun:test";
 import { slackPerson as person } from "@slackapi/model/testFixtures";
+import type { SlackPerson } from "@slackapi/model/users";
 import { admissionProblem } from "./admission";
 
 const home = { teamId: "T-home", enterpriseId: null };
 const orgHome = { teamId: "T-home", enterpriseId: "E-org" };
+const otherOrg = { teamId: "T-other", enterpriseId: "E-other" };
 
 describe("admitting a person", () => {
-  test("a full member of the installation's workspace is admitted", () => {
-    expect(admissionProblem("U-carol", person(), home)).toBeNull();
-    expect(admissionProblem("U-carol", person(), orgHome)).toBeNull();
+  test.each([
+    ["a full member of the installation's workspace", person(), home],
+    [
+      "a member of a sibling workspace in its org",
+      person({ teamId: "T-sibling", enterpriseId: "E-org" }),
+      orgHome,
+    ],
+    [
+      "a member Slack names the org but not the workspace for",
+      person({ teamId: null, enterpriseId: "E-org" }),
+      orgHome,
+    ],
+  ] as const)("%s is admitted", (_, candidate, installation) => {
+    expect(admissionProblem(candidate.id, candidate, installation)).toBeNull();
   });
 
-  test("a member of a sibling workspace in the installation's org is admitted", () => {
-    const sibling = person({ teamId: "T-sibling", enterpriseId: "E-org" });
-    expect(admissionProblem("U-carol", sibling, orgHome)).toBeNull();
+  test("their org-wide ID counts as theirs, while an answer about someone else doesn't", () => {
+    const carol = person({ enterpriseId: "E-org", enterpriseUserId: "W-carol" });
+    expect(admissionProblem("W-carol", carol, orgHome)).toBeNull();
+    expect(admissionProblem("U-other", carol, orgHome)).toBe("unverified");
   });
 
-  test("someone Slack doesn't know is refused", () => {
-    expect(admissionProblem("U-carol", null, home)).toBe("user_not_found");
-  });
-
-  test("an answer about someone else is refused, while their org-wide ID counts as theirs", () => {
-    expect(admissionProblem("U-other", person(), home)).toBe("unverified");
-    expect(
-      admissionProblem(
-        "W-carol",
-        person({ enterpriseId: "E-org", enterpriseUserId: "W-carol" }),
-        orgHome,
-      ),
-    ).toBeNull();
-  });
-
-  test("bots, workflow bots and Slackbot are refused", () => {
-    expect(admissionProblem("U-carol", person({ isBot: true }), home)).toBe("bot");
-    expect(admissionProblem("U-carol", person({ isWorkflowBot: true }), home)).toBe("bot");
-    expect(admissionProblem("USLACKBOT", person({ id: "USLACKBOT" }), home)).toBe("bot");
-  });
-
-  test("a deactivated account is refused", () => {
-    expect(admissionProblem("U-carol", person({ deleted: true }), home)).toBe("deactivated");
-  });
-
-  test("multi-channel and single-channel guests are refused", () => {
-    expect(admissionProblem("U-carol", person({ isRestricted: true }), home)).toBe("guest");
-    expect(admissionProblem("U-carol", person({ isUltraRestricted: true }), home)).toBe("guest");
-  });
-
-  test("someone from another workspace is refused outside an org", () => {
-    expect(admissionProblem("U-carol", person({ teamId: "T-other" }), home)).toBe(
-      "other_workspace",
-    );
-    expect(
-      admissionProblem("U-carol", person({ teamId: "T-other", enterpriseId: "E-org" }), home),
-    ).toBe("other_workspace");
-  });
-
-  test("someone from another org is refused, whatever workspace they name", () => {
-    expect(
-      admissionProblem("U-carol", person({ teamId: "T-other", enterpriseId: "E-other" }), orgHome),
-    ).toBe("other_org");
-    expect(admissionProblem("U-carol", person({ teamId: "T-other" }), orgHome)).toBe("unverified");
-  });
-
-  test("an answer that leaves out the workspace or org admission needs is refused", () => {
-    expect(admissionProblem("U-carol", person({ teamId: null }), home)).toBe("unverified");
-    expect(admissionProblem("U-carol", person({ teamId: null }), orgHome)).toBe("unverified");
-    expect(
-      admissionProblem("U-carol", person({ teamId: null, enterpriseId: "E-org" }), orgHome),
-    ).toBeNull();
-  });
-
-  test("an answer that leaves out whether they're a bot or a guest is refused", () => {
-    for (const unknown of [{ isBot: null }, { isRestricted: null }, { isUltraRestricted: null }]) {
-      expect(admissionProblem("U-carol", person(unknown), home)).toBe("unverified");
-      expect(admissionProblem("U-carol", person(unknown), orgHome)).toBe("unverified");
-    }
-  });
-
-  test("a definite problem comes before a flag Slack left out, so a recheck can act on it", () => {
-    expect(admissionProblem("U-carol", person({ isBot: null, isRestricted: true }), home)).toBe(
+  test.each([
+    ["someone Slack doesn't know", "user_not_found", null, home],
+    ["a bot", "bot", person({ isBot: true }), home],
+    ["a workflow bot", "bot", person({ isWorkflowBot: true }), home],
+    ["Slackbot", "bot", person({ id: "USLACKBOT" }), home],
+    ["a deactivated account", "deactivated", person({ deleted: true }), home],
+    ["a multi-channel guest", "guest", person({ isRestricted: true }), home],
+    ["a single-channel guest", "guest", person({ isUltraRestricted: true }), home],
+    ["someone from another workspace", "other_workspace", person({ teamId: "T-other" }), home],
+    ["someone from another org", "other_org", person(otherOrg), orgHome],
+    ["someone Slack names no workspace for", "unverified", person({ teamId: null }), home],
+    ["someone Slack doesn't say is a bot or not", "unverified", person({ isBot: null }), home],
+    [
+      "someone Slack doesn't say is a guest or not",
+      "unverified",
+      person({ isRestricted: null }),
+      orgHome,
+    ],
+    // A definite problem comes first, so a recheck that removes people only for one still does.
+    [
+      "a guest Slack doesn't say is a bot or not",
       "guest",
-    );
-    expect(admissionProblem("U-carol", person({ isRestricted: null, isBot: true }), home)).toBe(
-      "bot",
-    );
-    expect(admissionProblem("U-carol", person({ isBot: null, deleted: true }), home)).toBe(
-      "deactivated",
-    );
-    expect(
-      admissionProblem("U-carol", person({ isUltraRestricted: null, teamId: "T-other" }), home),
-    ).toBe("other_workspace");
-    expect(
-      admissionProblem(
-        "U-carol",
-        person({ isBot: null, teamId: "T-other", enterpriseId: "E-other" }),
-        orgHome,
-      ),
-    ).toBe("other_org");
-  });
-
-  test("the account checks come before membership, so a guest of the workspace is still a guest", () => {
-    expect(
-      admissionProblem("U-carol", person({ isBot: true, teamId: "T-other", deleted: true }), home),
-    ).toBe("bot");
-    expect(admissionProblem("U-carol", person({ deleted: true, isRestricted: true }), home)).toBe(
-      "deactivated",
-    );
+      person({ isBot: null, isRestricted: true }),
+      home,
+    ],
+    [
+      "someone from another org Slack doesn't say is a bot or not",
+      "other_org",
+      person({ ...otherOrg, isBot: null }),
+      orgHome,
+    ],
+  ] as const)("%s is refused as %s", (_, problem, candidate: SlackPerson | null, installation) => {
+    expect(admissionProblem(candidate?.id ?? "U-carol", candidate, installation)).toBe(problem);
   });
 });

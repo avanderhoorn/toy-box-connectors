@@ -288,18 +288,11 @@ describe("confirmed posts", () => {
     expect(slack.calls).toHaveLength(1);
   });
 
-  test("a publication uses its current publish destination and no thread", async () => {
-    const { database, slack, queue, delivery, now } = await setup();
-    slack.addChannel({ id: "C-publish", is_private: true });
-    await database.write(async (tx) => {
-      await tx`UPDATE links SET publish_channel_id = 'C-publish',
-        approved_audience = ${JSON.stringify({ monitored: privateAudience("C-link"), publish: privateAudience("C-publish") })}`;
-      await writeChannelInfo(tx, channelFacts({ id: "C-publish" }), now());
-    });
+  test("a publication posts to the watched channel without a thread", async () => {
+    const { database, slack, queue, delivery } = await setup();
     const queued = await queue({
       kind: "publication",
       phase: null,
-      channelId: "C-publish",
       threadTs: null,
       requestId: null,
       requestRev: null,
@@ -310,7 +303,7 @@ describe("confirmed posts", () => {
       kind: "settled",
       item: { state: "sent" },
     });
-    expect(slack.calls[0]!.args.channel).toBe("C-publish");
+    expect(slack.calls[0]!.args.channel).toBe("C-link");
     expect(slack.calls[0]!.args).not.toHaveProperty("thread_ts");
     expect(
       await database.read((sql) => sql`SELECT kind FROM outbox WHERE kind = 'reaction'`),
@@ -422,18 +415,14 @@ describe("send-time authority", () => {
 
   test("fresh cached public facts cannot overrule the owner's narrowed approved audience", async () => {
     const { database, queue, delivery, now, slack } = await setup();
-    const audience = privateAudience("C-link");
+    const audience = privateAudience();
     await database.write(async (tx) => {
       await writeChannelInfo(tx, channelFacts({ kind: "public" }), now());
-      await tx`UPDATE links SET approved_audience = ${JSON.stringify({
-        monitored: { ...audience, kind: "public" },
-        publish: { ...audience, kind: "public" },
-      })}`;
+      await tx`UPDATE links SET approved_audience = ${JSON.stringify({ ...audience, kind: "public" })}`;
     });
     const queued = await queue();
     await database.write(
-      (tx) =>
-        tx`UPDATE links SET approved_audience = ${JSON.stringify({ monitored: audience, publish: audience })}`,
+      (tx) => tx`UPDATE links SET approved_audience = ${JSON.stringify(audience)}`,
     );
 
     expect(await delivery.post(queued.id)).toEqual({
@@ -451,10 +440,9 @@ describe("send-time authority", () => {
     ["channel_not_found", "channel_not_found"],
     ["team_access_not_granted", "channel_restricted"],
   ] as const)(
-    "a refresh refused with %s suspends every use of its channel",
+    "a refresh refused with %s suspends the channel's link, not others",
     async (error, reason) => {
       const { database, slack, queue, delivery, now } = await setup({ fresh: false });
-      await createStoredLink(database, "two", { publish_channel_id: "C-link" });
       await createStoredLink(database, "three");
       slack.failNext("conversations.info", { error });
       const queued = await queue();
@@ -469,7 +457,6 @@ describe("send-time authority", () => {
       ).toEqual([
         { id: "link", status: "suspended", status_reason: reason },
         { id: "three", status: "active", status_reason: null },
-        { id: "two", status: "suspended", status_reason: reason },
       ]);
       expect(slack.calls.map((call) => call.method)).toEqual(["conversations.info"]);
     },
@@ -782,9 +769,8 @@ describe("uncertain and rejected writes", () => {
     ]);
   });
 
-  test("a channel-wide refusal suspends all its links, not unrelated links", async () => {
+  test("a channel-wide refusal suspends its link, not unrelated links", async () => {
     const { database, slack, queue, delivery, now } = await setup();
-    await createStoredLink(database, "two", { publish_channel_id: "C-link" });
     await createStoredLink(database, "three");
     slack.failNext("chat.postMessage", { error: "not_in_channel" });
     const queued = await queue();
@@ -798,7 +784,6 @@ describe("uncertain and rejected writes", () => {
     ).toEqual([
       { id: "link", status: "suspended", status_reason: "bot_removed" },
       { id: "three", status: "active", status_reason: null },
-      { id: "two", status: "suspended", status_reason: "bot_removed" },
     ]);
     expect(await database.read((sql) => readChannelInfo(sql, "C-link"))).toMatchObject({
       invalidatedAt: now(),

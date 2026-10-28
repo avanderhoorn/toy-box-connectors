@@ -1,8 +1,4 @@
-import {
-  judgeLinkChannel,
-  type ApprovedAudience,
-  type ChannelSuspendReason,
-} from "@links/model/audience";
+import { judgeChannel, type ChannelSuspendReason } from "@links/model/audience";
 import type { ChannelLink } from "@links/server/database";
 import type { StoredRequest } from "@requests/server/database";
 import type { Installation } from "@slackapi/model/installation";
@@ -16,10 +12,8 @@ type PostIntent = Pick<
 >;
 
 /** The current link, not the settings under which the item was queued. */
-export type PostingLink = Pick<ChannelLink, "id" | "status" | "allowlist"> & {
+export type PostingLink = Pick<ChannelLink, "id" | "status" | "allowlist" | "approved"> & {
   slackChannelId: string;
-  publishChannelId: string;
-  approved: ApprovedAudience;
 };
 
 export type PostingPermission =
@@ -38,7 +32,6 @@ export type PostingPermission =
         | "request_closed"
         | "request_not_ready";
     }
-  | { kind: "held"; reason: "workspaces_unknown" }
   | { kind: "suspended"; reason: ChannelSuspendReason };
 
 /** Send-time authority for lead-authored posts. Cleanup and feedback have separate gates. */
@@ -56,7 +49,7 @@ export function postingPermission(
   if (!link || link.id !== post.linkId) return { kind: "failed", error: "link_removed" };
   if (link.status !== "active") return { kind: "waiting", reason: "link_inactive" };
   if (post.kind === "publication") {
-    if (post.channelId !== link.publishChannelId || post.threadTs !== null) {
+    if (post.channelId !== link.slackChannelId || post.threadTs !== null) {
       return { kind: "failed", error: "destination_changed" };
     }
   } else if (post.kind === "reply" || post.kind === "progress") {
@@ -100,14 +93,6 @@ export function postingPermission(
   ) {
     return { kind: "refresh", channelId: post.channelId };
   }
-  const audience = judgeLinkChannel(
-    link.approved,
-    {
-      monitored: post.channelId === link.slackChannelId,
-      publish: post.channelId === link.publishChannelId,
-    },
-    channel.facts,
-    installation,
-  );
+  const audience = judgeChannel(link.approved, channel.facts, installation);
   return audience.kind === "approved" ? { kind: "allowed" } : audience;
 }

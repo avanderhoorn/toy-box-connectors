@@ -225,7 +225,7 @@ function readGaps(database: BridgeDatabase) {
 }
 
 function readChannels(database: BridgeDatabase) {
-  return database.read((sql) => sql`SELECT slack_channel_id, publish_channel_id FROM links`);
+  return database.read((sql) => sql`SELECT slack_channel_id FROM links`);
 }
 
 function readLinks(database: BridgeDatabase) {
@@ -548,15 +548,11 @@ describe("what's taken", () => {
 });
 
 describe("gaps", () => {
-  /**
-   * Adds a suspended link on C-other that publishes to C-news, and one on C-late that began after
-   * the gaps here.
-   */
+  /** Adds a suspended link on C-other, and one on C-late that began after the gaps here. */
   async function linkMore(database: BridgeDatabase) {
     await createStoredLink(database, "other", {
       status: "suspended",
       status_reason: "paused",
-      publish_channel_id: "C-news",
     });
     await createStoredLink(database, "late");
     await database.write(
@@ -803,9 +799,7 @@ describe("a channel's lifecycle", () => {
 
     await receive(eventFrame("2", moved("C-link", "C-new")));
 
-    expect(await readChannels(database)).toEqual([
-      { slack_channel_id: "C-new", publish_channel_id: "C-new" },
-    ]);
+    expect(await readChannels(database)).toEqual([{ slack_channel_id: "C-new" }]);
     expect(await readLinks(database)).toEqual([
       { id: "link", status: "suspended", status_reason: "channel_id_changed" },
     ]);
@@ -847,9 +841,7 @@ describe("a channel's lifecycle", () => {
     );
     await receive(eventFrame("4", late));
 
-    expect(await readChannels(database)).toEqual([
-      { slack_channel_id: "C-link", publish_channel_id: "C-link" },
-    ]);
+    expect(await readChannels(database)).toEqual([{ slack_channel_id: "C-link" }]);
     expect(await readMessages(database)).toEqual([
       stored(ask),
       stored(late, { channel_id: "C-link" }),

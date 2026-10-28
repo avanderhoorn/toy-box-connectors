@@ -40,8 +40,7 @@ function facts(): Facts {
       id: "link",
       status: "active",
       slackChannelId: "C-link",
-      publishChannelId: "C-link",
-      approved: { monitored: privateAudience(), publish: privateAudience() },
+      approved: privateAudience(),
       allowlist: new Set(["U-owner"]),
     },
     request: {
@@ -208,27 +207,23 @@ describe("send-time posting authority", () => {
     expect(check(value)).toEqual({ kind: "allowed" });
   });
 
-  test("publications require the current publish channel and its root, not a request", () => {
+  test("publications go to the watched channel's root, not a request", () => {
     const value = facts();
-    value.link.publishChannelId = "C-publish";
-    value.link.approved.publish = privateAudience("C-publish");
     value.post = {
       ...value.post,
       kind: "publication",
       phase: null,
       requestId: null,
       requestRev: null,
-      channelId: "C-publish",
       threadTs: null,
     };
-    value.channel.facts.id = "C-publish";
     expect(
       postingPermission(value.post, value.installation, value.link, null, value.channel, now),
     ).toEqual({ kind: "allowed" });
     value.post.threadTs = "1700000100.000100";
     expect(check(value)).toEqual({ kind: "failed", error: "destination_changed" });
     value.post.threadTs = null;
-    value.post.channelId = "C-old-publish";
+    value.post.channelId = "C-elsewhere";
     expect(check(value)).toEqual({ kind: "failed", error: "destination_changed" });
   });
 
@@ -266,34 +261,17 @@ describe("freshness and the owner-approved audience", () => {
     expect(check(value)).toEqual({ kind: "refresh", channelId: "C-link" });
   });
 
-  test.each(["monitored", "publish"] as const)(
-    "a shared destination is judged in both roles, including %s",
-    (role) => {
-      const value = facts();
-      value.link.approved.monitored.kind = "public";
-      value.link.approved.publish.kind = "public";
-      value.link.approved[role].kind = "private";
-      value.channel.facts.kind = "public";
-      expect(check(value)).toEqual({ kind: "suspended", reason: "channel_made_public" });
-    },
-  );
-
   test.each([
+    [{ kind: "public" }, "channel_made_public"],
     [{ isArchived: true }, "channel_archived"],
     [{ isMember: false }, "bot_removed"],
     [{ isExtShared: true }, "channel_external"],
     [{ isPendingExtShared: true }, "channel_external"],
     [{ sharedTeamIds: ["T-home", "T-other"] }, "workspace_joined"],
-  ] as const)("an unapproved audience cannot authorize output: %j", (change, reason) => {
+    [{ isOrgShared: true, sharedTeamIds: [] }, "workspaces_unknown"],
+  ] as const)("an unapproved or unknown audience cannot authorize output: %j", (change, reason) => {
     const value = facts();
     Object.assign(value.channel.facts, change);
     expect(check(value)).toEqual({ kind: "suspended", reason });
-  });
-
-  test("an incomplete workspace list holds output rather than guessing the audience", () => {
-    const value = facts();
-    value.channel.facts.isOrgShared = true;
-    value.channel.facts.sharedTeamIds = [];
-    expect(check(value)).toEqual({ kind: "held", reason: "workspaces_unknown" });
   });
 });

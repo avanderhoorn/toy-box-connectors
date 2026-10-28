@@ -1,8 +1,7 @@
-import { signalSuspends } from "@links/model/audience";
 import type { SuspendReason } from "@links/model/status";
 import { moveOutboxChannel } from "@outbox/server/database";
 import { invalidateChannelInfo, recordChannelAlias } from "@slackapi/server/channels";
-import { readChannelUses } from "./database";
+import { readChannelLink } from "./database";
 import { suspendLink } from "./status";
 
 // Slack's lifecycle signals.
@@ -14,9 +13,9 @@ import { suspendLink } from "./status";
 // them.
 
 /**
- * Suspends every link that uses a channel a signal says can't be used as the owner approved, and
- * casts doubt on what's stored about the channel. A channel made public suspends only a link the
- * owner approved it private for. Returns the links whose status changed.
+ * Suspends the link that watches a channel a signal says can't be used as the owner approved, and
+ * casts doubt on what's stored about the channel. A channel made public suspends the link only if
+ * the owner approved it private. Returns the links whose status changed.
  */
 export async function suspendChannelLinks(
   transaction: Bun.SQL,
@@ -25,19 +24,17 @@ export async function suspendChannelLinks(
   now: number,
 ): Promise<string[]> {
   await invalidateChannelInfo(transaction, channelId, now);
-  const changed: string[] = [];
-  for (const use of await readChannelUses(transaction, channelId)) {
-    if (!signalSuspends(use.approved, use, reason)) continue;
-    if (await suspendLink(transaction, use.linkId, reason, now)) changed.push(use.linkId);
-  }
-  return changed;
+  const link = await readChannelLink(transaction, channelId);
+  if (!link) return [];
+  if (reason === "channel_made_public" && link.approved.kind === "public") return [];
+  return (await suspendLink(transaction, link.id, reason, now)) ? [link.id] : [];
 }
 
 /**
- * Follows a channel to the new ID Slack gave it. The alias is recorded, every link and outbox item
- * that names the old ID names the new one, and what's stored about either ID is in doubt. Slack
- * does this when a private channel is shared outside the organization, so every link that uses the
- * channel is suspended until the owner links it again. Returns the links whose status changed.
+ * Follows a channel to the new ID Slack gave it. The alias is recorded, the link and every outbox
+ * item that name the old ID name the new one, and what's stored about either ID is in doubt. Slack
+ * does this when a private channel is shared outside the organization, so the link is suspended
+ * until the owner links the channel again. Returns the links whose status changed.
  */
 export async function changeChannelId(
   transaction: Bun.SQL,
@@ -51,20 +48,9 @@ export async function changeChannelId(
     UPDATE links SET slack_channel_id = ${newId}, updated_at = ${now}
     WHERE slack_channel_id = ${oldId}
   `;
-  await transaction`
-    UPDATE links SET publish_channel_id = ${newId}, updated_at = ${now}
-    WHERE publish_channel_id = ${oldId}
-  `;
   await moveOutboxChannel(transaction, oldId, newId);
   await invalidateChannelInfo(transaction, oldId, now);
-  await invalidateChannelInfo(transaction, newId, now);
-  const changed: string[] = [];
-  for (const use of await readChannelUses(transaction, newId)) {
-    if (await suspendLink(transaction, use.linkId, "channel_id_changed", now)) {
-      changed.push(use.linkId);
-    }
-  }
-  return changed;
+  return suspendChannelLinks(transaction, newId, "channel_id_changed", now);
 }
 
 /**

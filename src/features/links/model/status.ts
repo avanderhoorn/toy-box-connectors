@@ -46,6 +46,10 @@ export const suspensions: Record<SuspendReason, Suspension> = {
     because: "because a Slack admin setting stops the bot posting in its channel",
     fix: `Ask a Slack admin to let the bot post there, ${resume}`,
   },
+  workspaces_unknown: {
+    because: "because Slack didn't say which workspaces can read its Slack channel",
+    fix: "Have the owner run `toy-box-slack resume` to check the channel again.",
+  },
   channel_external: {
     because: "because its Slack channel is shared with another organization",
     fix: `Stop sharing the channel outside the organization, ${resume}`,

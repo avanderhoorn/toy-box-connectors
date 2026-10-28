@@ -1,20 +1,17 @@
 import type { ChannelFacts } from "@slackapi/model/channels";
 import type { Installation } from "@slackapi/model/installation";
-import type { SuspendReason } from "./status";
 
 // A channel's audience.
 //
-// Who can read what the lead says in Slack is part of what the owner approves. A link's channels
-// must each be a public or private channel with the bot in it, shared with no other organization,
-// and org-shared only inside the installation's own Enterprise org, with its workspaces listed.
-// Linking or resuming keeps both channels' audiences on the link as the owner approved them. Every
+// Who can read what the lead says in Slack is part of what the owner approves. A linked channel
+// must be a public or private channel with the bot in it, shared with no other organization, and
+// org-shared only inside the installation's own Enterprise org, with its workspaces listed.
+// Linking or resuming keeps the channel's audience on the link as the owner approved it. Every
 // later read is judged against that, never against the read before it, so a refresh nobody
-// compared can't absorb a widening. Narrowing never needs the owner. A link that uses a channel
-// both to watch and to publish is judged in both roles, and the worse verdict holds.
+// compared can't absorb a widening. Narrowing never needs the owner.
 
 /** Who can read a channel, as the owner approves it and a link keeps it. */
 export type Audience = {
-  channelId: string;
   kind: "public" | "private";
   /** Shared with another organization, or an invitation to share it that way is pending. */
   external: boolean;
@@ -27,9 +24,6 @@ export type Audience = {
    */
   workspaces: readonly string[];
 };
-
-/** Both of a link's channels' audiences, as the owner last approved them. */
-export type ApprovedAudience = { monitored: Audience; publish: Audience };
 
 /** Why a channel's audience isn't one a link can have. */
 export type AudienceProblem =
@@ -59,16 +53,13 @@ export type ChannelSuspendReason =
   | "bot_removed"
   /** An admin policy refuses the bot's posts there, which no read of the channel shows. */
   | "channel_restricted"
+  /** Slack didn't say which workspaces it's in, so nothing shows it didn't widen. */
+  | "workspaces_unknown"
   | Widening;
 
-/** Which of a link's roles a channel plays: the channel it watches, the one it publishes to, or both. */
-export type ChannelRoles = { monitored: boolean; publish: boolean };
-
-/** What a fresh read of a linked channel means for the link. */
+/** What a fresh read of a linked channel means for its link. */
 export type ChannelVerdict =
   | { kind: "approved" }
-  /** Slack didn't say which workspaces it's in, so posts wait for a read that does. */
-  | { kind: "held"; reason: "workspaces_unknown" }
   | { kind: "suspended"; reason: ChannelSuspendReason };
 
 /** A channel's audience, or null for a conversation that isn't a channel, such as a direct message. */
@@ -78,7 +69,6 @@ export function audienceOf(
 ): Audience | null {
   if (facts.kind !== "public" && facts.kind !== "private") return null;
   return {
-    channelId: facts.id,
     kind: facts.kind,
     external: facts.isExtShared || facts.isPendingExtShared,
     orgShared: facts.isOrgShared,
@@ -138,49 +128,8 @@ export function judgeChannel(
   if (!current) return suspended("channel_not_found");
   const wider = widening(approved, current);
   if (wider) return suspended(wider);
-  if (current.workspaces.length === 0) return { kind: "held", reason: "workspaces_unknown" };
+  if (current.workspaces.length === 0) return suspended("workspaces_unknown");
   return { kind: "approved" };
-}
-
-/**
- * Judges a fresh read of a channel for a link that uses it in `roles`, against the audience the
- * owner approved for each. A suspension in either role suspends the link, and otherwise a hold
- * holds it.
- */
-export function judgeLinkChannel(
-  approved: ApprovedAudience,
-  roles: ChannelRoles,
-  facts: ChannelFacts | null,
-  home: Pick<Installation, "teamId">,
-): ChannelVerdict {
-  const verdicts = approvedIn(approved, roles).map((audience) =>
-    judgeChannel(audience, facts, home),
-  );
-  return (
-    verdicts.find((verdict) => verdict.kind === "suspended") ??
-    verdicts.find((verdict) => verdict.kind === "held") ?? { kind: "approved" }
-  );
-}
-
-/**
- * Whether a lifecycle signal about a channel suspends a link that uses it in `roles`. Every signal
- * does, except that the channel was made public when the owner approved it public in each role,
- * as when a public channel made private is made public again.
- */
-export function signalSuspends(
-  approved: ApprovedAudience,
-  roles: ChannelRoles,
-  reason: SuspendReason,
-): boolean {
-  if (reason !== "channel_made_public") return true;
-  return approvedIn(approved, roles).some((audience) => audience.kind === "private");
-}
-
-function approvedIn(approved: ApprovedAudience, roles: ChannelRoles): Audience[] {
-  return [
-    ...(roles.monitored ? [approved.monitored] : []),
-    ...(roles.publish ? [approved.publish] : []),
-  ];
 }
 
 function workspacesOf(facts: ChannelFacts, home: Pick<Installation, "teamId">): readonly string[] {

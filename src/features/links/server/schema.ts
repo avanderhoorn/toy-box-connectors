@@ -1,13 +1,12 @@
 /** Install the tables whose meaning is owned by Links. */
 export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
   await db.unsafe(`
-    -- approved_audience holds both channels' audiences as the owner last approved them, which every
-    -- later read of either channel is judged against.
+    -- approved_audience holds the channel's audience as the owner last approved it, which every
+    -- later read of the channel is judged against.
     CREATE TABLE links (
       id                  TEXT PRIMARY KEY,
       toybox_channel_id   TEXT NOT NULL UNIQUE,
       slack_channel_id    TEXT NOT NULL UNIQUE,
-      publish_channel_id  TEXT NOT NULL,
       request_mode        TEXT NOT NULL DEFAULT 'mention' CHECK (request_mode IN ('mention', 'all')),
       observe             TEXT NOT NULL DEFAULT 'requesters'
         CHECK (observe IN ('requesters', 'channel')),
