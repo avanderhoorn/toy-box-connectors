@@ -19,5 +19,5 @@ export async function installSkill(
   await Bun.write(path, Bun.file(BUNDLED_SKILL));
   return `Installed the toy-box-slack skill at ${path}.
 
-Copilot reads skills when a lead's session starts or resumes, so a lead that's already running may not see it until later. Until then, its routines carry what each run needs.`;
+Copilot reads skills when a lead's session starts or resumes, so a lead that's already running may not see it yet. To set one up now, ask it to read ${path}.`;
 }

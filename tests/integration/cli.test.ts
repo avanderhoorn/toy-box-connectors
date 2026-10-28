@@ -135,7 +135,7 @@ test("installs the skill it ships into ~/.copilot/skills, and says when leads se
     exitCode: 0,
     stdout: `Installed the toy-box-slack skill at ${path}.
 
-Copilot reads skills when a lead's session starts or resumes, so a lead that's already running may not see it until later. Until then, its routines carry what each run needs.
+Copilot reads skills when a lead's session starts or resumes, so a lead that's already running may not see it yet. To set one up now, ask it to read ${path}.
 `,
     stderr: "",
   });
