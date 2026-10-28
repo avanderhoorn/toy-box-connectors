@@ -3,6 +3,7 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import {
   cancelQueuedRequestItems,
+  forgetLinkOutbox,
   moveOutboxChannel,
   queueCard,
   queueItem,
@@ -258,4 +259,247 @@ test("an item never takes the number of one deleted before it", async () => {
   await database.write((transaction) => transaction`DELETE FROM outbox WHERE id = ${newest.id}`);
 
   expect(await queue()).toEqual({ id: expect.any(String), number: 5 });
+});
+
+/** Stores item `number` of the link, a final reply to request `number` unless `columns` differ. */
+function storeItem(
+  database: BridgeDatabase,
+  number: number,
+  columns: Record<string, string | number | null> = {},
+) {
+  return createStoredOutboxItem(database, number, { request_id: number, ...columns });
+}
+
+/** Stores item `number` saying `payload`, a follow-up unless `columns` differ. */
+function storeSaying(
+  database: BridgeDatabase,
+  number: number,
+  payload: object,
+  columns: Record<string, string | number | null> = {},
+) {
+  const kind = columns.kind ?? "reply";
+  const phase = kind === "reply" ? "follow_up" : null;
+  return storeItem(database, number, { phase, payload: JSON.stringify(payload), ...columns });
+}
+
+/** Forgets the outbox of the link, as unlinking it a minute in does. */
+function forgetLink(database: BridgeDatabase) {
+  return database.write((transaction) => forgetLinkOutbox(transaction, "link", 60_000));
+}
+
+/** Each item's number, link, kind, state and payload, oldest first. */
+async function readItems(database: BridgeDatabase) {
+  const items = await database.read(
+    (sql) => sql<StoredItem[]>`
+      SELECT number, link_id, kind, state, payload FROM outbox ORDER BY number
+    `,
+  );
+  return [...items];
+}
+
+type StoredItem = { number: number; link_id: string; kind: string; state: string; payload: string };
+
+const said = { text: "The deploy failed at step 3." };
+const redacted = JSON.stringify({ redacted: "unlink" });
+
+test("a link that's going keeps only what Slack may still settle, and none of its text", async () => {
+  const database = await openTestDatabase();
+  const sending = { state: "sending", attempts: 1, attempt_method: "chat.postMessage" };
+  const unknown = { state: "delivery_unknown", attempts: 1 };
+  const eyes = { action: "add", name: "eyes", timestamp: "1700000100.000100" };
+  const check = { ...eyes, name: "white_check_mark" };
+  await storeSaying(database, 1, said, { phase: "final" });
+  await storeSaying(database, 2, said, sending);
+  await storeSaying(
+    database,
+    3,
+    { ...said, ts: "1700000300.000100" },
+    {
+      ...unknown,
+      kind: "progress",
+      attempt_method: "chat.update",
+    },
+  );
+  await storeSaying(
+    database,
+    4,
+    { ...said, ts: "1700000300.000100" },
+    {
+      ...unknown,
+      kind: "publication",
+      publication_key: "release-notes-1",
+      attempt_method: "chat.postMessage",
+    },
+  );
+  await storeSaying(database, 5, said, { state: "sent", slack_ts: "1700000500.000100" });
+  await storeSaying(database, 6, said, { state: "cancelled" });
+  await storeSaying(database, 7, said, { state: "failed", error: "msg_too_long" });
+  await storeSaying(database, 8, eyes, { kind: "reaction" });
+  await storeSaying(database, 9, { ...eyes, action: "remove" }, { kind: "reaction" });
+  await storeSaying(database, 10, check, {
+    ...unknown,
+    kind: "reaction",
+    attempt_method: "reactions.add",
+  });
+  await storeSaying(database, 11, { status: "is looking into it…" }, { kind: "status" });
+  await storeSaying(database, 12, { status: "" }, { kind: "status" });
+  await storeSaying(
+    database,
+    13,
+    { status: "is looking into it…" },
+    {
+      ...sending,
+      kind: "status",
+      attempt_method: "assistant.threads.setStatus",
+    },
+  );
+  await storeSaying(database, 14, said, { link_id: "other", phase: "final" });
+
+  await forgetLink(database);
+
+  expect(await readItems(database)).toEqual([
+    { number: 2, link_id: "link", kind: "reply", state: "sending", payload: redacted },
+    {
+      number: 3,
+      link_id: "link",
+      kind: "progress",
+      state: "delivery_unknown",
+      payload: JSON.stringify({ redacted: "unlink", ts: "1700000300.000100" }),
+    },
+    {
+      number: 4,
+      link_id: "link",
+      kind: "publication",
+      state: "delivery_unknown",
+      payload: redacted,
+    },
+    {
+      number: 9,
+      link_id: "link",
+      kind: "reaction",
+      state: "queued",
+      payload: JSON.stringify({ ...eyes, action: "remove" }),
+    },
+    {
+      number: 10,
+      link_id: "link",
+      kind: "reaction",
+      state: "delivery_unknown",
+      payload: JSON.stringify(check),
+    },
+    { number: 12, link_id: "link", kind: "status", state: "queued", payload: '{"status":""}' },
+    {
+      number: 13,
+      link_id: "link",
+      kind: "status",
+      state: "sending",
+      payload: '{"status":"is looking into it…"}',
+    },
+    { number: 14, link_id: "other", kind: "reply", state: "queued", payload: JSON.stringify(said) },
+  ]);
+});
+
+test("a withdrawal the link still owes goes out, with the post it withdraws", async () => {
+  const database = await openTestDatabase();
+  const sent = { state: "sent", slack_ts: "1700000100.000100" };
+  await storeSaying(database, 1, said, { ...sent, kind: "publication", publication_key: "notes" });
+  await storeSaying(database, 2, { target: "item-1" }, { kind: "retract" });
+  await storeSaying(database, 3, said, sent);
+  await storeSaying(database, 4, said, { ...sent, state: "retracted" });
+  await storeSaying(database, 5, { target: "item-4" }, { kind: "retract" });
+  await storeSaying(
+    database,
+    6,
+    { target: "item-7" },
+    {
+      kind: "retract",
+      state: "sending",
+      attempts: 1,
+      attempt_method: "chat.delete",
+    },
+  );
+  await storeSaying(database, 7, said, sent);
+  await storeSaying(database, 8, { target: "item-gone" }, { kind: "retract" });
+
+  await forgetLink(database);
+
+  expect(await readItems(database)).toEqual([
+    { number: 1, link_id: "link", kind: "publication", state: "sent", payload: redacted },
+    {
+      number: 2,
+      link_id: "link",
+      kind: "retract",
+      state: "queued",
+      payload: '{"target":"item-1"}',
+    },
+    {
+      number: 6,
+      link_id: "link",
+      kind: "retract",
+      state: "sending",
+      payload: '{"target":"item-7"}',
+    },
+    { number: 7, link_id: "link", kind: "reply", state: "sent", payload: redacted },
+  ]);
+});
+
+test("a post that landed where it wasn't meant to stays, with one more withdrawal unless one is pending", async () => {
+  const database = await openTestDatabase();
+  const stray = { state: "stray", slack_ts: "1700000100.000100" };
+  await storeSaying(database, 1, said, stray);
+  await storeSaying(
+    database,
+    2,
+    { target: "item-1" },
+    {
+      kind: "retract",
+      request_id: 1,
+      state: "failed",
+      error: "cant_delete_message",
+    },
+  );
+  await storeSaying(database, 3, said, stray);
+  await storeSaying(database, 4, { target: "item-3" }, { kind: "retract", request_id: 3 });
+
+  await forgetLink(database);
+
+  expect(await readItems(database)).toEqual([
+    { number: 1, link_id: "link", kind: "reply", state: "stray", payload: redacted },
+    { number: 3, link_id: "link", kind: "reply", state: "stray", payload: redacted },
+    {
+      number: 4,
+      link_id: "link",
+      kind: "retract",
+      state: "queued",
+      payload: '{"target":"item-3"}',
+    },
+    {
+      number: 5,
+      link_id: "link",
+      kind: "retract",
+      state: "queued",
+      payload: '{"target":"item-1"}',
+    },
+  ]);
+  const [withdrawal] = await database.read(
+    (sql) => sql`SELECT request_id, channel_id, thread_ts, created_at FROM outbox WHERE number = 5`,
+  );
+  expect(withdrawal).toEqual({
+    request_id: 1,
+    channel_id: "C-link",
+    thread_ts: "1700000100.000100",
+    created_at: 60_000,
+  });
+});
+
+test("a link's cards and their withdrawals are left for their approvals to let go", async () => {
+  const database = await openTestDatabase();
+  const card = { kind: "card", approval_id: "approval-1", request_id: null, request_rev: null };
+  await storeItem(database, 1, { ...card, phase: "post", state: "stray", slack_ts: "1000.000100" });
+  await storeItem(database, 2, { ...card, phase: "update" });
+  await storeSaying(database, 3, { target: "item-1" }, { kind: "retract", state: "failed" });
+
+  await forgetLink(database);
+
+  expect((await readItems(database)).map((item) => item.number)).toEqual([1, 2, 3]);
 });

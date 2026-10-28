@@ -50,6 +50,10 @@ the read deadline. The due reader selects it again only once its link is active,
 releases that hold conditionally before reading. A refused linkless card needs manual resolution.
 `slackapi/model/history.ts` keeps raw messages intact for their owning decoder and distinguishes
 an empty page from an exhausted cursor.
+`forgetLinkOutbox` decides in unlink's transaction what stays of the link's items. Sending,
+unknown and stray items stay, and so do queued eyes removals, status clears and withdrawals of
+a sent or stray target, with each withdrawal's target. Cards stay for links to retire. The rest
+goes. A kept reply, progress note or publication loses its text, and a stray one is withdrawn.
 After unlink, redacted sending or unknown posts still settle against their original hash.
 An edit retains its frozen ts beside the redaction marker. Valid late deliveries are purged,
 not withdrawn. A misplaced one still gets withdrawn first. Channel-refused and exhausted

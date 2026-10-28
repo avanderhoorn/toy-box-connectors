@@ -490,12 +490,73 @@ export async function forgetCard(
   return true;
 }
 
-/** Forgets what a kept item says once what it was about is gone. Its hash still names its attempt. */
-async function redact(transaction: Bun.SQL, item: OutboxItem): Promise<void> {
-  await transaction`UPDATE outbox SET payload = ${REDACTED} WHERE id = ${item.id}`;
+/**
+ * Lets go of what the outbox holds for a link that's being removed, but for what Slack may still
+ * settle and the removals the bridge owes. A post, edit, reaction, status or withdrawal already
+ * sending or of unknown delivery stays until it settles. So do a queued 👀 removal, a queued status
+ * clear, and a queued withdrawal of a post that reached Slack, with that post. A post that reached
+ * the wrong place stays too, with one more withdrawal queued unless one is pending already. What
+ * stays keeps no text, and an edit only the ts of the message it changes. Everything else goes, so
+ * nothing else queued for the link reaches Slack. Cards and their withdrawals follow their
+ * approvals, which `forgetUnlinkedApprovals` lets go.
+ */
+export async function forgetLinkOutbox(
+  transaction: Bun.SQL,
+  linkId: string,
+  now: number,
+): Promise<void> {
+  const rows = await transaction<OutboxRow[]>`
+    SELECT * FROM outbox WHERE link_id = ${linkId} AND kind <> 'card'
+      AND NOT (kind = 'retract' AND json_extract(payload, '$.target') IN (
+        SELECT id FROM outbox WHERE kind = 'card'
+      ))
+    ORDER BY number
+  `;
+  const items = new Map(rows.map((row) => [row.id, outboxItem(row)]));
+  const kept = new Set([...items.values()].filter((item) => owed(item, items)));
+  for (const item of kept) {
+    const target = item.kind === "retract" ? items.get(String(item.payload.target)) : undefined;
+    if (target) kept.add(target);
+  }
+  const forgotten = [...items.keys()].filter((id) => !kept.has(items.get(id)!));
+  if (forgotten.length) {
+    await transaction`DELETE FROM outbox WHERE id IN ${transaction(forgotten)}`;
+  }
+  for (const item of kept) {
+    if (["reply", "progress", "publication"].includes(item.kind)) await redact(transaction, item);
+    if (item.state === "stray") await queueRetraction(transaction, item, now);
+  }
 }
 
-const REDACTED = JSON.stringify({ redacted: "unlink" });
+/** Whether the bridge still owes Slack something for an item of a link that's going. */
+function owed(item: OutboxItem, items: ReadonlyMap<string, OutboxItem>): boolean {
+  if (["sending", "delivery_unknown", "stray"].includes(item.state)) return true;
+  if (item.state !== "queued") return false;
+  switch (item.kind) {
+    case "reaction":
+      return item.payload.action === "remove";
+    case "status":
+      return item.payload.status === "";
+    case "retract": {
+      const target = items.get(String(item.payload.target));
+      return target !== undefined && ["sent", "stray"].includes(target.state);
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * Forgets what a kept item says once what it was about is gone. Its hash still names its attempt,
+ * and an edit keeps the ts of the message it changes, which proving where it landed needs.
+ */
+async function redact(transaction: Bun.SQL, item: OutboxItem): Promise<void> {
+  const ts = item.attemptMethod === "chat.update" ? item.payload.ts : undefined;
+  const payload = typeof ts === "string" ? { ...REDACTED, ts } : REDACTED;
+  await transaction`UPDATE outbox SET payload = ${JSON.stringify(payload)} WHERE id = ${item.id}`;
+}
+
+const REDACTED = { redacted: "unlink" };
 
 async function supersedeCardUpdates(
   transaction: Bun.SQL,
