@@ -5,8 +5,8 @@ import type { ChannelSuspendReason } from "./audience";
 // The bridge suspends a link when Slack or Toy Box makes continuing unsafe, and the link keeps its
 // settings and data until someone resumes or unlinks it. Resuming can widen who reads the lead
 // again, so only the owner can. A link whose Toy Box channel was deleted ends only with unlink, and
-// one whose Slack channel has a new ID only with linking that ID again. Each reason says why after
-// "suspended", and what ends it, for the banner and status.
+// one whose Slack channel has a new ID only with unlink and then a link to the new ID. Each reason
+// says why after "suspended", and what ends it, for the banner and status.
 
 /** Why the bridge suspended a link. */
 export type SuspendReason =
