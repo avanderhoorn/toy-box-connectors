@@ -1,0 +1,245 @@
+// A Toy Box channel an end-to-end test drives.
+//
+// Each test channel's purpose asks its lead for a kickoff message and rules out members, tasks and
+// wakes it schedules itself, so only the test starts the lead's turns. The harness follows the
+// channel's stream from creation, so a test reads the lead's presence, messages and routines as Toy
+// Box reports them. A test wakes the lead only as the owner or with a routine run, and only once
+// the lead has settled, so no wake steers into a turn that's still running.
+
+import {
+  agentPresenceSchema,
+  channelFrameSchema,
+  routineChangeSchema,
+  type AgentPresence,
+  type ChannelFrame,
+  type ToyBoxMessage,
+  type ToyBoxRoutine,
+} from "@toybox/model";
+import { readChannelStream, runToyBoxRoutine } from "@toybox/server/api";
+import { readServerSentEvents } from "@toybox/server/sse";
+import { z } from "zod";
+import { LEAD_MODEL, waitUntil, type IsolatedToyBox } from "./isolatedToyBox";
+
+const TEST_CHANNEL_RULES =
+  "This channel runs an end-to-end test. Start with one short kickoff message, then do only what the owner or a routine asks. Never add members or create tasks, and pass wakeAfterMinutes only when asked to. Use a skill only when a message or routine names it.";
+
+// Toy Box answers on loopback, so a request this slow has failed rather than queued.
+const REQUEST_TIMEOUT = 30_000;
+const TURN_START_TIMEOUT = 90_000;
+const TURN_FINISH_TIMEOUT = 240_000;
+// Toy Box sends a keepalive every 5 seconds.
+const STREAM_IDLE_TIMEOUT = 30_000;
+
+/** How long creating a channel can take, its lead's kickoff turn included. */
+export const CREATE_CHANNEL_TIMEOUT = TURN_START_TIMEOUT + TURN_FINISH_TIMEOUT + 30_000;
+
+/** How long one `turn` can take, from waiting out the turn before it. */
+export const TURN_TIMEOUT = 2 * TURN_FINISH_TIMEOUT + TURN_START_TIMEOUT;
+
+export type TestChannel = {
+  id: string;
+  /** The lead's latest presence. */
+  presence(): AgentPresence | undefined;
+  /** The routine the lead registered as `title`, once Toy Box reports it. */
+  routine(title: string): ToyBoxRoutine | undefined;
+  /** Posts `content` as the owner, which wakes the lead. */
+  post(content: string): Promise<void>;
+  /** Runs one of the lead's routines the way the bridge does, which wakes the lead. */
+  runRoutine(routineId: string): Promise<void>;
+  /**
+   * Waits for the lead to settle, wakes it with `wake`, and resolves with the presences its turn
+   * went through, from working to where it settled.
+   */
+  turn(wake: () => Promise<void>): Promise<AgentPresence[]>;
+};
+
+const createdChannelSchema = z.object({
+  channel: z.object({
+    id: z.string(),
+    model: z.object({ provider: z.string(), name: z.string() }),
+  }),
+});
+
+/** Creates a channel whose lead runs the test model, and resolves once its kickoff has settled. */
+export async function createTestChannel(
+  toyBox: IsolatedToyBox,
+  options: { name: string; purpose: string },
+): Promise<TestChannel> {
+  try {
+    const testChannel = followChannel(toyBox, await createChannel(toyBox, options));
+    await testChannel.kickedOff();
+    return testChannel;
+  } catch (error) {
+    throw toyBox.failure(error);
+  }
+}
+
+async function createChannel(
+  toyBox: IsolatedToyBox,
+  { name, purpose }: { name: string; purpose: string },
+): Promise<string> {
+  const response = await fetch(new URL("/api/v1/channels", toyBox.origin), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name,
+      purpose: `${purpose}\n\n${TEST_CHANNEL_RULES}`,
+      directory: toyBox.work,
+      model: LEAD_MODEL,
+    }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT),
+  });
+  if (response.status !== 201) {
+    const answer = await response.text();
+    throw new Error(`Toy Box answered ${response.status} to a new channel: ${answer}`);
+  }
+  const { channel } = createdChannelSchema.parse(await response.json());
+  // Toy Box gives a channel its first model when it doesn't offer the one asked for.
+  if (channel.model.provider !== LEAD_MODEL.provider || channel.model.name !== LEAD_MODEL.name) {
+    throw new Error(`Toy Box gave the channel ${channel.model.provider}'s ${channel.model.name}.`);
+  }
+  return channel.id;
+}
+
+function followChannel(toyBox: IsolatedToyBox, channelId: string) {
+  const presences: AgentPresence[] = [];
+  const leadMessages: unknown[] = [];
+  const routines = new Map<string, ToyBoxRoutine>();
+  let failure: unknown;
+
+  void (async () => {
+    try {
+      const stream = readChannelStream(toyBox.origin, channelId, null, {
+        signal: toyBox.signal,
+        idleTimeout: STREAM_IDLE_TIMEOUT,
+      });
+      for await (const { data } of readServerSentEvents(stream)) {
+        observe(channelFrameSchema.parse(JSON.parse(data)));
+      }
+      failure ??= new Error(`Toy Box ended channel ${channelId}'s stream.`);
+    } catch (error) {
+      failure ??= error;
+    }
+  })();
+
+  function observe(frame: ChannelFrame) {
+    switch (frame.type) {
+      case "snapshot":
+        observePresence(frame.state.presence);
+        for (const routine of frame.state.routines) routines.set(routine.id, routine);
+        for (const message of frame.state.messages) observeMessage(message);
+        return;
+      case "resumed":
+      case "presence":
+        return observePresence(frame.presence);
+      case "message":
+        return observeMessage(frame.message);
+      case "deleted":
+        failure ??= new Error(`Toy Box deleted channel ${channelId}.`);
+        return;
+    }
+  }
+
+  // A presence frame names only the agents whose presence changed.
+  function observePresence(presence: Record<string, unknown>) {
+    if (Object.hasOwn(presence, channelId)) {
+      presences.push(agentPresenceSchema.parse(presence[channelId]));
+    }
+  }
+
+  // The channel has no members, so every agent message is its lead's.
+  function observeMessage(message: ToyBoxMessage) {
+    if (message.sender.type === "agent") leadMessages.push(message.content);
+    const change = routineChangeSchema.safeParse(message.content);
+    if (message.sender.type !== "system" || !change.success) return;
+    const { type, routine } = change.data;
+    if (type === "routine_deleted") routines.delete(routine.id);
+    else routines.set(routine.id, routine);
+  }
+
+  /** Throws what ended the stream, so a wait fails at once rather than at its deadline. */
+  function following() {
+    if (failure !== undefined) throw failure;
+  }
+
+  function settled(): true | undefined {
+    following();
+    const presence = presences.at(-1);
+    return presence && presence.state !== "working" ? true : undefined;
+  }
+
+  return {
+    id: channelId,
+    presence: () => presences.at(-1),
+    routine: (title: string) => [...routines.values()].find((routine) => routine.title === title),
+
+    async post(content: string) {
+      const url = new URL(`/api/v1/channels/${channelId}/messages`, toyBox.origin);
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: crypto.randomUUID(), content }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT),
+      });
+      if (response.status !== 201) {
+        const answer = await response.text();
+        throw new Error(`Toy Box answered ${response.status} to the owner's message: ${answer}`);
+      }
+    },
+
+    async runRoutine(routineId: string) {
+      const outcome = await runToyBoxRoutine(toyBox.origin, channelId, routineId);
+      if (outcome !== "ran") throw new Error(`Running routine ${routineId} ${outcome}.`);
+    },
+
+    async turn(wake: () => Promise<void>) {
+      await waitUntil("the lead to finish its last turn", settled, TURN_FINISH_TIMEOUT);
+      const before = presences.length;
+      await wake();
+      const since = () => presences.slice(before);
+      await waitUntil(
+        "the lead to start working",
+        () => {
+          following();
+          return since().some(isWorking) || undefined;
+        },
+        TURN_START_TIMEOUT,
+      );
+      await waitUntil("the lead to finish its turn", settled, TURN_FINISH_TIMEOUT);
+      const turn = since();
+      return turn.slice(turn.findIndex(isWorking));
+    },
+
+    /**
+     * Resolves once the lead has posted and stopped working. A lead that never starts, or stops
+     * without posting, fails at once, which is how a model or token Copilot refuses shows up.
+     */
+    async kickedOff() {
+      const created = Date.now();
+      let quietSince: number | undefined;
+      await waitUntil(
+        "the lead's kickoff turn to post and settle",
+        () => {
+          if (settled() && leadMessages.length) return true;
+          if (!presences.some(isWorking)) {
+            if (Date.now() - created < TURN_START_TIMEOUT) return undefined;
+            throw new Error(
+              `The lead didn't start its kickoff turn in ${TURN_START_TIMEOUT / 1000} s.`,
+            );
+          }
+          // Its message can trail the presence that ends its turn.
+          quietSince = settled() ? (quietSince ?? Date.now()) : undefined;
+          if (quietSince !== undefined && Date.now() - quietSince > 2_000) {
+            throw new Error("The lead finished its kickoff turn without posting.");
+          }
+          return undefined;
+        },
+        TURN_START_TIMEOUT + TURN_FINISH_TIMEOUT,
+      );
+    },
+  };
+}
+
+function isWorking(presence: AgentPresence): boolean {
+  return presence.state === "working";
+}
