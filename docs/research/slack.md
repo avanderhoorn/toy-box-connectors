@@ -511,6 +511,24 @@ which boundary to move. Prefer its documented `next_cursor` with fixed
 [replies order](https://docs.slack.dev/reference/methods/conversations.replies/#pagination-by-time),
 [cursor contract and expiry](https://docs.slack.dev/apis/web-api/pagination/).
 
+**Exact-source lookup, verified against the documentation on 2026-10-28.**
+The `conversations.replies` argument contract accepts either a parent or a
+message in its thread, but requires that timestamp to identify an existing
+message. Its `thread_not_found` error means missing or invalid `ts`; the same
+error can also mean a non-threadable join/leave message. Thus `thread_not_found`
+for a deleted reply's own timestamp is an expectation, **not live-verified
+evidence or an explicitly documented deleted-reply response**. Our protocol
+fake implements that expectation and cannot independently establish it.
+[Timestamp and error contract](https://docs.slack.dev/reference/methods/conversations.replies/).
+
+Add the exact case to an approved live-probe batch: read an existing reply by
+its own timestamp, delete that probe reply, then query its timestamp again
+and separately read its surviving parent. Keep the parent and another reply
+as controls. A failure at the source's timestamp must not tombstone the whole
+thread. Cancelling an unusable request is a separate product policy from
+asserting that a missing message proves a deletion event. No live call was made
+under the standing credential/live-test restriction.
+
 Recommended repair algorithm:
 
 1. Establish event ingestion first. Take a fixed repair upper bound and record
