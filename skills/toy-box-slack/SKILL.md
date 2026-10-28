@@ -109,4 +109,8 @@ The banner names what needs attention and points to `toy-box-slack status`, whic
 
 ## Restore your waiting status
 
-A routine run clears your waiting status and its wake time. Until your turn ends, the banner hands them back, such as: Before this turn you were waiting for "Bridge Engineer's s3". If that's still true when you finish, call finish_agent_turn with that waitingFor and wakeAfterMinutes 25. If it's still true, end your turn exactly that way, leaving out wakeAfterMinutes when the banner shows none.
+A routine run clears your waiting status and its wake time. Until your turn ends, the banner hands them back, such as:
+
+> Before this turn you were waiting for "Bridge Engineer's s3". If that's still true when you finish, call finish_agent_turn with that waitingFor and wakeAfterMinutes 25.
+
+If it's still true, end your turn exactly that way. When the banner shows no wakeAfterMinutes, leave it out.
