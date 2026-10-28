@@ -9,7 +9,7 @@
 import { pathToFileURL } from "node:url";
 import { initializeActivitySchema } from "@activity/server/schema";
 import { initializeLinkSchema } from "@links/server/schema";
-import { initializeOutboxSchema } from "@outbox/server/schema";
+import { addOutboxDeliverySchema, initializeOutboxSchema } from "@outbox/server/schema";
 import { initializeRequestSchema } from "@requests/server/schema";
 import { initializeSlackApiSchema } from "@slackapi/server/schema";
 import { initializeToyBoxSchema } from "@toybox/server/schema";
@@ -37,6 +37,7 @@ const bridgeMigrations: readonly Migration[] = [
     await initializeToyBoxSchema(transaction);
     await initializeOutboxSchema(transaction);
   },
+  addOutboxDeliverySchema,
 ];
 
 /** The settings that keep an acked event on disk through a power loss and keep references whole. */

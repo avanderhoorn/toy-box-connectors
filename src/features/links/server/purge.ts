@@ -44,6 +44,7 @@ export const uninstallPurge = {
   request_messages: "delete",
   requests: "delete",
   outbox: "delete",
+  outbox_channels: "delete",
   toybox_streams: "delete",
   links: "delete",
 } as const satisfies Record<string, TablePurge>;

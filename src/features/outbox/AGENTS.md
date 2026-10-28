@@ -18,6 +18,16 @@ payload hash. Manual resolution may use exact sent text only when metadata is ab
 never when metadata identifies another item. A receipt that shows a reply at the root
 requires withdrawal, not confirmation.
 
+`server/database.ts` commits each attempt's method, start time, incremented attempt count, and
+exact send-time payload before the call. An unknown post can never be requeued automatically.
+Idempotent updates, deletions and feedback may retry without posting another message.
+Reconciliation counts only fully read passes, scheduled
+from that immutable attempt time at 10, 60 and 120 seconds. Unsuccessful reads never turn an
+unknown into a send candidate. Conditional settlements keep late responses from overwriting
+manual resolutions or newer attempts. `outbox_channels` shares a durable one-second post
+slot across links and cards. Channel ID changes carry the later slot forward, unlink leaves
+it alone, uninstall removes it, and maintenance expires slots whose deadline has passed.
+
 ## Text
 
 `model/rendering.ts` owns Markdown conversion. It uses the pinned Markdown lexer, supplies

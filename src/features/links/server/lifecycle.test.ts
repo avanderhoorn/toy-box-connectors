@@ -224,6 +224,7 @@ async function fillEveryTable(database: BridgeDatabase): Promise<void> {
       VALUES ('Ev-1', 'events_api', 0, 'applied')
     `;
     await transaction`INSERT INTO rate_limits (method, next_attempt_at) VALUES ('chat.postMessage', 0)`;
+    await transaction`INSERT INTO outbox_channels (channel_id, next_post_at) VALUES ('C-link', 1000)`;
     await transaction`INSERT INTO channel_aliases VALUES ('C-old', 'C-link', 0)`;
     await transaction`INSERT INTO users (user_id) VALUES ('U-carol')`;
     await transaction`INSERT INTO user_aliases VALUES ('W-carol', 'U-carol')`;

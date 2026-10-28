@@ -6,6 +6,14 @@ import { compareTs, slackTsSchema, type SlackTs } from "@slackapi/model/ts";
 import type { SlackCall } from "@slackapi/server/botClient";
 import { z } from "zod";
 
+export type OutboxMethod =
+  | "chat.postMessage"
+  | "chat.update"
+  | "chat.delete"
+  | "reactions.add"
+  | "reactions.remove"
+  | "assistant.threads.setStatus";
+
 export type WriteOutcome<Result> =
   | { kind: "accepted"; result: Result }
   | { kind: "queued"; nextAttemptAt: number | null; error: string }
