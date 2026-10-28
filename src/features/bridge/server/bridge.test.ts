@@ -1,6 +1,6 @@
 import { expect, onTestFinished, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { startBridge } from "./bridge";
 import { acquireBridgeLock } from "./lock";
@@ -58,12 +58,21 @@ test("refuses a data folder that others can open before it creates anything ther
   expect(readdirSync(dataFolder)).toEqual([]);
 });
 
-test("refuses a Toy Box that isn't on this Mac before it creates its data folder", async () => {
+test("refuses a Toy Box that isn't on this Mac before it takes the lock", async () => {
   const dataFolder = join(createTestFolder(), ".toy-box-slack");
 
   await expect(
     startBridge(dataFolder, { TOY_BOX_URL: "http://toy-box.example.com:3000" }),
   ).rejects.toThrow(BridgeRefusedError);
 
-  expect(existsSync(dataFolder)).toBe(false);
+  expect(readdirSync(dataFolder)).toEqual([]);
+});
+
+test("refuses tokens that others can read before it takes the lock", async () => {
+  const dataFolder = createTestFolder();
+  writeFileSync(join(dataFolder, "credentials.env"), "SLACK_BOT_TOKEN=xoxb-1\n", { mode: 0o644 });
+
+  await expect(startBridge(dataFolder, env)).rejects.toThrow("must be 600");
+
+  expect(readdirSync(dataFolder)).toEqual(["credentials.env"]);
 });

@@ -1,7 +1,8 @@
 // Bridge startup and shutdown.
 //
-// The bridge prepares its data folder, takes the single-bridge lock, and only
-// then opens `bridge.db`, so a second bridge stops before it opens anything.
+// The bridge prepares its data folder, reads its settings, takes the
+// single-bridge lock, and only then opens `bridge.db`, so a second bridge stops
+// before it opens anything.
 // Then it starts its work: following each linked Toy Box channel and waking
 // leads. It lets go of everything in the reverse order.
 //
@@ -14,7 +15,7 @@ import { startToyBoxClient, type ToyBoxClient } from "@toybox/server";
 import { startWakeScheduler, type WakeScheduler } from "@wakes/server";
 import { prepareDataFolder, resolveDataFolder } from "./dataFolder";
 import { openBridgeDatabase, type BridgeDatabase } from "./database";
-import { resolveToyBoxOrigin, resolveWakeTimings } from "./environment";
+import { readCredentialsFile, resolveBridgeSettings } from "./environment";
 import { acquireBridgeLock } from "./lock";
 import { BridgeRefusedError } from "./refusal";
 
@@ -50,9 +51,8 @@ export async function startBridge(
   dataFolder: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<Bridge> {
-  const origin = resolveToyBoxOrigin(env);
-  const wakeTimings = resolveWakeTimings(env);
   prepareDataFolder(dataFolder);
+  const settings = resolveBridgeSettings(env, readCredentialsFile(dataFolder));
   const lock = await acquireBridgeLock(join(dataFolder, "bridge.lock"));
   const failure = Promise.withResolvers<unknown>();
   let database: BridgeDatabase | undefined;
@@ -72,14 +72,14 @@ export async function startBridge(
   try {
     database = await openBridgeDatabase(join(dataFolder, "bridge.db"));
     toyBox = startToyBoxClient(database, {
-      origin,
+      origin: settings.toyBoxOrigin,
       onChange: () => scheduler?.reconsider(),
       onError: failure.resolve,
-      timings: wakeTimings,
+      timings: settings.wakeTimings,
     });
     scheduler = startWakeScheduler(database, toyBox, {
       onError: failure.resolve,
-      timings: wakeTimings,
+      timings: settings.wakeTimings,
     });
     await toyBox.followLinks();
     return { failed: failure.promise, stop };
