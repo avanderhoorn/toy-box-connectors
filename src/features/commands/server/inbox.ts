@@ -6,6 +6,7 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { inboxOrder, presentInbox, type Inbox, type InboxRequest } from "@commands/model/inbox";
 import {
   mentionedUsers,
+  permalink,
   personName,
   renderSlackText,
   type SlackNames,
@@ -112,11 +113,4 @@ async function readPersonNames(sql: Bun.SQL, userIds: (string | null)[]): Promis
     if (name) names.set(userId, name);
   }
   return names;
-}
-
-function permalink(workspaceUrl: string | null, { channelId, sourceTs, rootTs }: StoredRequest) {
-  if (workspaceUrl === null) return null;
-  const archive = `${workspaceUrl.replace(/\/?$/, "/")}archives/${channelId}`;
-  const message = `${archive}/p${sourceTs.replace(".", "")}`;
-  return sourceTs === rootTs ? message : `${message}?thread_ts=${rootTs}`;
 }

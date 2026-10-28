@@ -3,7 +3,7 @@
 
 import { suspensions, type SuspendReason } from "@links/model/status";
 import { STALL_AFTER, type WakeDecision, type WakeRun } from "@wakes/model";
-import { ago, count, duration } from "./wording";
+import { ago, clockTime, count, duration } from "./wording";
 
 const connections = {
   connected: "Connected.",
@@ -42,9 +42,22 @@ export type LinkStatus = {
   pending: number;
   /** Requests the lead has read but not answered. */
   read: number;
+  unconfirmed: UnconfirmedPost[];
   wake: WakeDecision;
   /** Toy Box's answer to the latest wake, or null before the first. */
   lastWake: WakeRun | null;
+};
+
+/** A post Slack never confirmed: an answer to a request, or a series' post for a scheduled run. */
+export type UnconfirmedPost = {
+  post: number;
+  /** When the bridge stopped knowing whether it landed. */
+  since: number;
+  request: number | null;
+  /** The request's Slack link, or null when Slack hasn't said the workspace's URL. */
+  permalink: string | null;
+  series: string | null;
+  scheduledAt: number | null;
 };
 
 export type Status = { slack: SlackState; links: LinkStatus[] };
@@ -76,8 +89,23 @@ function presentLink(link: LinkStatus, at: number): string {
     `- Link: ${presentLinkState(link)}`,
     `- Answers: ${people}, when one ${asks}. Threads show ${threads}.`,
     `- Requests: ${link.pending} new or changed, ${link.read} read and not answered.`,
+    ...presentUnconfirmed(link.unconfirmed, at),
     `- Wakes: ${presentWake(link, at)}`,
   ].join("\n");
+}
+
+function presentUnconfirmed(posts: UnconfirmedPost[], at: number): string[] {
+  if (posts.length === 0) return [];
+  return [
+    "- Posts: Slack never confirmed these landed, and the bridge won't send them again. Have the owner check each one. Anyone whose answer is missing can ask again in its thread.",
+    ...posts.map(({ post, since, request, permalink, series, scheduledAt }) => {
+      const what =
+        request === null
+          ? `the ${series} post for the run scheduled ${clockTime(scheduledAt!)}`
+          : `the answer to r${request}`;
+      return `  - o${post}, ${what}, tried ${ago(at - since)}${permalink ? `: ${permalink}` : "."}`;
+    }),
+  ];
 }
 
 function presentLinkState({ status, statusReason }: LinkStatus): string {

@@ -120,13 +120,14 @@ export async function startBridge(
         onError: failure.resolve,
       });
     }
+    const workspaceUrl = () => slack?.workspaceUrl() ?? null;
     socket = listenForCommands(
       commandSocketPath(dataFolder),
       serveCommands(database, {
         inbox: inboxCommand({
           database,
           wakes: scheduler,
-          workspaceUrl: () => slack?.workspaceUrl() ?? null,
+          workspaceUrl,
           acknowledge: (requests) => outbox?.acknowledge(requests),
         }),
         dismiss: dismissCommand({ database, wakes: scheduler }),
@@ -137,7 +138,12 @@ export async function startBridge(
           outbox,
         }),
         retract: retractCommand({ database, bot }),
-        status: statusCommand({ database, slack: slackState, timings: settings.wakeTimings }),
+        status: statusCommand({
+          database,
+          slack: slackState,
+          workspaceUrl,
+          timings: settings.wakeTimings,
+        }),
       }),
     );
     return { failed: failure.promise, stop };

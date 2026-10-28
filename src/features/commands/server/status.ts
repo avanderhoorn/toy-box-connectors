@@ -1,8 +1,14 @@
 // A lead sees its own link, and a terminal the link --channel names, or every link without it.
 
 import type { BridgeDatabase } from "@bridge/server/database";
-import { channelName, personName } from "@commands/model/slackText";
-import { presentStatus, type LinkStatus, type SlackState } from "@commands/model/status";
+import { channelName, permalink, personName } from "@commands/model/slackText";
+import {
+  presentStatus,
+  type LinkStatus,
+  type SlackState,
+  type UnconfirmedPost,
+} from "@commands/model/status";
+import { readRequest } from "@requests/server/database";
 import { readSlackPersonName } from "@slackapi/server/users";
 import { decideWake, defaultWakeTimings, isPending, type WakeTimings } from "@wakes/model";
 import { readLinkWakes } from "@wakes/server/database";
@@ -12,6 +18,8 @@ import type { CommandHandler } from "./serve";
 export type StatusCommandOptions = {
   database: BridgeDatabase;
   slack: () => SlackState;
+  /** The Slack workspace's URL, once Slack has said it, for the links of unconfirmed answers. */
+  workspaceUrl: () => string | null;
   timings?: WakeTimings;
 };
 
@@ -23,6 +31,7 @@ type StoredLink = Pick<
 export function statusCommand({
   database,
   slack,
+  workspaceUrl,
   timings = defaultWakeTimings,
 }: StatusCommandOptions): CommandHandler<"status"> {
   return async (_input, { caller, at }) => {
@@ -46,12 +55,22 @@ export function statusCommand({
         for (const { userId, label } of allowed) {
           allowlist.push(personName((await readSlackPersonName(sql, userId)) ?? label, userId));
         }
+        const unconfirmed: UnconfirmedPost[] = [];
+        for (const post of await sql<Omit<UnconfirmedPost, "permalink">[]>`
+          SELECT number AS post, unknown_since AS since, request_id AS request, series,
+            scheduled_at AS scheduledAt
+          FROM outbox WHERE link_id = ${id} AND state = 'delivery_unknown' ORDER BY number
+        `) {
+          const request = post.request === null ? null : await readRequest(sql, post.request);
+          unconfirmed.push({ ...post, permalink: request && permalink(workspaceUrl(), request) });
+        }
         shown.push({
           ...link,
           slackChannel: channelName(null, slackChannelId),
           allowlist,
           pending,
           read: state.requests.length - pending,
+          unconfirmed,
           wake: decideWake(at, state, timings),
           lastWake: state.runs[0] ?? null,
         });

@@ -3,6 +3,8 @@
 // zero-width space after it. Names shown outside a fence also lose anything that could pass for a
 // label the bridge adds.
 
+import type { Request } from "@requests/model/lifecycle";
+
 /** The names the bridge stored for people, by user ID. */
 export type SlackNames = ReadonlyMap<string, string>;
 
@@ -48,6 +50,17 @@ export function personName(name: string | null | undefined, userId: string): str
 /** A channel as #name, or by its ID when the bridge has no name. */
 export function channelName(name: string | null | undefined, channelId: string): string {
   return `#${oneLine(name || channelId, NAME_LIMIT)}`;
+}
+
+/** A request's Slack link, opening its thread, or null until Slack has said the workspace's URL. */
+export function permalink(
+  workspaceUrl: string | null,
+  { channelId, sourceTs, rootTs }: Pick<Request, "channelId" | "sourceTs" | "rootTs">,
+): string | null {
+  if (workspaceUrl === null) return null;
+  const archive = `${workspaceUrl.replace(/\/?$/, "/")}archives/${channelId}`;
+  const message = `${archive}/p${sourceTs.replace(".", "")}`;
+  return sourceTs === rootTs ? message : `${message}?thread_ts=${rootTs}`;
 }
 
 /**
