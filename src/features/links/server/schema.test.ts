@@ -82,6 +82,7 @@ test("deleting a link deletes what belongs to it and nothing else", async () => 
         routine_state: "present",
         period: "week",
         schedule: "0 9 * * 1",
+        registered_at: 0,
       })}`;
       await transaction`INSERT INTO allowlist ${transaction({ link_id: id, user_id: "U0123", added_at: 0 })}`;
       await transaction`INSERT INTO coverage ${transaction({

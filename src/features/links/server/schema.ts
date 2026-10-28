@@ -42,6 +42,8 @@ export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
       updated_at          INTEGER NOT NULL
     );
 
+    -- A series owes catch-ups only for runs scheduled at or after registered_at, which a new
+    -- schedule moves forward.
     CREATE TABLE link_routines (
       link_id       TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE,
       series        TEXT NOT NULL,
@@ -49,6 +51,7 @@ export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
       routine_state TEXT NOT NULL CHECK (routine_state IN ('present', 'drifted', 'missing')),
       period        TEXT NOT NULL CHECK (period IN ('day', 'week')),
       schedule      TEXT NOT NULL,
+      registered_at INTEGER NOT NULL,
       PRIMARY KEY (link_id, series)
     );
 
