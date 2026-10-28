@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  isWithdrawn,
   normalizeHistoryMessage,
   normalizeMessageEvent,
   slackMessageEventSchema,
+  slackMessageSchema,
   type NormalizeContext,
   type SlackMessageEvent,
 } from "./messages";
@@ -190,6 +192,15 @@ describe("normalizing Slack messages", () => {
     expect(normalize({ type: "message", channel: "C1", ...plain, hidden: false }).kind).toBe(
       "message",
     );
+  });
+
+  test("withdrawal reads only the snapshot's own signals, whoever posted it", () => {
+    const ours = slackMessageSchema.parse({ ...plain, user: "UBOT", bot_id: "BBOT", app_id: "A1" });
+    expect(isWithdrawn(ours)).toBe(false);
+    expect(isWithdrawn({ ...ours, subtype: "ekm_access_denied" })).toBe(true);
+    expect(isWithdrawn({ ...ours, hidden: true })).toBe(true);
+    expect(isWithdrawn({ ...ours, user: "UREVOKEDU" })).toBe(true);
+    expect(isWithdrawn({ ...ours, subtype: "tombstone", hidden: true })).toBe(true);
   });
 
   test("a reply notice updates the thread's bookkeeping and never repeats its root", () => {

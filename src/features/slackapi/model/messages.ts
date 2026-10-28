@@ -255,9 +255,10 @@ function fromSnapshot(
 /**
  * Whether Slack withheld a message's content. A snapshot like this keeps the original's ts, often
  * without a newer edit, and what text it has is Slack's placeholder. Only the message's own hidden
- * flag counts, since Slack hides every edit and delete event that carries one.
+ * flag counts, since Slack hides every edit and delete event that carries one. A tombstone is
+ * hidden too, so a caller that tells a deleted root apart checks for one first.
  */
-function isWithdrawn(payload: SlackMessagePayload): boolean {
+export function isWithdrawn(payload: SlackMessagePayload): boolean {
   return (
     payload.subtype === "ekm_access_denied" ||
     payload.hidden === true ||
