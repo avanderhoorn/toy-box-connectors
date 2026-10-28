@@ -30,6 +30,25 @@ can show an older outcome but cannot restore buttons. An edit receipt must match
 Slack need not repeat ts inside message. Withdrawn snapshots never prove a receipt or a read,
 even when they retain our identity and metadata.
 
+`server/reconcile.ts` reads unknown messages through single-page history helpers and the shared
+client. It scans the whole intended thread, then roots since the attempt for a misplaced reply,
+or roots since the attempt for a publication or initial card. An edit reads its already proved
+target, even when that message predates the attempt. Only exact own-bot/app metadata proves it.
+Positive proof can finish immediately. A complete miss advances one of the three original
+deadlines, never requeues a post, and exhaustion leaves the item unknown.
+Partial cursors survive cooldowns in memory so a thread longer than one rate-limit window can
+finish. They are discarded on restart or invalidation without spending a pass. Concurrent calls
+for one item coalesce, and close drains its read and prevents another page. Missing or cyclic
+cursors, malformed pages and failed reads report an explicit hold rather than a complete pass.
+`slackapi/model/history.ts` keeps raw messages intact for their owning decoder and distinguishes
+an empty page from an exhausted cursor.
+
+`server/delivery.ts` commits both response and read proof through the same settlement path:
+the initial card ts, misplaced cleanup and request settlement cannot be lost between them.
+A card update with no proved ts waits only while an initial post is queued, sending or unknown.
+Without such a post it is dropped explicitly. The queue runner must revisit these waits when a
+post settles, including a manual resolution.
+
 `model/posting.ts` checks the current installation, link, destination, requester and request
 revision. Only explicit follow-ups reach answered, dismissed or expired requests, and none
 reach cancelled requests. A destination needs channel facts younger than two minutes with no

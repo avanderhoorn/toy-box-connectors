@@ -164,21 +164,28 @@ export function messageEvidence(
   identity: BotIdentity,
   manual = false,
 ): "metadata" | "text" | null {
-  const parsed = deliveryMessageSchema.safeParse(message);
-  if (!parsed.success || channelId !== post.channelId) return null;
-  const candidate = parsed.data;
-  if (candidate.channel != null && candidate.channel !== channelId) return null;
-  if (
-    !currentMessage(candidate) ||
-    !fromOurBot(candidate, identity) ||
-    !correctThread(candidate, post.threadTs)
-  ) {
-    return null;
-  }
+  const candidate = ownReadMessage(message, channelId, post.channelId, identity);
+  if (!candidate || !correctThread(candidate, post.threadTs)) return null;
   if (candidate.metadata != null) {
     return matchesMetadata(candidate.metadata, post) ? "metadata" : null;
   }
   return manual && candidate.text === post.text ? "text" : null;
+}
+
+/** A correlated misplaced post is cleanup evidence, never proof that its request was answered. */
+export function reconciliationReceipt(
+  message: unknown,
+  channelId: string,
+  post: Pick<OutboxPost, "id" | "payloadHash" | "channelId" | "threadTs"> & { ts?: SlackTs },
+  identity: BotIdentity,
+): Exclude<PostReceipt, { kind: "unverified" }> | null {
+  const candidate = ownReadMessage(message, channelId, post.channelId, identity);
+  if (!candidate || !matchesMetadata(candidate.metadata, post)) return null;
+  if (post.ts !== undefined && compareTs(candidate.ts, post.ts) !== 0) return null;
+  if (correctThread(candidate, post.threadTs)) {
+    return { kind: "confirmed", ts: candidate.ts, metadataOk: true };
+  }
+  return post.ts === undefined ? { kind: "misplaced", ts: candidate.ts, metadataOk: true } : null;
 }
 
 /** Three bounded reads, never permission to resend when none finds evidence. */
@@ -191,6 +198,22 @@ export function nextReconciliation(attemptAt: number, completedPasses: number): 
   }
   const delay = [10_000, 60_000, 120_000][completedPasses];
   return delay === undefined ? null : attemptAt + delay;
+}
+
+function ownReadMessage(
+  message: unknown,
+  channelId: string,
+  expectedChannelId: string,
+  identity: BotIdentity,
+): DeliveryMessage | null {
+  const parsed = deliveryMessageSchema.safeParse(message);
+  if (!parsed.success || channelId !== expectedChannelId) return null;
+  const candidate = parsed.data;
+  return (candidate.channel == null || candidate.channel === channelId) &&
+    currentMessage(candidate) &&
+    fromOurBot(candidate, identity)
+    ? candidate
+    : null;
 }
 
 function receiptMetadataOk(

@@ -584,6 +584,7 @@ describe("current card state", () => {
       phase: "post",
       approvalId: card.approvalId,
     });
+
     const sending = await start(
       database,
       await queue(database, { kind: "card", phase: "update", approvalId: card.approvalId }),
@@ -607,6 +608,23 @@ describe("current card state", () => {
         startOutboxAttempt(tx, superseded, sending.payload, "chat.update", 12_000),
       ),
     ).toEqual({ kind: "changed" });
+  });
+
+  test("startup never supersedes a queued update belonging to another approval", async () => {
+    const database = await openTestDatabase();
+    const older = await queue(database, {
+      kind: "card",
+      phase: "update",
+      approvalId: "approval-one",
+    });
+    const newer = await queue(database, {
+      kind: "card",
+      phase: "update",
+      approvalId: "approval-two",
+    });
+    await database.write((tx) => recoverOutboxAttempts(tx, 12_000));
+    expect(await item(database, older.id)).toEqual(older);
+    expect(await item(database, newer.id)).toEqual(newer);
   });
 
   test.each(["queued", "delivery_unknown"] as const)(

@@ -685,6 +685,33 @@ links. This is attributed workspace evidence from channel message 203, not
 an independent live verification by this author or a published Slack
 guarantee about inherited unfurl settings.
 
+### Reading uncertain delivery without reposting
+
+The local reconciler now uses single-page SDK readers with
+`include_all_metadata=true` and `limit=200`. Slack documents that a short page
+does not prove exhaustion and recommends no more than 200 results per cursor
+page. Root history is bounded from the immutable attempt time, not queue time.
+Replies scan the entire intended thread because its parent can be much older.
+Known-target edits read that original message even when it predates the edit.
+[History and timestamp bounds](https://docs.slack.dev/reference/methods/conversations.history/),
+[thread pagination and metadata](https://docs.slack.dev/reference/methods/conversations.replies/).
+
+Our policy requires the own bot/app and exact item ID/payload hash to confirm
+an automatic read. Text alone never suffices. A correlated reply found at the
+root queues withdrawal instead of answering its request. If the intended thread
+cannot be read, root history may still find that misplaced post, but its absence
+does not count as a complete unsuccessful read.
+
+Only complete misses spend the three original 10/60/120-second deadlines.
+Partial cursor progress survives ordinary cooldowns in memory so a large thread
+can reach its tail across rate-limit windows. Restart, expired cursors and
+malformed continuations discard that partial work without spending a pass.
+Missing or cyclic cursors, malformed pages and failed reads retain explicit
+unknown state. Exhaustion never authorizes an automatic repost. This is a local
+conservative policy, not Slack's exactly-once guarantee.
+[Reconciliation implementation](../../src/features/outbox/server/reconcile.ts),
+[credential-free protocol cases](../../src/features/outbox/server/reconcile.test.ts).
+
 ### Daily and weekly releases
 
 Use a durable local occurrence key such as `(binding, schedule, intended_time)`.

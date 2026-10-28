@@ -15,7 +15,7 @@ import {
   readChannelInfo,
   writeChannelInfo,
 } from "@slackapi/server/channels";
-import { readInstallation } from "@slackapi/server/installation";
+import { markAuthFailed, readInstallation } from "@slackapi/server/installation";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { writeSlackPerson } from "@slackapi/server/users";
 import { startFakeSlack } from "../../../../tests/fakes/slack";
@@ -26,6 +26,7 @@ import {
   queueItem,
   readOutboxItem,
   readReadyOutbox,
+  readDueReconciliations,
   startOutboxAttempt,
   type NewOutboxItem,
 } from "./database";
@@ -283,6 +284,49 @@ describe("confirmed posts", () => {
     expect(await delivery.post(queued.id)).toEqual({ kind: "changed" });
     expect(slack.calls).toHaveLength(1);
   });
+
+  test("an accepted but unproved post is due ten seconds after its attempt, not its late receipt", async () => {
+    const { database, bot, slack, queue, read, now, advance } = await setup();
+    const checked: BotClient = {
+      cooldown: (method) => bot.cooldown(method),
+      call(method, run) {
+        return bot.call(method, async (client) => {
+          const original = client.chat.postMessage;
+          client.chat.postMessage = async (args) => ({
+            ...(await original(args)),
+            message: undefined,
+          });
+          try {
+            const result = await run(client);
+            advance(2_500);
+            return result;
+          } finally {
+            client.chat.postMessage = original;
+          }
+        });
+      },
+    };
+    const item = await queue();
+    const attemptAt = now();
+    expect(await createPostDelivery(database, checked, { now }).post(item.id)).toMatchObject({
+      kind: "settled",
+      item: {
+        state: "delivery_unknown",
+        error: "invalid_response",
+        nextAttemptAt: attemptAt + 10_000,
+      },
+    });
+    expect(await database.read((sql) => readDueReconciliations(sql, attemptAt + 9_999))).toEqual(
+      [],
+    );
+    expect(
+      (await database.read((sql) => readDueReconciliations(sql, attemptAt + 10_000))).map(
+        (item) => item.id,
+      ),
+    ).toEqual([item.id]);
+    expect(await read(item.id)).toMatchObject({ attemptStartedAt: attemptAt });
+    expect(slack.getMessages("C-link")).toHaveLength(2);
+  });
 });
 
 describe("send-time authority", () => {
@@ -444,6 +488,52 @@ describe("send-time authority", () => {
     expect(slack.calls.map((call) => call.method)).toEqual(["conversations.info"]);
   });
 
+  test("a mismatched channel read writes and judges nothing", async () => {
+    const { database, bot, slack, queue, now } = await setup({ fresh: false });
+    const checked: BotClient = {
+      cooldown: (method) => bot.cooldown(method),
+      call(method, run) {
+        return bot.call(method, async (client) => {
+          const original = client.conversations.info;
+          client.conversations.info = async (args) => {
+            const result = await original(args);
+            if (!result.channel) throw new Error("The fixture needs channel facts.");
+            return { ...result, channel: { ...result.channel, id: "C-other" } };
+          };
+          try {
+            return await run(client);
+          } finally {
+            client.conversations.info = original;
+          }
+        });
+      },
+    };
+    const item = await queue();
+    expect(await createPostDelivery(database, checked, { now }).post(item.id)).toEqual({
+      kind: "waiting",
+      reason: "mismatched_channel_info",
+      until: now() + 5_000,
+    });
+    expect(await database.read((sql) => sql`SELECT * FROM channel_info`)).toEqual([]);
+    expect(await database.read((sql) => sql`SELECT status FROM links`)).toEqual([
+      { status: "active" },
+    ]);
+    expect(slack.calls.map((call) => call.method)).toEqual(["conversations.info"]);
+  });
+
+  test("a held channel read uses its Retry-After rather than a shorter generic delay", async () => {
+    const { slack, queue, delivery, now, read } = await setup({ fresh: false });
+    slack.failNext("conversations.info", { retryAfter: 10 });
+    const item = await queue();
+    expect(await delivery.post(item.id)).toEqual({
+      kind: "waiting",
+      reason: "rate_limited",
+      until: now() + 10_000,
+    });
+    expect(await read(item.id)).toMatchObject({ state: "queued", nextAttemptAt: now() + 10_000 });
+    expect(slack.calls.map((call) => call.method)).toEqual(["conversations.info"]);
+  });
+
   test("an invalidation during a channel read stops the post instead of trusting the late answer", async () => {
     const { database, bot, queue, now, advance, slack } = await setup();
     advance(120_000);
@@ -519,6 +609,7 @@ describe("uncertain and rejected writes", () => {
       kind: "settled",
       item: { state: "queued", nextAttemptAt: now() + 1_000 },
     });
+
     advance(999);
     expect(await delivery.post(queued.id)).toMatchObject({
       kind: "waiting",
@@ -532,6 +623,23 @@ describe("uncertain and rejected writes", () => {
     });
     expect((await read(queued.id))!.payloadHash).toBe(original!.payloadHash);
     expect(slack.calls[1]!.args).toEqual(slack.calls[0]!.args);
+  });
+
+  test("a shorter shared cooldown never shortens an item's longer wait", async () => {
+    const { database, slack, queue, delivery, read, now } = await setup();
+    slack.failNext("chat.postMessage", { retryAfter: 1 });
+    const item = await queue();
+    await delivery.post(item.id);
+    await database.write(
+      (tx) => tx`UPDATE outbox SET next_attempt_at = ${now() + 5_000} WHERE id = ${item.id}`,
+    );
+    expect(await delivery.post(item.id)).toEqual({
+      kind: "waiting",
+      reason: "rate_limited",
+      until: now() + 5_000,
+    });
+    expect(await read(item.id)).toMatchObject({ nextAttemptAt: now() + 5_000 });
+    expect(slack.calls).toHaveLength(1);
   });
 
   test("a lost response never sends an unknown message again", async () => {
@@ -700,6 +808,12 @@ describe("approval card updates", () => {
       parse: "none",
       ts: approval.card.ts,
     });
+    expect(slack.calls[1]!.args.metadata).toBe(
+      JSON.stringify({
+        event_type: "toy_box_outbox",
+        event_payload: { id: item.id, payload_hash: (await read(item.id))!.payloadHash },
+      }),
+    );
     for (const flag of ["mrkdwn", "unfurl_links", "unfurl_media", "thread_ts", "reply_broadcast"]) {
       expect(slack.calls[1]!.args).not.toHaveProperty(flag);
     }
@@ -768,6 +882,100 @@ describe("approval card updates", () => {
       until: null,
     });
     expect(slack.calls.map((call) => call.method)).toEqual(["chat.postMessage"]);
+  });
+
+  test.each([
+    "failed",
+    "dropped",
+    "cancelled",
+    "superseded",
+    "skipped",
+    "retracted",
+    "stray",
+    "sent",
+  ])("an update drops when its card post is terminal as %s without a proved ts", async (state) => {
+    const { database, slack, delivery, now } = await setup();
+    const approval = await createStoredApproval(database, {
+      card: { channelId: "C-link", ts: null },
+    });
+    await database.write((tx) =>
+      queueCard(
+        tx,
+        { approvalId: approval.id, linkId: "link", channelId: "C-link", phase: "post" },
+        now(),
+      ),
+    );
+    await database.write(async (tx) => {
+      await tx`UPDATE outbox SET state = ${state} WHERE approval_id = ${approval.id}`;
+      await staleApprovals(tx, [approval], "link_changed", now());
+    });
+    const update = (await database.read((sql) => readReadyOutbox(sql, now())))[0]!;
+    expect(await delivery.updateCard(update.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "dropped", error: "card_post_terminal", attempts: 0 },
+    });
+    expect(slack.calls).toEqual([]);
+  });
+
+  test.each(["queued", "sending", "delivery_unknown"])(
+    "an update keeps waiting while its unproved post is %s",
+    async (state) => {
+      const { database, slack, delivery, now } = await setup();
+      const approval = await createStoredApproval(database, {
+        card: { channelId: "C-link", ts: null },
+      });
+      await database.write((tx) =>
+        queueCard(
+          tx,
+          { approvalId: approval.id, linkId: "link", channelId: "C-link", phase: "post" },
+          now(),
+        ),
+      );
+      await database.write(async (tx) => {
+        await tx`UPDATE outbox SET state = ${state} WHERE approval_id = ${approval.id}`;
+        await staleApprovals(tx, [approval], "link_changed", now());
+      });
+      const update = (await database.read((sql) => readReadyOutbox(sql, now()))).find(
+        (item) => item.phase === "update",
+      )!;
+      expect(await delivery.updateCard(update.id)).toEqual({
+        kind: "waiting",
+        reason: "card_not_posted",
+        until: null,
+      });
+      expect(slack.calls).toEqual([]);
+    },
+  );
+
+  test("a card without any initial post cannot leave its decision update waiting forever", async () => {
+    const { database, slack, delivery, now } = await setup();
+    const approval = await createStoredApproval(database, {
+      card: { channelId: "C-link", ts: null },
+    });
+    await database.write((tx) => staleApprovals(tx, [approval], "link_changed", now()));
+    const update = (await database.read((sql) => readReadyOutbox(sql, now())))[0]!;
+    expect(await delivery.updateCard(update.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "dropped", error: "card_post_terminal" },
+    });
+    expect(slack.calls).toEqual([]);
+  });
+
+  test("the edit handler refuses a queued initial card post", async () => {
+    const { database, slack, delivery, now } = await setup();
+    const approval = await createStoredApproval(database, {
+      card: { channelId: "C-link", ts: null },
+    });
+    await database.write((tx) =>
+      queueCard(
+        tx,
+        { approvalId: approval.id, linkId: "link", channelId: "C-link", phase: "post" },
+        now(),
+      ),
+    );
+    const post = (await database.read((sql) => readReadyOutbox(sql, now())))[0]!;
+    await expect(delivery.updateCard(post.id)).rejects.toThrow("cannot use chat.update");
+    expect(slack.calls).toEqual([]);
   });
 
   test("a newer card update supersedes an unknown older edit before it can restore the old decision", async () => {
@@ -861,6 +1069,28 @@ test("a pending card cannot create an update that could later restore its button
 });
 
 describe("approval card posts", () => {
+  test("a card cannot bypass auth_failed through its separate posting gate", async () => {
+    const { database, slack, queue, delivery, now } = await setup();
+    const approval = await createStoredApproval(database, {
+      card: { channelId: "C-link", ts: null },
+    });
+    const item = await queue({
+      kind: "card",
+      phase: "post",
+      approvalId: approval.id,
+      threadTs: null,
+      requestId: null,
+      requestRev: null,
+    });
+    await database.write((tx) => markAuthFailed(tx, now()));
+    expect(await delivery.post(item.id)).toEqual({
+      kind: "waiting",
+      reason: "installation_inactive",
+      until: null,
+    });
+    expect(slack.calls).toEqual([]);
+  });
+
   test.each([
     { channelId: "C-other", threadTs: null },
     { channelId: "C-link", threadTs: "100.1" },

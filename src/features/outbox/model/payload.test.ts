@@ -81,6 +81,35 @@ test("12,000 section characters fit and 12,001 do not", () => {
   expect(checkLeadPayload(original)).toEqual({ kind: "refused", problem: "message_too_long" });
 });
 
+test("the largest fallback and sections fit, but each independent one-over limit refuses", () => {
+  const section = (text: string) => ({
+    type: "section",
+    text: { type: "mrkdwn", text, verbatim: true },
+  });
+  const maximum = {
+    ...message(),
+    text: "a".repeat(12_000),
+    blocks: Array.from({ length: 4 }, () => section("a".repeat(3_000))),
+  };
+  expect(checkLeadPayload(maximum).kind).toBe("valid");
+  expect(
+    checkLeadPayload({
+      ...maximum,
+      blocks: Array.from({ length: 50 }, () => section("a")),
+    }).kind,
+  ).toBe("valid");
+  for (const change of [
+    { text: "a".repeat(12_001) },
+    { blocks: [section("a".repeat(3_001))] },
+    { blocks: Array.from({ length: 51 }, () => section("a")) },
+  ]) {
+    expect(checkLeadPayload({ ...maximum, ...change })).toEqual({
+      kind: "refused",
+      problem: "invalid_snapshot",
+    });
+  }
+});
+
 function cardUpdate() {
   const { text, blocks, parse } = renderCard(
     pendingApproval({ state: "approved", decidedBy: "U-owner", decidedAt: 1 }),
@@ -120,6 +149,24 @@ test("a card snapshot cannot invent another interactive action", () => {
       ],
     }),
   ).toEqual({ kind: "refused", problem: "invalid_snapshot" });
+});
+
+test("card snapshots require disabled unfurls and verbatim text", () => {
+  const pending = renderCard(pendingApproval(), {});
+  for (const change of [
+    { unfurl_links: true },
+    { unfurl_media: true },
+    {
+      blocks: pending.blocks.map((block) =>
+        block.type === "section" ? { ...block, text: { ...block.text, verbatim: false } } : block,
+      ),
+    },
+  ]) {
+    expect(checkCardPayload({ ...pending, ...change })).toEqual({
+      kind: "refused",
+      problem: "invalid_snapshot",
+    });
+  }
 });
 
 test.each([

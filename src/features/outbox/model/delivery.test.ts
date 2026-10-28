@@ -4,6 +4,7 @@ import {
   nextReconciliation,
   outboxMetadata,
   postReceipt,
+  reconciliationReceipt,
   updateReceipt,
   writeOutcome,
   type OutboxPost,
@@ -257,6 +258,7 @@ test("withdrawn content is not receipt or read proof, even with our identity and
     });
     expect(messageEvidence(message(change), post.channelId, post, identity)).toBeNull();
     expect(messageEvidence(message(change), post.channelId, post, identity, true)).toBeNull();
+    expect(reconciliationReceipt(message(change), post.channelId, post, identity)).toBeNull();
   }
 });
 
@@ -282,6 +284,7 @@ test("our app must be identified, and contradictory identities are never evidenc
     { bot_profile: { id: "BOTHER" } },
   ]) {
     expect(messageEvidence(message(changes), post.channelId, post, identity, true)).toBeNull();
+    expect(reconciliationReceipt(message(changes), post.channelId, post, identity)).toBeNull();
   }
   expect(
     messageEvidence(
@@ -327,12 +330,14 @@ test("partial, wrong or mismatched metadata never permits text fallback", () => 
     outboxMetadata({ ...post, payloadHash: "b".repeat(64) }),
   ]) {
     expect(messageEvidence(message({ metadata }), post.channelId, post, identity, true)).toBeNull();
+    expect(reconciliationReceipt(message({ metadata }), post.channelId, post, identity)).toBeNull();
   }
 });
 
 test("only explicit manual resolution may use exactly matching text without metadata", () => {
   const candidate = message({ metadata: undefined });
   expect(messageEvidence(candidate, post.channelId, post, identity)).toBeNull();
+  expect(reconciliationReceipt(candidate, post.channelId, post, identity)).toBeNull();
   expect(messageEvidence(candidate, post.channelId, post, identity, true)).toBe("text");
   expect(
     messageEvidence(
@@ -348,6 +353,45 @@ test("only explicit manual resolution may use exactly matching text without meta
 test("a malformed message is no evidence", () => {
   for (const candidate of [null, {}, message({ ts: "not-a-ts" })]) {
     expect(messageEvidence(candidate, post.channelId, post, identity, true)).toBeNull();
+    expect(reconciliationReceipt(candidate, post.channelId, post, identity)).toBeNull();
+  }
+});
+
+test("automatic reads distinguish a correct post from its correlated misplaced copy", () => {
+  expect(reconciliationReceipt(message(), post.channelId, post, identity)).toEqual({
+    kind: "confirmed",
+    ts: "200.000001",
+    metadataOk: true,
+  });
+  for (const change of [
+    { thread_ts: undefined },
+    { thread_ts: "300.1" },
+    { subtype: "thread_broadcast" },
+  ]) {
+    expect(reconciliationReceipt(message(change), post.channelId, post, identity)).toEqual({
+      kind: "misplaced",
+      ts: "200.000001",
+      metadataOk: true,
+    });
+  }
+  expect(reconciliationReceipt(message(), "C-other", post, identity)).toBeNull();
+  expect(
+    reconciliationReceipt(message({ channel: "C-other" }), post.channelId, post, identity),
+  ).toBeNull();
+});
+
+test("an edit read proves only its existing target and never authorizes misplaced cleanup", () => {
+  const edit = { ...post, ts: "200.000001" };
+  expect(reconciliationReceipt(message(), post.channelId, edit, identity)).toMatchObject({
+    kind: "confirmed",
+  });
+  for (const change of [
+    { ts: "200.000002" },
+    { thread_ts: undefined },
+    { thread_ts: "300.1" },
+    { subtype: "thread_broadcast" },
+  ]) {
+    expect(reconciliationReceipt(message(change), post.channelId, edit, identity)).toBeNull();
   }
 });
 

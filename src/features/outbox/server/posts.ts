@@ -1,8 +1,9 @@
 import type { BridgeDatabase } from "@bridge/server/database";
-import { readApproval, recordCardPosted } from "@links/server/approvals";
+import { readApproval } from "@links/server/approvals";
 import { judgeChannelLinks } from "@links/server/audience";
 import { readApprovalCard } from "@links/server/cards";
 import { readChannelLink, readChannelUses } from "@links/server/database";
+import { suspendChannelLinks } from "@links/server/lifecycle";
 import { suspendLink } from "@links/server/status";
 import { isActive } from "@requests/model/lifecycle";
 import { readRequest } from "@requests/server/database";
@@ -10,12 +11,7 @@ import { cancelStoredRequest } from "@requests/server/lifecycle";
 import { channelFailureReason } from "@slackapi/model/errors";
 import type { Installation } from "@slackapi/model/installation";
 import type { BotClient } from "@slackapi/server/botClient";
-import {
-  fetchChannelFacts,
-  invalidateChannelInfo,
-  readChannelInfo,
-  writeChannelInfo,
-} from "@slackapi/server/channels";
+import { fetchChannelFacts, readChannelInfo, writeChannelInfo } from "@slackapi/server/channels";
 import { readInstallation } from "@slackapi/server/installation";
 import { ZodError } from "zod";
 import {
@@ -31,13 +27,12 @@ import { checkCardPayload, checkCardUpdatePayload, checkLeadPayload } from "../m
 import { postingPermission, type PostingLink } from "../model/posting";
 import { settleRequestAnswer } from "./answers";
 import {
-  queueItem,
   readOutboxItem,
-  settleOutboxAttempt,
   startOutboxAttempt,
   type OutboxItem,
   type OutboxSettlement,
 } from "./database";
+import { settleDelivery } from "./delivery";
 
 export type PostStep =
   | { kind: "settled"; item: OutboxItem }
@@ -186,36 +181,14 @@ export function createPostDelivery(
       } else {
         settlement = { state: "failed", error: outcome.error };
       }
-      const settled = await settleOutboxAttempt(tx, item, settlement, at);
-      if (!settled) return { kind: "changed" };
-      if (outcome.kind === "failed" && outcome.suspend !== null) {
-        await suspendChannel(tx, item.channelId, outcome.suspend, at);
-      }
-      if (
-        settled.state === "sent" &&
-        item.kind === "card" &&
-        item.phase === "post" &&
-        item.approvalId !== null
-      ) {
-        if (settled.slackTs === null) throw new Error("A confirmed card has no Slack timestamp.");
-        await recordCardPosted(tx, item.approvalId, settled.slackTs);
-      }
-      if (settled.state === "stray") {
-        await queueItem(
-          tx,
-          {
-            kind: "retract",
-            linkId: settled.linkId,
-            requestId: settled.requestId,
-            channelId: settled.channelId,
-            threadTs: settled.threadTs,
-            payload: { target: item.id },
-          },
-          at,
-        );
-      }
-      if (item.requestId !== null) await settleRequestAnswer(tx, item.requestId, at);
-      return { kind: "settled", item: settled };
+      const settled = await settleDelivery(
+        tx,
+        item,
+        settlement,
+        at,
+        outcome.kind === "failed" ? outcome.suspend : null,
+      );
+      return settled ? { kind: "settled", item: settled } : { kind: "changed" };
     });
   }
 
@@ -254,7 +227,14 @@ export function createPostDelivery(
         return finishQueued(tx, item, "dropped", "card_already_posted", at);
       }
       if (method === "chat.update" && approval.card.ts === null) {
-        return { kind: "waiting", reason: "card_not_posted", until: null };
+        const [pending] = await tx`
+          SELECT id FROM outbox WHERE kind = 'card' AND phase = 'post'
+            AND approval_id = ${approval.id} AND state IN ('queued', 'sending', 'delivery_unknown')
+          LIMIT 1
+        `;
+        return pending
+          ? { kind: "waiting", reason: "card_not_posted", until: null }
+          : finishQueued(tx, item, "dropped", "card_post_terminal", at);
       }
       if (method === "chat.update" && approval.state === "pending") {
         return finishQueued(tx, item, "failed", "approval_pending", at);
@@ -323,7 +303,7 @@ export function createPostDelivery(
       if (call.kind === "error") {
         const reason = channelFailureReason(call.error);
         if (reason !== null) {
-          await database.write((tx) => suspendChannel(tx, channelId, reason, now()));
+          await database.write((tx) => suspendChannelLinks(tx, channelId, reason, now()));
         }
       }
       return defer(
@@ -397,16 +377,4 @@ async function readPostingLink(sql: Bun.SQL, id: string | null): Promise<Posting
     publishChannelId: row.publish_channel_id,
     approved: use.approved,
   };
-}
-
-async function suspendChannel(
-  tx: Bun.SQL,
-  channelId: string,
-  reason: NonNullable<ReturnType<typeof channelFailureReason>>,
-  now: number,
-): Promise<void> {
-  await invalidateChannelInfo(tx, channelId, now);
-  for (const use of await readChannelUses(tx, channelId)) {
-    await suspendLink(tx, use.linkId, reason, now);
-  }
 }
