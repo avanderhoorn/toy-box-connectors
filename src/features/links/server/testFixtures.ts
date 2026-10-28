@@ -23,6 +23,7 @@ export function createStoredLink(
     request_mode?: "mention" | "all";
     observe?: "requesters" | "channel";
     approved_audience?: Audience;
+    linked_at_ts?: string;
   } = {},
 ) {
   const { approved_audience: approved, ...rest } = columns;

@@ -59,7 +59,8 @@ export function spawnBridge(home: string, env: Record<string, string> = {}) {
  * tokens.
  */
 export function startSlackForBridge(identity?: Partial<FakeSlackIdentity>) {
-  const slack = startFakeSlack({ identity });
+  // Pages of one prove the bridge reads every page of whatever it lists.
+  const slack = startFakeSlack({ identity, pageSize: 1 });
   onTestFinished(() => slack.stop());
   slack.addChannel({ id: "C-link" });
   const env = {
