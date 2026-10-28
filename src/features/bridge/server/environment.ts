@@ -2,9 +2,9 @@
 //
 // The operator keeps the Slack tokens in `credentials.env` in the data folder, and a variable set
 // in the environment wins over the file. Every setting is checked before the bridge takes its
-// lock, so a bad one refuses to start with a message that names it. No message repeats a token.
-// Only tests set SLACK_API_URL and the wake timings: one points the Slack clients at a fake, and
-// the other shortens timings so a scenario doesn't wait minutes for a reminder.
+// lock, so a bad one stops it before it starts. No message repeats a token. Only tests set
+// SLACK_API_URL and the wake timings: one points the Slack clients at a fake, and the other
+// shortens timings so a scenario doesn't wait minutes for a reminder.
 
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -103,20 +103,5 @@ function loopbackUrl(value: string, must: string): URL {
 /** The wake timings, with any that `TOY_BOX_SLACK_WAKE_TIMINGS` sets as a JSON object. */
 function resolveWakeTimings(value: string | undefined): WakeTimings {
   if (!value) return defaultWakeTimings;
-  const overrides = wakeTimingsSchema.partial().safeParse(parseJson(value));
-  if (!overrides.success) {
-    throw new BridgeRefusedError(
-      `TOY_BOX_SLACK_WAKE_TIMINGS must be a JSON object of wake timings in milliseconds.\n${z.prettifyError(overrides.error)}`,
-    );
-  }
-  return { ...defaultWakeTimings, ...overrides.data };
-}
-
-// Text that isn't JSON fails the schema as a string, which says what was expected.
-function parseJson(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
+  return { ...defaultWakeTimings, ...wakeTimingsSchema.partial().parse(JSON.parse(value)) };
 }

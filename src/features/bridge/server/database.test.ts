@@ -1,7 +1,7 @@
 import { describe, expect, onTestFinished, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { openBridgeDatabase, unmetSettings, type BridgeDatabase, type Migration } from "./database";
+import { openBridgeDatabase, type BridgeDatabase, type Migration } from "./database";
 import { BridgeRefusedError } from "./refusal";
 import { createTestFolder, openTestDatabase } from "./testFixtures";
 
@@ -33,7 +33,7 @@ async function readTableNames(sql: Bun.SQL): Promise<string[]> {
 }
 
 describe("openBridgeDatabase", () => {
-  test("runs with every setting SQLite reports back as required", async () => {
+  test("runs with the settings that keep each commit through a power loss and references whole", async () => {
     const database = await openTestDatabase();
 
     const reported = await database.read(async (sql) => {
@@ -153,19 +153,6 @@ describe("openBridgeDatabase", () => {
     expect(await database.read(readSchema)).toMatchObject({ version: 1 });
     expect(readdirSync(folder)).toContain("bridge.db");
     expect(existsSync(join(folder, "..", "a"))).toBe(false);
-  });
-});
-
-describe("unmetSettings", () => {
-  test("names every setting SQLite didn't apply", () => {
-    expect(
-      unmetSettings({ journal_mode: "delete", synchronous: 1, fullfsync: 0, foreign_keys: 1 }),
-    ).toEqual([
-      "journal_mode is delete, not wal",
-      "synchronous is 1, not 2",
-      "fullfsync is 0, not 1",
-    ]);
-    expect(unmetSettings({})).toHaveLength(4);
   });
 });
 

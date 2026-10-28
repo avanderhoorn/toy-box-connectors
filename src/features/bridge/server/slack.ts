@@ -20,9 +20,9 @@ import { confirmIdentity } from "./identity";
 // again only while Slack can't answer. Then it keeps one Socket Mode connection open. Each
 // connection starts from a fresh apps.connections.open, and its frames reach the receiver only
 // once hello names the installation's app. Losing a connection and each hello are noted in order
-// with the deliveries between them. A connection that never opened, or dropped within a minute of
-// its hello, backs off, so a Slack that keeps refusing or dropping it costs a call every few
-// minutes rather than a reconnect a second. A refusal, or a token Slack rejects, lasts until the
+// with the deliveries between them. A connection that Slack never said hello on backs off, so a
+// Slack that keeps refusing it costs a call every few minutes rather than one a second, and losing
+// one it did say hello on reconnects at once. A refusal, or a token Slack rejects, lasts until the
 // operator fixes it and restarts the bridge. A rejected bot token leaves the connection up, so
 // deletions and a channel's lifecycle are still taken.
 
@@ -48,19 +48,16 @@ export type SlackSupervisorOptions = {
   /** Called when the supervisor stops on an error that retrying can't fix, such as storage failing. */
   onError?: (error: unknown) => void;
   now?: () => number;
-  /** Asking Slack about the tokens, and a connection that didn't last, retry on the wake retry backoff. */
+  /** Asking Slack about the tokens, and a connection it never said hello on, retry on this backoff. */
   timings?: WakeTimings;
-  /** How long a connection that lasted waits to reconnect. */
+  /** How long losing a connection Slack said hello on waits to reconnect. */
   reconnectDelay?: number;
   helloTimeoutMs?: number;
   pingTimeoutMs?: number;
 };
 
-/** How long a connection must last after its hello for losing it to reconnect without backing off. */
-export const STEADY_CONNECTION_MS = 60_000;
-
 /** How one connection ended, which decides how long to wait before the next, or null for none. */
-type Ended = { steady: boolean; retryAfterMs?: number } | null;
+type Ended = { connected: boolean; retryAfterMs?: number } | null;
 
 /** Confirms the tokens and keeps Slack connected, until it's stopped or Slack is refused. */
 export function startSlackSupervisor(
@@ -107,7 +104,7 @@ export function startSlackSupervisor(
     while (appId !== null && !signal.aborted) {
       const ended = await connectOnce(appId);
       if (ended === null) return;
-      failures = ended.steady ? 0 : failures + 1;
+      failures = ended.connected ? 0 : failures + 1;
       const backoff = Math.max(retryDelay(failures, timings), ended.retryAfterMs ?? 0);
       await sleep(failures === 0 ? reconnectDelay : backoff, signal);
     }
@@ -141,7 +138,6 @@ export function startSlackSupervisor(
   /** Connects once and waits for the connection to end. */
   async function connectOnce(appId: string): Promise<Ended> {
     let hello: Promise<void> | undefined;
-    let helloAt = 0;
     let reason: string | null = null;
     const current = openSlackSocket(tokens.appToken, {
       slackApiUrl,
@@ -153,7 +149,6 @@ export function startSlackSupervisor(
           case "hello": {
             const refused = helloRefusal(appId, frame.appId);
             if (refused !== null) return refuse(refused);
-            helloAt = arrivedAt;
             hello = receiver.connected(arrivedAt);
             return;
           }
@@ -190,7 +185,7 @@ export function startSlackSupervisor(
     if (signal.aborted) return null;
     receiver.disconnected(closedAt).catch(fail);
     console.error(`${connectionLoss(reason)}, so the bridge is reconnecting.`);
-    return { steady: closedAt - helloAt >= STEADY_CONNECTION_MS };
+    return { connected: true };
   }
 
   function openFailed(failure: CallFailure): Ended {
@@ -223,7 +218,7 @@ export function startSlackSupervisor(
   function trouble(found: string, retryAfterMs?: number): Ended {
     if (problem !== found) console.error(`Can't connect to Slack. ${found}`);
     problem = found;
-    return { steady: false, retryAfterMs };
+    return { connected: false, retryAfterMs };
   }
 
   // Once the supervisor stops, fails or refuses, it reports nothing more.

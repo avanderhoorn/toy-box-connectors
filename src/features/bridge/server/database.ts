@@ -37,14 +37,6 @@ export const bridgeMigrations: readonly Migration[] = [
   },
 ];
 
-/** The settings that keep an acked event on disk through a power loss and keep references whole. */
-const requiredSettings = {
-  journal_mode: "wal",
-  synchronous: 2,
-  fullfsync: 1,
-  foreign_keys: 1,
-} as const;
-
 export class BridgeDatabase {
   private readonly queue = new SerialTaskQueue();
 
@@ -71,8 +63,8 @@ export class BridgeDatabase {
 }
 
 /**
- * Opens `bridge.db` at `path`, refuses to use it unless SQLite applied every
- * required setting, and brings its schema up to date.
+ * Opens `bridge.db` at `path` with the settings that keep an acked event on
+ * disk through a power loss, and brings its schema up to date.
  */
 export async function openBridgeDatabase(
   path: string,
@@ -81,7 +73,7 @@ export async function openBridgeDatabase(
   // A plain filename ends at its first `?`, so a URL keeps every path exact.
   const sql = new Bun.SQL({ adapter: "sqlite", filename: pathToFileURL(path), strict: true });
   try {
-    await configure(sql, path);
+    await configure(sql);
     await migrate(sql, path, migrations);
   } catch (error) {
     await sql.close();
@@ -90,16 +82,7 @@ export async function openBridgeDatabase(
   return new BridgeDatabase(sql);
 }
 
-/** Names each required setting that SQLite reported a different value for. */
-export function unmetSettings(reported: Record<string, unknown>): string[] {
-  return Object.entries(requiredSettings)
-    .filter(([name, value]) => reported[name] !== value)
-    .map(([name, value]) => `${name} is ${String(reported[name])}, not ${value}`);
-}
-
-async function configure(sql: Bun.SQL, path: string): Promise<void> {
-  // SQLite ignores a journal mode the file system can't support instead of
-  // failing, so every setting is read back before the bridge trusts it.
+async function configure(sql: Bun.SQL): Promise<void> {
   await sql`PRAGMA journal_mode = WAL`;
   await sql`PRAGMA synchronous = FULL`;
   // macOS fsync can leave a commit in the drive's cache, and F_FULLFSYNC flushes it.
@@ -107,19 +90,6 @@ async function configure(sql: Bun.SQL, path: string): Promise<void> {
   await sql`PRAGMA foreign_keys = ON`;
   // A backup or the sqlite3 shell may hold the write lock for a moment.
   await sql`PRAGMA busy_timeout = 5000`;
-
-  const reported: Record<string, unknown> = {};
-  for (const name of Object.keys(requiredSettings)) {
-    const [row] = await sql.unsafe<Record<string, unknown>[]>(`PRAGMA ${name}`);
-    reported[name] = row?.[name];
-  }
-
-  const unmet = unmetSettings(reported);
-  if (unmet.length > 0) {
-    throw new BridgeRefusedError(
-      `SQLite can't run ${path} the way the bridge needs (${unmet.join(", ")}). Keep the data folder on a local disk.`,
-    );
-  }
 }
 
 async function migrate(sql: Bun.SQL, path: string, migrations: readonly Migration[]) {

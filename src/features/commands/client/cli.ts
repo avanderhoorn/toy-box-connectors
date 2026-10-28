@@ -5,7 +5,6 @@
 import { homedir } from "node:os";
 import { defineCommand, type ArgsDef, type CommandDef } from "citty";
 import { resolveDataFolder } from "@bridge/server/dataFolder";
-import { BridgeRefusedError } from "@bridge/server/refusal";
 import { commandSocketPath } from "@bridge/server/socket";
 import { commands, optionName, type CommandSpec } from "@commands/model";
 import {
@@ -48,13 +47,7 @@ export async function callBridge(
   input: Record<string, unknown>,
   { channelId = null, env = process.env, home = homedir() }: CallOptions = {},
 ): Promise<CallOutcome> {
-  let dataFolder: string;
-  try {
-    dataFolder = resolveDataFolder(env, home);
-  } catch (error) {
-    if (!(error instanceof BridgeRefusedError)) throw error;
-    return failed(1, error.message);
-  }
+  const dataFolder = resolveDataFolder(env, home);
   const sessionId = env.COPILOT_AGENT_SESSION_ID?.trim() || null;
   const call: CommandCall = { caller: { sessionId, channelId }, input };
   let response: Response;

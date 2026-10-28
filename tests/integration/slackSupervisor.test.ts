@@ -2,7 +2,6 @@ import { describe, expect, onTestFinished, spyOn, test } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
 import {
   startSlackSupervisor,
-  STEADY_CONNECTION_MS,
   type SlackSupervisor,
   type SlackSupervisorOptions,
 } from "@bridge/server/slack";
@@ -118,6 +117,16 @@ function called(fake: FakeSlack, method: string) {
 
 function methodsCalled(fake: FakeSlack) {
   return fake.calls.map(({ method }) => method);
+}
+
+/** When the test saw each of the first `count` calls to `method`, which must come apart. */
+async function callTimes(fake: FakeSlack, method: string, count: number): Promise<number[]> {
+  const times: number[] = [];
+  for (let calls = 1; calls <= count; calls++) {
+    await waitFor(() => expect(called(fake, method)).toBe(calls));
+    times.push(performance.now());
+  }
+  return times;
 }
 
 function silenceLog() {
@@ -247,15 +256,14 @@ describe("connecting", () => {
     const { supervisor } = link.supervise({
       timings: { ...defaultWakeTimings, retry: 50, retryLimit: 400 },
     });
-    const askedAt: number[] = [];
-    for (let count = 1; count <= 3; count++) {
-      await waitFor(() => expect(called(link.fake, "auth.test")).toBe(count));
-      askedAt.push(performance.now());
-    }
+    const asked = await callTimes(link.fake, "auth.test", 3);
+    const opened = await callTimes(link.fake, "apps.connections.open", 3);
     await waitFor(() => expect(supervisor.state()).toEqual(connected));
 
-    expect(askedAt[1]! - askedAt[0]!).toBeGreaterThanOrEqual(45);
-    expect(askedAt[2]! - askedAt[1]!).toBeGreaterThanOrEqual(95);
+    for (const times of [asked, opened]) {
+      expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(45);
+      expect(times[2]! - times[1]!).toBeGreaterThanOrEqual(95);
+    }
     expect(methodsCalled(link.fake)).toEqual([
       ...["auth.test", "auth.test", "auth.test", "bots.info"],
       ...["apps.connections.open", "apps.connections.open", "apps.connections.open"],
@@ -266,11 +274,12 @@ describe("connecting", () => {
       ["Can't connect to Slack. Slack didn't answer apps.connections.open: HTTP 503."],
       ["Connected to Slack."],
     ]);
-    // What went wrong before the connection came up is behind it once it's lost.
+    // Once Slack has said hello, losing the connection reconnects without waiting out the backoff
+    // the failures before it reached.
+    const lostAt = performance.now();
     link.fake.dropConnections();
-    await waitFor(() =>
-      expect(supervisor.state()).toEqual({ connection: "reconnecting", problem: null }),
-    );
+    await waitFor(() => expect(called(link.fake, "apps.connections.open")).toBe(4));
+    expect(performance.now() - lostAt).toBeLessThan(150);
   });
 
   test.each(["auth.test", "apps.connections.open"])(
@@ -351,13 +360,13 @@ describe("connecting", () => {
 });
 
 describe("losing the connection", () => {
-  test("a lost connection is noted when it's noticed, and one that lasted reconnects at once", async () => {
+  test("a lost connection is noted when it's noticed, and reconnects at once", async () => {
     const log = silenceLog();
     const link = await linkFakeSlack();
     const { supervisor } = link.supervise({ timings: STUCK });
     await waitFor(() => expect(supervisor.state()).toEqual(connected));
 
-    link.advance(STEADY_CONNECTION_MS);
+    link.advance(60_000);
     const noticed = link.nextRead();
     link.fake.dropConnections();
     // The socket reads the clock as it closes, and the hello comes a second later.
@@ -366,51 +375,25 @@ describe("losing the connection", () => {
     await waitFor(() => expect(link.fake.connections).toHaveLength(2));
     await waitFor(() => expect(supervisor.state()).toEqual(connected));
 
-    const lostAt = NOW + STEADY_CONNECTION_MS;
+    const lostAt = NOW + 60_000;
     expect(
       await link.database.read(
         (sql) => sql`SELECT connected_at, disconnected_at FROM installation`,
       ),
     ).toEqual([{ connected_at: lostAt + 1_000, disconnected_at: lostAt }]);
-    link.advance(STEADY_CONNECTION_MS);
+    link.fake.failNext("apps.connections.open", { status: 503 });
     link.fake.disconnect("refresh_requested");
-    await waitFor(() => expect(link.fake.connections).toHaveLength(3));
-    await waitFor(() => expect(supervisor.state()).toEqual(connected));
+    const problem = "Slack didn't answer apps.connections.open: HTTP 503.";
+    await waitFor(() =>
+      expect(supervisor.state()).toEqual({ connection: "reconnecting", problem }),
+    );
     expect(log.mock.calls).toEqual([
       ["Connected to Slack."],
       ["Lost the connection to Slack, so the bridge is reconnecting."],
       ["Connected to Slack."],
       ["Slack ended the connection with refresh_requested, so the bridge is reconnecting."],
-      ["Connected to Slack."],
+      [`Can't connect to Slack. ${problem}`],
     ]);
-  });
-
-  test("connections that keep dropping soon after hello wait longer each time, until one lasts", async () => {
-    silenceLog();
-    const link = await linkFakeSlack();
-    const { supervisor } = link.supervise({
-      timings: { ...defaultWakeTimings, retry: 50, retryLimit: 400 },
-    });
-    const openedAt: number[] = [];
-    for (let count = 1; count <= 4; count++) {
-      await waitFor(() => expect(link.fake.activeConnections).toBe(1));
-      await waitFor(() => expect(supervisor.state()).toEqual(connected));
-      openedAt.push(performance.now());
-      if (count === 4) break;
-      link.fake.dropConnections();
-      await waitFor(() => expect(link.fake.activeConnections).toBe(0));
-    }
-    const waits = openedAt.slice(1).map((at, index) => at - openedAt[index]!);
-    expect(waits[0]).toBeGreaterThanOrEqual(45);
-    expect(waits[1]).toBeGreaterThanOrEqual(95);
-    expect(waits[2]).toBeGreaterThanOrEqual(195);
-
-    // Once a connection lasts, losing it reconnects without waiting out the backoff it had reached.
-    link.advance(STEADY_CONNECTION_MS);
-    const lostAt = performance.now();
-    link.fake.dropConnections();
-    await waitFor(() => expect(link.fake.connections).toHaveLength(5));
-    expect(performance.now() - lostAt).toBeLessThan(150);
   });
 });
 
@@ -451,7 +434,6 @@ describe("rejected tokens", () => {
     expect(await link.fake.waitForAck(sent.envelopeId)).not.toBeNull();
 
     link.fake.failNext("apps.connections.open", { error: "invalid_auth" });
-    link.advance(STEADY_CONNECTION_MS);
     link.fake.dropConnections();
     const appRejected = rejectedTokenProblem("SLACK_APP_TOKEN", "invalid_auth");
     await waitFor(() =>

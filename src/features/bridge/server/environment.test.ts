@@ -36,11 +36,13 @@ describe("the bridge's settings", () => {
       SLACK_BOT_TOKEN: "xoxb-env",
       SLACK_APP_TOKEN: "",
       TOY_BOX_URL: "http://[::1]:3000",
+      TOY_BOX_SLACK_WAKE_TIMINGS: '{"debounce":100,"backoff":[1,2,3]}',
     };
     expect(resolveBridgeSettings(env, file)).toMatchObject({
       toyBoxOrigin: new URL("http://[::1]:3000"),
       botToken: "xoxb-env",
       appToken: "xapp-file",
+      wakeTimings: { ...defaultWakeTimings, debounce: 100, backoff: [1, 2, 3] },
     });
     expect(resolveBridgeSettings({ TOY_BOX_URL: "" }, { SLACK_BOT_TOKEN: "" })).toMatchObject({
       toyBoxOrigin: new URL("http://127.0.0.1:3000"),
@@ -63,25 +65,6 @@ describe("the bridge's settings", () => {
     ).toBe(
       `SLACK_API_URL is only for tests and must be an http URL on this Mac, but it's "https://slack.com/api/".`,
     );
-  });
-
-  test("take the wake timings a test sets, and refuse any it can't use", () => {
-    const timings = (value: string) =>
-      resolveBridgeSettings({ TOY_BOX_SLACK_WAKE_TIMINGS: value }, {}).wakeTimings;
-
-    expect(timings('{"debounce":100,"backoff":[1,2,3]}')).toEqual({
-      ...defaultWakeTimings,
-      debounce: 100,
-      backoff: [1, 2, 3],
-    });
-    const refusals = {
-      "{debounce: 100}": "expected object, received string",
-      '{"debunce":100}': 'Unrecognized key: "debunce"',
-      '{"debounce":1.5}': "expected int, received number",
-    };
-    for (const [value, problem] of Object.entries(refusals)) {
-      expect(refusalOf(() => timings(value))).toContain(problem);
-    }
   });
 });
 
