@@ -279,7 +279,7 @@ describe("closing", () => {
     }
   });
 
-  test("a request expires once its lifetime passes, unless it's answering", () => {
+  test("a request expires once its lifetime passes, even held, unless it's answering", () => {
     const due = opened.expiresAt;
     expect(isDueToExpire(inState("in_progress"), due - 1)).toBe(false);
     for (const state of ["open", "seen", "in_progress"] as const) {
@@ -289,6 +289,7 @@ describe("closing", () => {
         holdReason: "asking",
         sourceUnverifiedAt: later,
       });
+      expect(isDueToExpire(held, due)).toBe(true);
       expect(expireRequest(held, due)).toEqual({
         ...held,
         state: "expired",

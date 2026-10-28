@@ -196,9 +196,15 @@ test("releasing holds frees the link's requests held before the owner spoke", as
   expect(await release()).toBe(false);
 });
 
-test("expiring requests closes those that waited their lifetime, unless they're being answered", async () => {
+test("expiring requests closes those that waited their lifetime, even held, unless they're being answered", async () => {
   const database = await openTestDatabase();
-  for (const [index, changes] of everyState.entries()) {
+  const held: Partial<Request> = {
+    state: "in_progress",
+    seenAt: 1,
+    heldAt: 1,
+    holdReason: "asking the owner",
+  };
+  for (const [index, changes] of [...everyState, held].entries()) {
     const ts = `${1_700_000_100 + index}.000100`;
     await createStoredRequest(database, {
       rootTs: ts,
@@ -208,7 +214,7 @@ test("expiring requests closes those that waited their lifetime, unless they're 
     });
   }
   await createStoredRequest(database, { linkId: "other", expiresAt: 60_001 });
-  for (let id = 1; id <= everyState.length + 1; id++) {
+  for (let id = 1; id <= everyState.length + 2; id++) {
     await createStoredOutboxItem(database, id, { request_id: id });
   }
   const expire = () => database.write((transaction) => expireRequests(transaction, 60_000));
@@ -223,7 +229,8 @@ test("expiring requests closes those that waited their lifetime, unless they're 
     { id: 6, state: "dismissed", closed_reason: "duplicate" },
     { id: 7, state: "cancelled", closed_reason: "source_deleted" },
     { id: 8, state: "expired", closed_reason: null },
-    { id: 9, state: "open", closed_reason: null },
+    { id: 9, state: "expired", closed_reason: null },
+    { id: 10, state: "open", closed_reason: null },
   ]);
   expect(
     await database.read(
@@ -239,7 +246,8 @@ test("expiring requests closes those that waited their lifetime, unless they're 
     { number: 6, state: "queued" },
     { number: 7, state: "queued" },
     { number: 8, state: "queued" },
-    { number: 9, state: "queued" },
+    { number: 9, state: "cancelled" },
+    { number: 10, state: "queued" },
   ]);
   expect(
     await database.read(
@@ -247,7 +255,7 @@ test("expiring requests closes those that waited their lifetime, unless they're 
       WHERE kind = 'reaction' ORDER BY number`,
     ),
   ).toEqual(
-    [1, 2, 3].map((id) => ({
+    [1, 2, 3, 9].map((id) => ({
       request_id: id,
       payload: JSON.stringify({
         action: "remove",
