@@ -336,9 +336,15 @@ test("a run Toy Box fails is retried, and a Toy Box that went away is woken once
   await storeRequest(database, now());
   scheduler.reconsider();
 
-  await waitFor(() => expect(toyBox.runs).toHaveLength(1));
+  // Toy Box counts the run before the scheduler records it.
+  await waitFor(async () =>
+    expect(await readOutcomes(database)).toEqual([
+      { kind: "requests", outcome: "failed" },
+      { kind: "requests", outcome: "ran" },
+    ]),
+  );
+  expect(toyBox.runs).toHaveLength(1);
   const [failed, ran] = await readWakes(database);
-  expect([failed!.outcome, ran!.outcome]).toEqual(["failed", "ran"]);
   expect(ran!.at - failed!.at).toBeGreaterThanOrEqual(TIMINGS.retry);
 
   toyBox.finishTurn(channelId);
