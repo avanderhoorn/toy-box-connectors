@@ -2,10 +2,13 @@
 //
 // The bridge prepares its data folder, reads its settings, takes the
 // single-bridge lock, and only then opens `bridge.db`, so a second bridge stops
-// before it opens anything.
-// Then it starts its work: answering commands on its socket, following each
-// linked Toy Box channel and waking leads. It lets go of everything in the
-// reverse order, so it stops taking commands before anything they use stops.
+// before it opens anything. Before anything can fetch a file, it removes every
+// local copy no row names.
+// Then it starts its work: following each linked Toy Box channel, connecting to
+// Slack and applying what owners approve there once both tokens are set, waking
+// leads while it can use Slack, and answering commands on its socket. It lets go
+// of everything in the reverse order, so it stops taking commands before anything
+// they use stops.
 //
 // A part that fails in a way retrying can't fix, such as a storage error,
 // reports it through one fatal path, and the bridge exits so launchd restarts
@@ -14,11 +17,16 @@
 import { join } from "node:path";
 import { commandContracts } from "@commands/model";
 import { unconfiguredSlack, type SlackState } from "@commands/model/status";
+import { isSlackUsable } from "@commands/model/withoutSlack";
 import { dismissCommand } from "@commands/server/dismiss";
 import { holdCommand } from "@commands/server/hold";
 import { inboxCommand } from "@commands/server/inbox";
 import { serveCommands } from "@commands/server/serve";
 import { statusCommand } from "@commands/server/status";
+import { startApplier, type Applier } from "@links/server/apply";
+import { createFactsReader } from "@links/server/facts";
+import { sweepFiles } from "@links/server/purge";
+import { createBotClient } from "@slackapi/server/botClient";
 import { startToyBoxClient, type ToyBoxClient } from "@toybox/server";
 import { startWakeScheduler, type WakeScheduler } from "@wakes/server";
 import { prepareDataFolder, resolveDataFolder } from "./dataFolder";
@@ -26,6 +34,7 @@ import { openBridgeDatabase, type BridgeDatabase } from "./database";
 import { readCredentialsFile, resolveBridgeSettings } from "./environment";
 import { acquireBridgeLock } from "./lock";
 import { BridgeRefusedError } from "./refusal";
+import { startSlackSupervisor, type SlackSupervisor } from "./slack";
 import { commandSocketPath, listenForCommands, type CommandSocket } from "./socket";
 
 export interface Bridge {
@@ -69,12 +78,16 @@ export async function startBridge(
   let database: BridgeDatabase | undefined;
   let toyBox: ToyBoxClient | undefined;
   let scheduler: WakeScheduler | undefined;
+  let applier: Applier | undefined;
+  let slack: SlackSupervisor | undefined;
   let socket: CommandSocket | undefined;
 
   async function stop() {
     try {
       await socket?.stop();
       await scheduler?.stop();
+      await applier?.stop();
+      await slack?.stop();
       await toyBox?.stop();
       await database?.close();
     } finally {
@@ -84,36 +97,67 @@ export async function startBridge(
 
   try {
     database = await openBridgeDatabase(join(dataFolder, "bridge.db"));
+    const filesFolder = join(dataFolder, "files");
+    await sweepFiles(database, filesFolder);
     toyBox = startToyBoxClient(database, {
       origin: settings.toyBoxOrigin,
       onChange: () => scheduler?.reconsider(),
       onError: failure.resolve,
       timings: settings.wakeTimings,
     });
+    // Slack is supervised exactly when both tokens are set.
+    const slackState = (): SlackState => unconfiguredSlack(settings) ?? slack!.state();
+    const slackUsable = () => isSlackUsable(slackState().connection);
+    const { botToken, appToken, slackApiUrl } = settings;
+    if (botToken && appToken) {
+      const bot = createBotClient(database, botToken, {
+        slackApiUrl,
+        onAuthFailed: (error) => slack?.botRejected(error),
+      });
+      slack = startSlackSupervisor(database, bot, {
+        tokens: { botToken, appToken },
+        filesFolder,
+        slackApiUrl,
+        onChange: () => {
+          applier?.reconsider();
+          scheduler?.reconsider();
+        },
+        onError: failure.resolve,
+        timings: settings.wakeTimings,
+      });
+      applier = startApplier(database, createFactsReader(bot, settings.toyBoxOrigin), {
+        slackUsable,
+        onChange: () => {
+          scheduler?.reconsider();
+          toyBox?.followLinks().catch(failure.resolve);
+        },
+        onError: failure.resolve,
+      });
+    }
     scheduler = startWakeScheduler(database, toyBox, {
-      // Until the receiver reports its connection, leads are woken as if Slack were usable.
-      slackUsable: () => true,
+      slackUsable,
       onError: failure.resolve,
       timings: settings.wakeTimings,
     });
-    // Until the receiver reports its connection, Slack is on its way whenever both tokens are set.
-    const slack = (): SlackState =>
-      unconfiguredSlack(settings) ?? { connection: "connecting", problem: null };
     const origin = settings.toyBoxOrigin;
     socket = listenForCommands(
       commandSocketPath(dataFolder),
       serveCommands({
         contracts: commandContracts,
         handlers: {
-          status: statusCommand({ database, origin, slack, toyBox, wakes: scheduler }),
-          inbox: inboxCommand({ database, wakes: scheduler, workspaceUrl: () => null }),
+          status: statusCommand({ database, origin, slack: slackState, toyBox, wakes: scheduler }),
+          inbox: inboxCommand({
+            database,
+            wakes: scheduler,
+            workspaceUrl: () => slack?.workspaceUrl() ?? null,
+          }),
           hold: holdCommand({ database, wakes: scheduler }),
           dismiss: dismissCommand({ database, wakes: scheduler }),
         },
         database,
         origin,
         toyBox,
-        slack,
+        slack: slackState,
       }),
     );
     await toyBox.followLinks();

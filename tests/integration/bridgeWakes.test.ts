@@ -6,7 +6,7 @@ import { createTestFolder } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { startFakeToyBox } from "../fakes/toybox";
-import { spawnBridge } from "./bridgeProcess";
+import { spawnBridge, startSlackForBridge } from "./bridgeProcess";
 import { waitFor } from "./waitFor";
 
 const REQUESTS_ROUTINE = {
@@ -18,14 +18,15 @@ const DAY = 24 * 60 * 60_000;
 
 /**
  * A data folder whose link follows a fake Toy Box channel and holds one open request, and the
- * environment that points a bridge at them with a short debounce. `prepare` changes the database
- * before the bridge opens it.
+ * environment that points a bridge at them and a fake Slack with a short debounce. `prepare`
+ * changes the database before the bridge opens it.
  */
 async function linkFakeChannel(prepare?: (database: BridgeDatabase) => Promise<unknown>) {
   const toyBox = startFakeToyBox();
   onTestFinished(() => toyBox.stop());
   const channelId = toyBox.addChannel();
   const routine = toyBox.scheduleRoutine(channelId, REQUESTS_ROUTINE);
+  const slack = startSlackForBridge();
   const home = createTestFolder();
   const dataFolder = join(home, ".toy-box-slack");
   prepareDataFolder(dataFolder);
@@ -41,6 +42,7 @@ async function linkFakeChannel(prepare?: (database: BridgeDatabase) => Promise<u
   const env = {
     TOY_BOX_URL: toyBox.url,
     TOY_BOX_SLACK_WAKE_TIMINGS: JSON.stringify({ debounce: 50, debounceLimit: 200 }),
+    ...slack.env,
   };
   return { toyBox, channelId, routine, home, dataFolder, env };
 }

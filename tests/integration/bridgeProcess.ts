@@ -2,6 +2,7 @@
 
 import { onTestFinished } from "bun:test";
 import { join } from "node:path";
+import { startFakeSlack } from "../fakes/slack";
 
 const REPOSITORY = join(import.meta.dir, "..", "..");
 
@@ -49,4 +50,16 @@ export function spawnBridge(home: string, env: Record<string, string> = {}) {
       return { code, stderr };
     },
   };
+}
+
+/** A fake Slack, and the environment that points a bridge at it with both tokens. */
+export function startSlackForBridge() {
+  const slack = startFakeSlack();
+  onTestFinished(() => slack.stop());
+  const env = {
+    SLACK_API_URL: slack.url,
+    SLACK_BOT_TOKEN: slack.botToken,
+    SLACK_APP_TOKEN: slack.appToken,
+  };
+  return { slack, env };
 }

@@ -4,7 +4,7 @@ import { onTestFinished } from "bun:test";
 import { join } from "node:path";
 import { z } from "zod";
 import { prepareDataFolder } from "@bridge/server/dataFolder";
-import { openBridgeDatabase } from "@bridge/server/database";
+import { openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
 import { commandSocketPath } from "@bridge/server/socket";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import type { CallerFacts } from "@commands/model/callers";
@@ -22,8 +22,18 @@ const REQUESTS_ROUTINE = {
 
 const answerSchema = z.union([commandResultSchema(statusResultSchema), commandRefusalSchema]);
 
-/** A bridge running for a data folder whose link follows a fake Toy Box channel. */
-export async function startLinkedBridge() {
+/**
+ * A bridge running for a data folder whose link follows a fake Toy Box channel and watches C-link,
+ * with `env` added to its environment. `prepare` changes the data folder and its database before
+ * the bridge opens them.
+ */
+export async function startLinkedBridge({
+  env = {},
+  prepare,
+}: {
+  env?: Record<string, string>;
+  prepare?: (database: BridgeDatabase, dataFolder: string) => Promise<unknown>;
+} = {}) {
   const toyBox = startFakeToyBox();
   onTestFinished(() => toyBox.stop());
   const channelId = toyBox.addChannel();
@@ -37,10 +47,11 @@ export async function startLinkedBridge() {
       toybox_channel_id: channelId,
       requests_routine_id: routine.id,
     });
+    await prepare?.(database, dataFolder);
   } finally {
     await database.close();
   }
-  const bridge = spawnBridge(home, { TOY_BOX_URL: toyBox.url });
+  const bridge = spawnBridge(home, { TOY_BOX_URL: toyBox.url, ...env });
   await bridge.running();
   const socket = commandSocketPath(dataFolder);
   const port = Number(new URL(toyBox.url).port);
