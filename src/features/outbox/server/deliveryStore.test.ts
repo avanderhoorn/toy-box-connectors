@@ -90,6 +90,29 @@ test.each([{ attempts: 1 }, { payload_hash: "edited" }])(
 );
 
 test.each([
+  { method: "reactions.add", kind: "reaction" },
+  { method: "reactions.remove", kind: "reaction" },
+  { method: "chat.delete", kind: "retract" },
+  { method: "assistant.threads.setStatus", kind: "status" },
+] as const)(
+  "an unknown $kind retries only through its idempotent handler: $method",
+  async ({ method, kind }) => {
+    const database = await openTestDatabase();
+    const sending = await start(database, await queue(database, { kind }), 1_000, {}, method);
+    const unresolved = await unknown(database, sending);
+    expect(await database.read((sql) => readReadyOutbox(sql, 10_999))).toEqual([]);
+    expect(await database.read((sql) => readReadyOutbox(sql, 11_000))).toEqual([unresolved]);
+    expect(await database.read((sql) => readDueReconciliations(sql, 11_000))).toEqual([]);
+    await database.write(
+      (tx) => tx`UPDATE outbox SET next_attempt_at = NULL WHERE id = ${unresolved.id}`,
+    );
+    expect(await database.read((sql) => readReadyOutbox(sql, 11_000))).toEqual([
+      await item(database, unresolved.id),
+    ]);
+  },
+);
+
+test.each([
   { state: "failed", error: "thread_not_found" },
   {
     state: "stray",

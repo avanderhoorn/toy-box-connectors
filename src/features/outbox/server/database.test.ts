@@ -105,6 +105,69 @@ test("a reaction is queued after every item before it, naming only its message a
   });
 });
 
+test.each(["sending", "delivery_unknown", "sent", "failed"])(
+  "a reaction removal shares only a queued removal, never a %s one",
+  async (state) => {
+    const database = await openTestDatabase();
+    const removal = {
+      action: "remove",
+      channelId: "C-link",
+      ts: "1700000200.000100",
+      name: "eyes",
+      linkId: "link",
+      requestId: 1,
+    } as const;
+    await database.write(async (tx) => {
+      await queueReaction(tx, removal, 1_000);
+      await queueReaction(tx, removal, 2_000);
+    });
+    expect(await readQueued(database)).toHaveLength(1);
+    await database.write(async (tx) => {
+      await tx`UPDATE outbox SET state = ${state}`;
+      await queueReaction(tx, removal, 3_000);
+    });
+    expect((await readQueued(database)).map((item) => item.state)).toEqual([state, "queued"]);
+  },
+);
+
+test("a queued add never absorbs the removal that must follow it", async () => {
+  const database = await openTestDatabase();
+  const reaction = {
+    channelId: "C-link",
+    ts: "1700000200.000100",
+    name: "eyes",
+  };
+  await database.write(async (tx) => {
+    await queueReaction(tx, reaction, 1_000);
+    await queueReaction(tx, { ...reaction, action: "remove" }, 2_000);
+  });
+  expect(await readQueued(database)).toHaveLength(2);
+});
+
+test.each([
+  { channelId: "C-other" },
+  { ts: "1700000200.000200" },
+  { name: "white_check_mark" },
+  { linkId: "other" },
+  { requestId: 2 },
+  { action: "add" as const },
+])("reaction removal coalescing keeps a different target or scope: %j", async (changes) => {
+  const database = await openTestDatabase();
+  const removal = {
+    action: "remove",
+    channelId: "C-link",
+    ts: "1700000200.000100",
+    name: "eyes",
+    linkId: "link",
+    requestId: 1,
+  } as const;
+  await database.write(async (tx) => {
+    await queueReaction(tx, removal, 1_000);
+    await queueReaction(tx, { ...removal, ...changes }, 2_000);
+  });
+  expect(await readQueued(database)).toHaveLength(2);
+});
+
 test("a card update supersedes the approval's queued updates, but not its post or others' updates", async () => {
   const database = await openTestDatabase();
   const card = { approvalId: "approval", linkId: "link", channelId: "C-link" };

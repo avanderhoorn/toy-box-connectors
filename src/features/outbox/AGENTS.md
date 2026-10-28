@@ -79,14 +79,34 @@ misplaced post becomes failed, never retracted. Its request was already cancelle
 The operation, target and request commit together. Failed withdrawal leaves the target stray
 with Slack's exact error, and an explicit new retraction can try again.
 A retained unlink target needs no message body. Once confirmed absent, a target whose non-null
-link ID no longer exists is purged with its operation. Failed orphan cleanup keeps its redacted
-stray for the operator. Cleanup settles a final's request only if its link, channel and thread
+link ID no longer exists is purged with its operation. A card is orphaned when its approval is
+gone, not merely when its original link ID is null. A permanent orphan withdrawal failure writes
+abandon_post with only the post's channel and ts, then purges the target and operation in that
+transaction. The same applies to a locally refused withdrawal that still identifies its proved,
+matching target. A changed target is never abandoned on the authority of an older operation.
+Cleanup settles a final's request only if its link, channel and thread
 still match, and a local cleanup refusal never settles a reply merely by its numeric request ID.
 An unlinked card's initial delivery remains until its stale update settles, then its approval
 and card rows are purged. An older update cannot retire the approval while another update
 is queued, sending or unknown, even when the older attempt becomes superseded.
 A card that never started is dropped without posting a new stale card.
 Stray card targets survive that purge, redacted, until withdrawal finishes.
+
+`server/reactions.ts` adds and removes only message reactions through the shared client.
+New eyes require a read, active request and an active link. A confirmed answer's checkmark
+may finish while its link is paused or suspended. Removals need only an active installation,
+not a link or request. A channel refusal suspends the channel's links and holds feedback
+until activation, or drops it if its link is gone. Other permanent refusals remain item-local.
+already_reacted, no_reaction and message_not_found finish feedback without changing a request.
+Unknown operations retain their method and payload and retry at five-to-120-second backoff,
+including across installation holds and cooldowns. The ready reader selects idempotent
+cleanup and feedback separately from unknown message reads. A later token rejection or
+rate limit cannot erase an earlier uncertain add before unlink can keep it.
+An add finishing after cancellation or unlink queues a compensating removal in its settlement
+transaction. Only queued removals coalesce, never an in-flight one that may precede the late add.
+Calls to the same channel, message and emoji serialize while one is sending. Remote operations
+whose responses were lost can still reorder, so feedback is best effort and never holds an answer.
+Terminal orphan reactions are purged.
 
 `model/posting.ts` checks the current installation, link, destination, requester and request
 revision. Only explicit follow-ups reach answered, dismissed or expired requests, and none

@@ -136,10 +136,11 @@ export async function readOutboxItem(
   return row ? outboxItem(row) : null;
 }
 
-/** Feedback comes last. Unknown deliveries are never candidates for another send. */
+/** Feedback comes last. Only idempotent cleanup and feedback can retry an unknown operation. */
 export async function readReadyOutbox(sql: Bun.SQL, now: number): Promise<OutboxItem[]> {
   const rows = await sql<OutboxRow[]>`
-    SELECT * FROM outbox WHERE state = 'queued'
+    SELECT * FROM outbox WHERE (state = 'queued' OR (state = 'delivery_unknown'
+      AND kind IN ('retract', 'reaction', 'status')))
       AND (next_attempt_at IS NULL OR next_attempt_at <= ${now})
     ORDER BY CASE kind
       WHEN 'retract' THEN 0 WHEN 'reply' THEN 1 WHEN 'publication' THEN 1
@@ -153,7 +154,8 @@ export async function readDueReconciliations(sql: Bun.SQL, now: number): Promise
   const rows = await sql<(OutboxRow & { link_status: string | null })[]>`
     SELECT outbox.*, links.status AS link_status FROM outbox
     LEFT JOIN links ON links.id = outbox.link_id
-    WHERE outbox.state = 'delivery_unknown' AND (outbox.reconcile_pass < 3
+    WHERE outbox.state = 'delivery_unknown' AND outbox.kind IN ('reply', 'progress', 'publication', 'card')
+      AND (outbox.reconcile_pass < 3
       OR (outbox.link_id IS NOT NULL AND links.id IS NULL))
       AND (outbox.next_attempt_at IS NULL OR outbox.next_attempt_at <= ${now})
     ORDER BY outbox.next_attempt_at, outbox.number
@@ -353,6 +355,18 @@ export async function queueReaction(
   },
   now: number,
 ): Promise<void> {
+  if (reaction.action === "remove") {
+    const [queued] = await transaction`
+      SELECT id FROM outbox WHERE kind = 'reaction' AND state = 'queued'
+        AND channel_id = ${reaction.channelId}
+        AND link_id IS ${reaction.linkId ?? null} AND request_id IS ${reaction.requestId ?? null}
+        AND json_extract(payload, '$.action') = 'remove'
+        AND json_extract(payload, '$.name') = ${reaction.name}
+        AND json_extract(payload, '$.timestamp') = ${reaction.ts}
+      LIMIT 1
+    `;
+    if (queued) return;
+  }
   await queueItem(
     transaction,
     {
