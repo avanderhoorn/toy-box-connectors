@@ -94,7 +94,7 @@ describe("how a request ended", () => {
     ["mention_removed", "cancelled because the message no longer mentions you"],
     ["requester_denied", "cancelled because the person who asked is no longer allowed"],
     ["link_removed", "cancelled because this channel was unlinked from Slack"],
-    ["channel_deleted", "cancelled because its Slack channel was deleted"],
+    ["toybox_channel_deleted", "cancelled because its Toy Box channel was deleted"],
     ["thread_gone", "cancelled because Slack could not deliver to its thread"],
     [null, "cancelled"],
     ["constructor", "cancelled"],

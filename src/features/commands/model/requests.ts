@@ -113,7 +113,7 @@ const cancelReasons: Record<CancelReason, string> = {
   mention_removed: "the message no longer mentions you",
   requester_denied: "the person who asked is no longer allowed",
   link_removed: "this channel was unlinked from Slack",
-  channel_deleted: "its Slack channel was deleted",
+  toybox_channel_deleted: "its Toy Box channel was deleted",
   thread_gone: "Slack could not deliver to its thread",
 };
 

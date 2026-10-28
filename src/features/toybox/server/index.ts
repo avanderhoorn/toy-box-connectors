@@ -209,7 +209,7 @@ export function startToyBoxClient(
       }
       if (observation.deleted === true) {
         changes.push(await suspendLink(transaction, link.id, "toybox_channel_deleted", at));
-        changes.push(await cancelLinkRequests(transaction, link.id, "channel_deleted", at));
+        changes.push(await cancelLinkRequests(transaction, link.id, "toybox_channel_deleted", at));
       }
       return changes.includes(true);
     });

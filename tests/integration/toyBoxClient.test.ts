@@ -327,7 +327,7 @@ test("a deleted channel suspends its link, cancels its requests and is never fol
   expect(
     await database.read((sql) => sql`SELECT id, state, closed_reason FROM requests ORDER BY id`),
   ).toEqual([
-    { id: 1, state: "cancelled", closed_reason: "channel_deleted" },
+    { id: 1, state: "cancelled", closed_reason: "toybox_channel_deleted" },
     { id: 2, state: "answered", closed_reason: null },
   ]);
   expect(await database.read((sql) => sql`SELECT state FROM outbox ORDER BY number`)).toEqual([
