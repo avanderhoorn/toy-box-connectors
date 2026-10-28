@@ -1,0 +1,48 @@
+_metadata:
+  major_version: 1
+display_information:
+  name: Toy Box
+  description: Channel monitoring and threaded answers from your local Toy Box lead
+  background_color: "#4a154b"
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: false
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: toy-box
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - channels:history
+      - channels:read
+      - groups:history
+      - groups:read
+      - users:read
+      - chat:write
+      - metadata.message:read
+      - files:read
+      - reactions:write
+settings:
+  socket_mode_enabled: true
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false
+  event_subscriptions:
+    bot_events:
+      - message.channels
+      - message.groups
+      - member_joined_channel
+      - member_left_channel
+      - channel_archive
+      - channel_deleted
+      - channel_rename
+      - group_rename
+      - app_uninstalled
+      - tokens_revoked
+      - channel_shared
+      - channel_unshared
+      - channel_id_changed
+      - file_deleted
