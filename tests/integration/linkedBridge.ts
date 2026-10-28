@@ -11,21 +11,16 @@ import type { CallerFacts } from "@commands/model/callers";
 import { commandPath, commandRefusalSchema, commandResultSchema } from "@commands/model/protocol";
 import { statusResultSchema } from "@commands/model/status";
 import { createStoredLink } from "@links/server/testFixtures";
+import { routineTemplates } from "@toybox/model/routines";
 import { startFakeToyBox } from "../fakes/toybox";
 import { spawnBridge } from "./bridgeProcess";
-
-const REQUESTS_ROUTINE = {
-  title: "Slack requests",
-  schedule: "0 9 * * 1-5",
-  prompt: "Run `toy-box-slack inbox` and answer what's waiting.",
-};
 
 const answerSchema = z.union([commandResultSchema(statusResultSchema), commandRefusalSchema]);
 
 /**
  * A bridge running for a data folder whose link follows a fake Toy Box channel and watches C-link,
- * with `env` added to its environment. `prepare` changes the data folder and its database before
- * the bridge opens them.
+ * with `env` added to its environment. The channel's requests routine is the template. `prepare`
+ * changes the data folder and its database before the bridge opens them.
  */
 export async function startLinkedBridge({
   env = {},
@@ -37,7 +32,7 @@ export async function startLinkedBridge({
   const toyBox = startFakeToyBox();
   onTestFinished(() => toyBox.stop());
   const channelId = toyBox.addChannel();
-  const routine = toyBox.scheduleRoutine(channelId, REQUESTS_ROUTINE);
+  const routine = toyBox.scheduleRoutine(channelId, routineTemplates.requests);
   const home = createTestFolder();
   const dataFolder = join(home, ".toy-box-slack");
   prepareDataFolder(dataFolder);
@@ -72,5 +67,5 @@ export async function startLinkedBridge({
     return { status: response.status, answer: answerSchema.parse(await response.json()) };
   }
 
-  return { toyBox, channelId, bridge, home, dataFolder, socket, port, status };
+  return { toyBox, channelId, routine, bridge, home, dataFolder, socket, port, status };
 }

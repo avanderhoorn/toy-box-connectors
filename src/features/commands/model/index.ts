@@ -7,6 +7,7 @@ import type { CommandContract, CommandHandlersFor } from "./contract";
 import { dismissContract } from "./dismiss";
 import { holdContract } from "./hold";
 import { inboxContract } from "./inbox";
+import { routinesContract } from "./routines";
 import { statusContract } from "./status";
 
 export const commandContracts = {
@@ -14,6 +15,7 @@ export const commandContracts = {
   inbox: inboxContract,
   hold: holdContract,
   dismiss: dismissContract,
+  routines: routinesContract,
 } satisfies Record<string, CommandContract>;
 
 export type CommandName = keyof typeof commandContracts;

@@ -98,7 +98,7 @@ describe("presenting the banner", () => {
 
   test("explains a missing or drifted routine with the command it needs", () => {
     expect(presentBanner(banner({ warnings: [{ kind: "routine_missing", series: null }] }))).toBe(
-      "> Slack: connected · coverage complete · the requests routine is gone, register a new one with `toy-box-slack routine --requests <id>`, see `toy-box-slack status`",
+      "> Slack: connected · coverage complete · the requests routine is gone, register a new one from `toy-box-slack routines --template requests`, see `toy-box-slack status`",
     );
     expect(
       presentBanner(banner({ warnings: [{ kind: "routine_drifted", series: "release-notes" }] })),

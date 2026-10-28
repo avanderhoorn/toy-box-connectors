@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import { publishCommand, REQUESTS_COMMAND } from "@toybox/model";
+import { RELEASE_NOTES_SERIES } from "@toybox/model/routines";
 import { coverageSchema, describeSuspension, slackConnectionSchema } from "./banner";
 import { commandContract, type PresentContext } from "./contract";
 
@@ -190,26 +191,32 @@ function presentWake(wake: NonNullable<LinkStatus["wake"]>, at: number): string 
 const wakeBlocks: Record<z.output<typeof wakeBlockSchema>, string> = {
   link_inactive: "off while the link isn't active.",
   routine_missing:
-    "blocked, because the requests routine is gone. Register a new one with `toy-box-slack routine --requests <id>`.",
+    "blocked, because the requests routine is gone. Register a new one from `toy-box-slack routines --template requests`.",
   provider:
     "blocked for good, because the channel's lead doesn't run on Copilot. Create a Copilot channel and link that instead.",
   refused:
-    "blocked, because Toy Box refused to run the requests routine. Register a new one with `toy-box-slack routine --requests <id>`.",
+    "blocked, because Toy Box refused to run the requests routine. Register a new one from `toy-box-slack routines --template requests`.",
 };
 
 function presentRoutine({ series, routineId, period, state }: LinkStatus["routines"][number]) {
   const name = series === null ? "Requests routine" : `Routine for ${series}`;
   const command = series === null ? REQUESTS_COMMAND : publishCommand(series);
-  const register =
-    series === null
-      ? "`toy-box-slack routine --requests <id>`"
-      : `\`toy-box-slack routine --publish <id> --series ${series} --period ${period ?? "day"}\``;
+  const register = registerStep(series, period);
   switch (state) {
     case "present":
       return `${name}: ${routineId}.`;
     case "drifted":
-      return `${name}: ${routineId} no longer runs \`${command}\`. Put that back in its prompt in Toy Box, or register another with ${register}.`;
+      return `${name}: ${routineId} no longer runs \`${command}\`. Put that back in its prompt in Toy Box, or register another ${register}.`;
     case "missing":
-      return `${name}: ${routineId} was deleted. Register a new one with ${register}.`;
+      return `${name}: ${routineId} was deleted. Register a new one ${register}.`;
   }
+}
+
+// A routine from a template is registered again from it, since the template says how to give the
+// bridge its ID.
+function registerStep(series: string | null, period: "day" | "week" | null): string {
+  if (series === null) return "from `toy-box-slack routines --template requests`";
+  if (series === RELEASE_NOTES_SERIES)
+    return "from `toy-box-slack routines --template release-notes`";
+  return `with \`toy-box-slack routine --publish <id> --series ${series} --period ${period ?? "day"}\``;
 }

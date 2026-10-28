@@ -54,6 +54,7 @@ describe("presenting status", () => {
       routines: [
         { series: null, routineId: "routine-requests", period: null, state: "missing" },
         { series: "release-notes", routineId: "routine-notes", period: "week", state: "drifted" },
+        { series: "changelog", routineId: "routine-changelog", period: "day", state: "missing" },
       ],
     };
     const slack = { connection: "unconfigured", problem: "SLACK_APP_TOKEN isn't set." } as const;
@@ -68,9 +69,10 @@ describe("presenting status", () => {
       "- Link: suspended because the bot was removed from its Slack channel, so nothing new opens and posts wait. Invite the bot back to the channel, then run `toy-box-slack resume` for the owner to approve in Slack.",
       "- Coverage: partial, a repair couldn't finish, so some messages may be missing.",
       "- Toy Box: not following the channel's stream yet, retrying",
-      "- Wakes: blocked, because the requests routine is gone. Register a new one with `toy-box-slack routine --requests <id>`.",
-      "- Requests routine: routine-requests was deleted. Register a new one with `toy-box-slack routine --requests <id>`.",
-      "- Routine for release-notes: routine-notes no longer runs `toy-box-slack publish --series release-notes`. Put that back in its prompt in Toy Box, or register another with `toy-box-slack routine --publish <id> --series release-notes --period week`.",
+      "- Wakes: blocked, because the requests routine is gone. Register a new one from `toy-box-slack routines --template requests`.",
+      "- Requests routine: routine-requests was deleted. Register a new one from `toy-box-slack routines --template requests`.",
+      "- Routine for release-notes: routine-notes no longer runs `toy-box-slack publish --series release-notes`. Put that back in its prompt in Toy Box, or register another from `toy-box-slack routines --template release-notes`.",
+      "- Routine for changelog: routine-changelog was deleted. Register a new one with `toy-box-slack routine --publish <id> --series changelog --period day`.",
     ]);
   });
 
@@ -98,13 +100,13 @@ describe("presenting status", () => {
       "- Wakes: off while the link isn't active.",
     );
     expect(wake({ kind: "blocked", reason: "routine_missing" })).toBe(
-      "- Wakes: blocked, because the requests routine is gone. Register a new one with `toy-box-slack routine --requests <id>`.",
+      "- Wakes: blocked, because the requests routine is gone. Register a new one from `toy-box-slack routines --template requests`.",
     );
     expect(wake({ kind: "blocked", reason: "provider" })).toBe(
       "- Wakes: blocked for good, because the channel's lead doesn't run on Copilot. Create a Copilot channel and link that instead.",
     );
     expect(wake({ kind: "blocked", reason: "refused" })).toBe(
-      "- Wakes: blocked, because Toy Box refused to run the requests routine. Register a new one with `toy-box-slack routine --requests <id>`.",
+      "- Wakes: blocked, because Toy Box refused to run the requests routine. Register a new one from `toy-box-slack routines --template requests`.",
     );
   });
 

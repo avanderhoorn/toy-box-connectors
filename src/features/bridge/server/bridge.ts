@@ -21,6 +21,7 @@ import { isSlackUsable } from "@commands/model/withoutSlack";
 import { dismissCommand } from "@commands/server/dismiss";
 import { holdCommand } from "@commands/server/hold";
 import { inboxCommand } from "@commands/server/inbox";
+import { routinesCommand } from "@commands/server/routines";
 import { serveCommands } from "@commands/server/serve";
 import { statusCommand } from "@commands/server/status";
 import { startApplier, type Applier } from "@links/server/apply";
@@ -153,6 +154,7 @@ export async function startBridge(
           }),
           hold: holdCommand({ database, wakes: scheduler }),
           dismiss: dismissCommand({ database, wakes: scheduler }),
+          routines: routinesCommand({ database }),
         },
         database,
         origin,

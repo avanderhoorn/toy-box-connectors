@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { commandRefusalSchema, commandResultSchema } from "@commands/model/protocol";
 import { statusResultSchema } from "@commands/model/status";
+import { routineTemplates } from "@toybox/model/routines";
 import { version } from "../../package.json";
 import { startLinkedBridge } from "./linkedBridge";
 import { waitFor } from "./waitFor";
@@ -103,6 +104,51 @@ Toy Box: ${answer!.result.toyBox}
     stderr: "",
   });
 }, 20_000);
+
+test("prints the link's requests routine, and how to replace it once it's deleted", async () => {
+  const { toyBox, channelId, routine, home, port } = await startLinkedBridge();
+  const lead = leadEnvironment(home, channelId, port);
+  const { title, schedule, prompt } = routineTemplates.requests;
+  const requests = (banner: string, step: string) => ({
+    exitCode: 0,
+    stdout: `${banner}
+
+Register a routine with set_routine, using the title, schedule and prompt shown for it, and change a schedule only if the owner asks.
+
+## ${title}
+
+Every link needs it. The bridge runs it whenever requests need you, so its schedule is only a safety net.
+
+Title \`${title}\`, schedule \`${schedule}\`, prompt:
+
+\`\`\`
+${prompt}
+\`\`\`
+
+${step}
+`,
+    stderr: "",
+  });
+
+  await waitFor(async () => {
+    expect(await runToyBoxSlack(["routines", "--template", "requests"], lead)).toEqual(
+      requests(
+        "> Slack: not set up · coverage complete, see `toy-box-slack status`",
+        `The link uses routine ${routine.id}. To update it in place, pass routineId ${routine.id} to set_routine with this prompt, keeping its title and schedule. To replace it, register this one, then run \`toy-box-slack routine --requests <routineId>\` with the routineId set_routine returned.`,
+      ),
+    );
+  }, 10_000);
+  toyBox.deleteRoutine(channelId, routine.id);
+
+  await waitFor(async () => {
+    expect(await runToyBoxSlack(["routines", "--template", "requests"], lead)).toEqual(
+      requests(
+        "> Slack: not set up · coverage complete · the requests routine is gone, register a new one from `toy-box-slack routines --template requests`, see `toy-box-slack status`",
+        `The link's routine ${routine.id} was deleted, so register this one, then run \`toy-box-slack routine --requests <routineId>\` with the routineId set_routine returned.`,
+      ),
+    );
+  }, 10_000);
+}, 30_000);
 
 test("refuses a session that isn't in the bridge's Toy Box, on stderr with exit 1", async () => {
   const { toyBox, home, port } = await startLinkedBridge();
@@ -202,11 +248,12 @@ test.each([
 Usage: toy-box-slack <command> [options]
 
 Commands:
-  status   Show Slack's connection and the health of each link
-  inbox    Read new and changed Slack requests, and how the owner decided your proposals
-  hold     Stop reminders about a request while you wait for the owner to decide
-  dismiss  Close a request that needs no answer, without replying in Slack
-  serve    Run the bridge in the foreground until SIGTERM or SIGINT
+  status    Show Slack's connection and the health of each link
+  inbox     Read new and changed Slack requests, and how the owner decided your proposals
+  hold      Stop reminders about a request while you wait for the owner to decide
+  dismiss   Close a request that needs no answer, without replying in Slack
+  routines  Show the routines to register in Toy Box, with their prompts
+  serve     Run the bridge in the foreground until SIGTERM or SIGINT
 
 Run \`toy-box-slack <command> --help\` to see a command's options.
 `,
@@ -263,6 +310,18 @@ Options:
   --reason <value>     Why it needs no answer
   --channel <id>       The Toy Box channel to act for, from a terminal
   --json               Print the bridge's answer as JSON
+`,
+  ],
+  [
+    ["routines", "--help"],
+    `Show the routines to register in Toy Box, with their prompts
+
+Usage: toy-box-slack routines [options]
+
+Options:
+  --template <requests|digest|release-notes>  Show only this routine
+  --channel <id>                              The Toy Box channel to act for, from a terminal
+  --json                                      Print the bridge's answer as JSON
 `,
   ],
   [

@@ -190,7 +190,7 @@ function presentWarning(warning: BannerWarning): string {
         : `link suspended ${describeSuspension(warning.reason).because}, its posts wait`;
     case "routine_missing":
       return warning.series === null
-        ? "the requests routine is gone, register a new one with `toy-box-slack routine --requests <id>`"
+        ? "the requests routine is gone, register a new one from `toy-box-slack routines --template requests`"
         : `the ${warning.series} routine is gone`;
     case "routine_drifted":
       return warning.series === null
