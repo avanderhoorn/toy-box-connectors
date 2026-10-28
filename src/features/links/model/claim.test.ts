@@ -11,7 +11,6 @@ import {
   formatClaimCode,
   hashClaimCode,
   isOpen,
-  MAX_CLAIM_ATTEMPTS,
   newClaim,
   readClaim,
   voidClaim,
@@ -136,7 +135,7 @@ describe("attempting a claim", () => {
 
   test("the fifth wrong code voids the claim, so a sixth can't be tried", () => {
     let claim = live;
-    for (let tries = 1; tries < MAX_CLAIM_ATTEMPTS; tries += 1) {
+    for (let tries = 1; tries < 5; tries += 1) {
       claim = attemptClaim(claim, { ...attempt, code: `0000-000${tries}` }, tries)!.claim;
       expect(claim).toMatchObject({ state: "live", failedAttempts: tries });
     }
@@ -145,7 +144,7 @@ describe("attempting a claim", () => {
       claim: {
         ...claim,
         state: "void",
-        failedAttempts: MAX_CLAIM_ATTEMPTS,
+        failedAttempts: 5,
         decidedAt: 9,
         voidReason: "exhausted",
       },
@@ -154,12 +153,12 @@ describe("attempting a claim", () => {
     expect(attemptClaim(exhausted, attempt, 10)).toBeNull();
   });
 
-  test("an attempt after the deadline voids the claim without trying the code", () => {
-    expect(attemptClaim(live, attempt, CLAIM_LIFETIME_MS)).toEqual({
+  test("an attempt ten minutes after the code was made voids the claim without trying the code", () => {
+    expect(attemptClaim(live, attempt, 10 * 60_000)).toEqual({
       outcome: "expired",
-      claim: { ...live, state: "void", decidedAt: CLAIM_LIFETIME_MS, voidReason: "expired" },
+      claim: { ...live, state: "void", decidedAt: 10 * 60_000, voidReason: "expired" },
     });
-    expect(attemptClaim(live, attempt, CLAIM_LIFETIME_MS - 1)?.outcome).toBe("posted");
+    expect(attemptClaim(live, attempt, 10 * 60_000 - 1)?.outcome).toBe("posted");
   });
 
   test("a code works once, so nobody can take over a posted claim", () => {

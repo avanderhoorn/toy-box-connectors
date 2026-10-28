@@ -69,6 +69,7 @@ export const staleReasons: Record<StaleReason, string> = {
   channel_made_public: "one of its channels was made public",
   workspace_joined: "another workspace can read one of its channels",
   owner_not_member: "the owner isn't in one of its channels",
+  toybox_channel_deleted: "its Toy Box channel was deleted",
   provider: "the Toy Box lead doesn't run on Copilot",
   routine_missing: "the lead's requests routine is gone",
   already_linked: "another link uses the channel or the Toy Box channel",
@@ -79,6 +80,7 @@ export const staleReasons: Record<StaleReason, string> = {
   guest: "the person it names is a guest",
   other_org: "the person it names is in another Enterprise org",
   other_workspace: "the person it names is in another workspace",
+  other_id: "it names someone by an ID other than the one Slack gives them",
   reversed: "a later change undid it",
   not_verified: "the bridge couldn't check it with Slack and Toy Box in time",
 };

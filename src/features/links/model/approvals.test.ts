@@ -16,11 +16,7 @@ import {
   expireApproval,
   invalid,
   isOpen,
-  MAX_ALLOWED_PER_PROPOSAL,
-  MAX_CREATED_PER_HOUR,
-  MAX_PENDING,
   narrows,
-  OWNER_PRESENCE_MS,
   ownerPresent,
   REJECT_ACTION_ID,
   reverses,
@@ -337,6 +333,7 @@ describe("whether a change can apply", () => {
     provider: "copilot",
     routine: "present",
     linkedElsewhere: false,
+    admits: [],
   };
 
   test("channels in the workspace with the bot and the owner, a Copilot lead and its routine can apply", () => {
@@ -430,23 +427,34 @@ describe("whether a change can apply", () => {
     expect(invalid(allow, { ...facts, ownerInPublish: false })).toBe("owner_not_member");
   });
 
-  test("the lead must run on Copilot, with its requests routine, on no other link", () => {
+  test("the Toy Box channel must be there, its lead on Copilot with its requests routine, on no other link", () => {
     expect(invalid(allow, { ...facts, provider: "anthropic" })).toBe("provider");
-    expect(invalid(allow, { ...facts, provider: null })).toBe("provider");
+    expect(invalid(allow, { ...facts, provider: null })).toBe("toybox_channel_deleted");
     expect(invalid(allow, { ...facts, routine: "missing" })).toBe("routine_missing");
     expect(invalid(allow, { ...facts, linkedElsewhere: true })).toBe("already_linked");
   });
 
-  test("anyone the change admits must pass the admission check", () => {
+  test("everyone the change admits must pass the admission check", () => {
     const admits = (person: ReturnType<typeof slackPerson> | null) => ({
       ...facts,
-      admits: { userId: "U-carol", person },
+      admits: [
+        { userId: "U-dave", person: slackPerson({ id: "U-dave" }) },
+        { userId: "U-carol", person },
+      ],
     });
     expect(invalid(allow, admits(slackPerson()))).toBeNull();
     expect(invalid(allow, admits(null))).toBe("user_not_found");
     expect(invalid(allow, admits(slackPerson({ isUltraRestricted: true })))).toBe("guest");
     expect(invalid(allow, admits(slackPerson({ deleted: true })))).toBe("deactivated");
     expect(invalid(allow, admits(slackPerson({ teamId: "T-other" })))).toBe("other_workspace");
+  });
+
+  test("someone is admitted only under the ID Slack gives them, not their org-wide one", () => {
+    const person = slackPerson({ id: "U-carol", enterpriseUserId: "W-carol" });
+    const named = (userId: string) => ({ ...facts, admits: [{ userId, person }] });
+    expect(invalid(allow, named("U-carol"))).toBeNull();
+    expect(invalid(allow, named("W-carol"))).toBe("other_id");
+    expect(invalid(allow, named("U-someone-else"))).toBe("unverified");
   });
 });
 
@@ -563,9 +571,7 @@ describe("proposing a change", () => {
 
   test("a new change with room under the limits can be proposed", () => {
     expect(checkProposal(draft, [], 0)).toEqual({ kind: "new" });
-    expect(checkProposal(draft, [pendingApproval()], MAX_CREATED_PER_HOUR - 1)).toEqual({
-      kind: "new",
-    });
+    expect(checkProposal(draft, [pendingApproval()], 9)).toEqual({ kind: "new" });
   });
 
   test("proposing the same change again returns the open one, whatever the patch order", () => {
@@ -574,7 +580,7 @@ describe("proposing a change", () => {
       kind: "existing",
       approval: open,
     });
-    expect(checkProposal(draft, [open], MAX_CREATED_PER_HOUR)).toEqual({
+    expect(checkProposal(draft, [open], 10)).toEqual({
       kind: "existing",
       approval: open,
     });
@@ -587,11 +593,75 @@ describe("proposing a change", () => {
     expect(checkProposal(draft, [approved], 0)).toEqual({ kind: "refused", reason: "overlap" });
   });
 
+  test("another Toy Box channel's approvals change its own link, so they never match or overlap", () => {
+    const elsewhere = { ...pending(4), toyboxChannelId: "toybox-other", linkId: "link-other" };
+    expect(checkProposal(draft, [elsewhere], 0)).toEqual({ kind: "new" });
+    const allowing = { ...draft, action: "allow" as const, patch: pendingApproval().patch };
+    expect(
+      checkProposal(allowing, [{ ...pendingApproval(), toyboxChannelId: "toybox-other" }], 0),
+    ).toEqual({ kind: "new" });
+  });
+
+  test("handing ownership on overlaps any other handoff, from any Toy Box channel", () => {
+    const handoff = (toyboxChannelId: string, userId: string) => ({
+      ...pendingApproval({ id: `handoff-${toyboxChannelId}`, action: "owner" }),
+      toyboxChannelId,
+      patch: [{ field: "owner_user_id" as const, after: userId }],
+    });
+    const draft = { ...handoff("toybox-link", "U-dave"), linkId: "link" };
+    expect(checkProposal(draft, [handoff("toybox-link", "U-dave")], 0)).toMatchObject({
+      kind: "existing",
+    });
+    expect(checkProposal(draft, [handoff("toybox-other", "U-dave")], 0)).toEqual({
+      kind: "refused",
+      reason: "overlap",
+    });
+    expect(checkProposal(draft, [handoff("toybox-other", "U-erin")], 0)).toEqual({
+      kind: "refused",
+      reason: "overlap",
+    });
+  });
+
+  test("linking a Slack channel is refused while any open approval links it, from any Toy Box channel", () => {
+    const linking = (toyboxChannelId: string, slackChannelId: string) => ({
+      ...pendingApproval({ id: `link-${toyboxChannelId}`, action: "link", linkId: null }),
+      toyboxChannelId,
+      patch: [
+        { field: "slack_channel_id" as const, after: slackChannelId },
+        { field: "publish_channel_id" as const, after: slackChannelId },
+      ],
+    });
+    const draft = { ...linking("toybox-new", "C-eng"), linkId: null };
+    expect(checkProposal(draft, [linking("toybox-other", "C-eng")], 0)).toEqual({
+      kind: "refused",
+      reason: "overlap",
+    });
+    const approved = { ...linking("toybox-other", "C-eng"), state: "approved" as const };
+    expect(checkProposal(draft, [approved], 0)).toEqual({ kind: "refused", reason: "overlap" });
+    expect(checkProposal(draft, [linking("toybox-other", "C-design")], 0)).toEqual({
+      kind: "new",
+    });
+    // Its own Toy Box channel links one Slack channel at a time.
+    expect(checkProposal(draft, [linking("toybox-new", "C-design")], 0)).toEqual({
+      kind: "refused",
+      reason: "overlap",
+    });
+  });
+
+  test("the limits count only the draft's own Toy Box channel", () => {
+    const others = [1, 2, 3].map((number) => ({
+      ...pendingApproval({ id: `approval-${number}`, number, patch: [] }),
+      toyboxChannelId: "toybox-other",
+    }));
+    expect(checkProposal(draft, others, 0)).toEqual({ kind: "new" });
+  });
+
   test("a fourth pending approval is refused, while approved ones don't count", () => {
     const others = [1, 2, 3].map((number) =>
       pendingApproval({ id: `approval-${number}`, number, patch: [] }),
     );
-    expect(checkProposal(draft, others.slice(0, MAX_PENDING), 0)).toEqual({
+    expect(checkProposal(draft, others.slice(0, 2), 0)).toEqual({ kind: "new" });
+    expect(checkProposal(draft, others, 0)).toEqual({
       kind: "refused",
       reason: "too_many_pending",
     });
@@ -600,7 +670,7 @@ describe("proposing a change", () => {
   });
 
   test("an eleventh proposal within the hour is refused", () => {
-    expect(checkProposal(draft, [], MAX_CREATED_PER_HOUR)).toEqual({
+    expect(checkProposal(draft, [], 10)).toEqual({
       kind: "refused",
       reason: "too_many_created",
     });
@@ -615,15 +685,16 @@ describe("proposing a change", () => {
         after: { label: null },
       })),
     });
-    expect(checkProposal(allowing(MAX_ALLOWED_PER_PROPOSAL), [], 0)).toEqual({ kind: "new" });
-    expect(checkProposal(allowing(MAX_ALLOWED_PER_PROPOSAL + 1), [], MAX_CREATED_PER_HOUR)).toEqual(
-      { kind: "refused", reason: "too_many_people" },
-    );
+    expect(checkProposal(allowing(20), [], 0)).toEqual({ kind: "new" });
+    expect(checkProposal(allowing(21), [], 10)).toEqual({
+      kind: "refused",
+      reason: "too_many_people",
+    });
   });
 
   test("widening waits for an owner who posted in Toy Box within half an hour", () => {
-    expect(ownerPresent(0, OWNER_PRESENCE_MS)).toBe(true);
-    expect(ownerPresent(0, OWNER_PRESENCE_MS + 1)).toBe(false);
+    expect(ownerPresent(0, 30 * 60_000)).toBe(true);
+    expect(ownerPresent(0, 30 * 60_000 + 1)).toBe(false);
     expect(ownerPresent(null, 0)).toBe(false);
   });
 });

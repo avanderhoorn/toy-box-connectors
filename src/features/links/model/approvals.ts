@@ -108,13 +108,17 @@ export type InvalidReason =
   /** A channel the change doesn't approve anew is wider than when the owner last approved it. */
   | Widening
   | "owner_not_member"
+  /** Toy Box has no such channel. */
+  | "toybox_channel_deleted"
   /** The lead doesn't run on Copilot. */
   | "provider"
   | "routine_missing"
   /** Another link watches the Slack channel, or the Toy Box channel is linked already. */
   | "already_linked"
   /** The person an allow or owner change names can't be admitted. */
-  | AdmissionProblem;
+  | AdmissionProblem
+  /** Someone is named by an ID other than the one users.info gives them, which an allowlist holds. */
+  | "other_id";
 
 /** Who asked for a change. */
 export type ProposalCaller = "lead" | "operator";
@@ -371,9 +375,12 @@ export type ProposalFacts = {
   routine: RoutineState;
   /** Whether another link watches the Slack channel, or the Toy Box channel has another link. */
   linkedElsewhere: boolean;
-  /** users.info for the person an allow or owner change admits, null when Slack doesn't know them. */
-  admits?: { userId: string; person: SlackPerson | null };
+  /** Everyone an allow, link or owner change admits, as users.info says now. */
+  admits: readonly Admitted[];
 };
+
+/** Someone a change admits, with users.info for them, or null when Slack doesn't know them. */
+export type Admitted = { userId: string; person: SlackPerson | null };
 
 /** Which of a link's channels a change asks the owner to approve the audience of anew. */
 export function reapproves(draft: Pick<Approval, "action" | "patch">): {
@@ -391,8 +398,9 @@ export function reapproves(draft: Pick<Approval, "action" | "patch">): {
  * unarchived, with the bot in it, inside the installation's workspace or org and shared with no
  * other organization. A channel whose audience the change doesn't approve anew must be no wider
  * than the owner last approved, so no change can carry a widening through. The owner must be in
- * both channels, the lead must run on Copilot, the requests routine must exist, no other link
- * may hold either channel, and anyone the change admits must pass the admission check.
+ * both channels, the Toy Box channel must still be there with its lead on Copilot, the requests
+ * routine must exist, no other link may hold either channel, and anyone the change admits must
+ * pass the admission check under the ID Slack gives them.
  */
 export function invalid(
   draft: Pick<Approval, "action" | "patch">,
@@ -415,11 +423,15 @@ export function invalid(
     if (wider) return wider;
   }
   if (!facts.ownerInMonitored || !facts.ownerInPublish) return "owner_not_member";
+  if (facts.provider === null) return "toybox_channel_deleted";
   if (facts.provider !== "copilot") return "provider";
   if (facts.routine === "missing") return "routine_missing";
   if (facts.linkedElsewhere) return "already_linked";
-  if (facts.admits) {
-    return admissionProblem(facts.admits.userId, facts.admits.person, facts.home);
+  for (const { userId, person } of facts.admits) {
+    const problem = admissionProblem(userId, person, facts.home);
+    if (problem) return problem;
+    // Each of someone's IDs maps to the one users.info gives them, so only that one ever matches.
+    if (userId !== person!.id) return "other_id";
   }
   return null;
 }
@@ -524,7 +536,7 @@ export type ProposalDraft = {
 export type ProposalRefusal =
   /** It allows more people than one card shows. */
   | "too_many_people"
-  /** Another open approval changes one of the same fields. */
+  /** Another open approval changes one of the same fields, or links the same Slack channel. */
   | "overlap"
   | "too_many_pending"
   | "too_many_created";
@@ -536,8 +548,11 @@ export type ProposalCheck =
   | { kind: "refused"; reason: ProposalRefusal };
 
 /**
- * Checks a draft against the Toy Box channel's approvals: its open ones, and how many it created
- * in the past hour.
+ * Checks a draft against every open approval, whichever Toy Box channel proposed it, and against
+ * how many its own Toy Box channel created in the past hour. A link's fields belong to its Toy Box
+ * channel, so only that channel's approvals change the same ones. The owner is the installation's,
+ * so any approval that hands it on overlaps another, and so does any that links the same Slack
+ * channel, which no two links can watch. The limits count the draft's Toy Box channel alone.
  */
 export function checkProposal(
   draft: ProposalDraft,
@@ -546,23 +561,34 @@ export function checkProposal(
 ): ProposalCheck {
   const people = draft.patch.filter((entry) => allowlistUser(entry.field) !== null).length;
   if (people > MAX_ALLOWED_PER_PROPOSAL) return { kind: "refused", reason: "too_many_people" };
-  const same = open.find(
+  const own = open.filter((approval) => approval.toyboxChannelId === draft.toyboxChannelId);
+  const same = own.find(
     (approval) =>
       approval.action === draft.action &&
       approval.linkId === draft.linkId &&
       samePatch(approval.patch, draft.patch),
   );
   if (same) return { kind: "existing", approval: same };
-  if (open.some((approval) => draft.patch.some((entry) => touches(approval, entry.field)))) {
+  if (open.some((approval) => overlaps(approval, draft))) {
     return { kind: "refused", reason: "overlap" };
   }
-  if (open.filter((approval) => approval.state === "pending").length >= MAX_PENDING) {
+  if (own.filter((approval) => approval.state === "pending").length >= MAX_PENDING) {
     return { kind: "refused", reason: "too_many_pending" };
   }
   if (createdInLastHour >= MAX_CREATED_PER_HOUR) {
     return { kind: "refused", reason: "too_many_created" };
   }
   return { kind: "new" };
+}
+
+function overlaps(approval: Approval, draft: ProposalDraft): boolean {
+  return draft.patch.some((entry) => {
+    const theirs = approval.patch.find((other) => other.field === entry.field);
+    if (!theirs) return false;
+    if (entry.field === "owner_user_id") return true;
+    if (approval.toyboxChannelId === draft.toyboxChannelId) return true;
+    return entry.field === "slack_channel_id" && theirs.after === entry.after;
+  });
 }
 
 /** Whether the owner posted in the Toy Box channel recently enough for widening setup to run. */
