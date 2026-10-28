@@ -3,10 +3,10 @@ import { issuesOf, type EventCallback } from "./envelopes";
 import type { Installation } from "./installation";
 import { slackMessageEventSchema, type SlackMessageEventPayload } from "./messages";
 
-export type ChannelChange = "archived" | "deleted" | "renamed" | "shared" | "unshared";
+export type ChannelChange = "archived" | "deleted" | "shared";
 export type SlackEvent =
   | { kind: "message"; payload: SlackMessageEventPayload }
-  | { kind: "membership"; change: "joined" | "left"; channelId: string; userId: string }
+  | { kind: "member_left"; channelId: string; userId: string }
   | { kind: "channel"; change: ChannelChange; channelId: string }
   | { kind: "channel_id_changed"; oldChannelId: string; newChannelId: string }
   | { kind: "uninstalled" }
@@ -20,14 +20,9 @@ const channelChanges: Record<string, ChannelChange> = {
   channel_archive: "archived",
   channel_deleted: "deleted",
   group_deleted: "deleted",
-  channel_rename: "renamed",
-  group_rename: "renamed",
   channel_shared: "shared",
-  channel_unshared: "unshared",
 };
-const channelSchema = z.object({
-  channel: z.union([id, z.object({ id })]).describe("Channel ID or renamed channel"),
-});
+const channelSchema = z.object({ channel: id.describe("Channel") });
 const membershipSchema = z.object({ channel: id.describe("Channel"), user: id.describe("Member") });
 const movedSchema = z.object({
   old_channel_id: id.describe("Old channel ID"),
@@ -39,7 +34,6 @@ const revokedSchema = z.object({
 export const handledEventTypes: ReadonlySet<string> = new Set([
   ...Object.keys(channelChanges),
   "message",
-  "member_joined_channel",
   "member_left_channel",
   "channel_id_changed",
   "app_uninstalled",
@@ -65,25 +59,16 @@ export function readSlackEvent(event: EventCallback["event"]): SlackEvent {
     }
     if (channelChange) {
       const { channel } = channelSchema.parse(event);
-      return {
-        kind: "channel",
-        change: channelChange,
-        channelId: typeof channel === "string" ? channel : channel.id,
-      };
+      return { kind: "channel", change: channelChange, channelId: channel };
     }
     const member = membershipSchema.parse(event);
-    return {
-      kind: "membership",
-      change: event.type === "member_joined_channel" ? "joined" : "left",
-      channelId: member.channel,
-      userId: member.user,
-    };
+    return { kind: "member_left", channelId: member.channel, userId: member.user };
   } catch (error) {
     if (!(error instanceof z.ZodError)) throw error;
     return {
       kind: "malformed",
       issues: issuesOf(error, ["event"]),
-      channelId: z.object({ channel: id }).safeParse(event).data?.channel ?? null,
+      channelId: channelSchema.safeParse(event).data?.channel ?? null,
     };
   }
 }

@@ -27,6 +27,7 @@ test.each<[string, LifecycleAction | null, EventCallback["event"]]>([
   ["a private archive notice", suspend("channel_archived"), notice("group_archive")],
   ["an archived channel", suspend("channel_archived"), { type: "channel_archive" }],
   ["a deleted channel", suspend("channel_not_found"), { type: "channel_deleted" }],
+  ["a deleted private channel", suspend("channel_not_found"), { type: "group_deleted" }],
   ["a shared channel", suspend("workspace_joined"), { type: "channel_shared" }],
   ["our bot leaving", suspend("bot_removed"), { type: "member_left_channel", user: "U-bot" }],
   [
@@ -38,8 +39,6 @@ test.each<[string, LifecycleAction | null, EventCallback["event"]]>([
   ["our bot's token revoked", uninstall, revoked("U-other", "U-bot")],
   ["another bot's token revoked", null, revoked("U-other")],
   ["someone else leaving", null, { type: "member_left_channel", user: "U-owner" }],
-  ["a renamed channel", null, { type: "channel_rename", channel: { id: "C-link", name: "new" } }],
-  ["an unshared channel", null, { type: "channel_unshared" }],
   ["another notice", null, notice("channel_join")],
   ["a person's message", null, { type: "message", user: "U-owner", ts }],
   [

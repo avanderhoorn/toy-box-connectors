@@ -43,10 +43,8 @@ export function lifecycleAction(event: SlackEvent, botUserId: string): Lifecycle
       if (payload.shape !== "posted") return null;
       return suspend(payload.channel, noticeReason(payload.message.subtype ?? null));
     }
-    case "membership":
-      return event.userId === botUserId && event.change === "left"
-        ? suspend(event.channelId, "bot_removed")
-        : null;
+    case "member_left":
+      return event.userId === botUserId ? suspend(event.channelId, "bot_removed") : null;
     case "channel":
       return suspend(event.channelId, channelReason(event.change));
     case "channel_id_changed":
@@ -74,7 +72,7 @@ function noticeReason(subtype: string | null): SuspendReason | null {
   }
 }
 
-function channelReason(change: ChannelChange): SuspendReason | null {
+function channelReason(change: ChannelChange): SuspendReason {
   switch (change) {
     case "archived":
       return "channel_archived";
@@ -82,9 +80,6 @@ function channelReason(change: ChannelChange): SuspendReason | null {
       return "channel_not_found";
     case "shared":
       return "workspace_joined";
-    case "renamed":
-    case "unshared":
-      return null;
   }
 }
 

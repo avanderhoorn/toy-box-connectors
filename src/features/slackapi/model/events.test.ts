@@ -3,11 +3,6 @@ import type { EventCallback } from "./envelopes";
 import { isForInstallation, readSlackEvent } from "./events";
 
 test("event decoding retains lifecycle targets and never repeats malformed content", () => {
-  expect(readSlackEvent({ type: "channel_rename", channel: { id: "C1", name: "new" } })).toEqual({
-    kind: "channel",
-    change: "renamed",
-    channelId: "C1",
-  });
   expect(
     readSlackEvent({ type: "channel_id_changed", old_channel_id: "G1", new_channel_id: "C2" }),
   ).toMatchObject({ kind: "channel_id_changed", oldChannelId: "G1", newChannelId: "C2" });
