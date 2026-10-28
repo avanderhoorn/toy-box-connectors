@@ -1158,12 +1158,11 @@ test("a channel hold stays held when its link is suspended again as it resumes",
   slack.failNext("conversations.replies", { error: "not_in_channel" });
   await reconcile(item.id);
   await database.write((tx) => tx`UPDATE links SET status = 'active', status_reason = NULL`);
-  // Resume is the first write, so the link is suspended after prepare saw it active.
+  // Resume is the second write, after prepare saw the link active.
   const racing: BridgeDatabase = Object.create(database);
-  let raced = false;
+  let writes = 0;
   racing.write = async (operation) => {
-    if (!raced) {
-      raced = true;
+    if (++writes === 2) {
       await database.write(
         (tx) => tx`UPDATE links SET status = 'suspended', status_reason = 'bot_removed'`,
       );

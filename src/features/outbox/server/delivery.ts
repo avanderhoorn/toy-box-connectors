@@ -70,8 +70,9 @@ async function purgeRemovedLinkItem(tx: Bun.SQL, item: OutboxItem): Promise<void
     if (item.phase === "post" && item.state === "sent") return;
     if (item.approvalId !== null) {
       const [pending] = await tx`
-        SELECT id FROM outbox WHERE kind = 'card' AND phase = 'post'
+        SELECT id FROM outbox WHERE kind = 'card'
           AND approval_id = ${item.approvalId} AND state IN ('queued', 'sending', 'delivery_unknown')
+          AND (phase = 'post' OR ${item.phase} = 'update')
         LIMIT 1
       `;
       if (pending) return;

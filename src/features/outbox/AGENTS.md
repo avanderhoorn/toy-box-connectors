@@ -83,7 +83,9 @@ link ID no longer exists is purged with its operation. Failed orphan cleanup kee
 stray for the operator. Cleanup settles a final's request only if its link, channel and thread
 still match, and a local cleanup refusal never settles a reply merely by its numeric request ID.
 An unlinked card's initial delivery remains until its stale update settles, then its approval
-and card rows are purged. A card that never started is dropped without posting a new stale card.
+and card rows are purged. An older update cannot retire the approval while another update
+is queued, sending or unknown, even when the older attempt becomes superseded.
+A card that never started is dropped without posting a new stale card.
 Stray card targets survive that purge, redacted, until withdrawal finishes.
 
 `model/posting.ts` checks the current installation, link, destination, requester and request
