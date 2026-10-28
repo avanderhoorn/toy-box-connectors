@@ -7,25 +7,14 @@ import { join } from "node:path";
 import type { FakeSlack } from "../fakes/slack";
 import { ALICE, BOT, MALLORY, said, timestamps } from "../integration/connectedBridge";
 import { waitFor } from "../integration/waitFor";
-import { linkSlack, REQUESTS_ROUTINE, type SlackLink } from "./slackLink";
+import type { IsolatedToyBox } from "./isolatedToyBox";
+import { linkSlack, REQUESTS_ROUTINE, skillRoutine, type SlackLink } from "./slackLink";
 import { describeEndToEnd } from "./suite";
 import { CREATE_CHANNEL_TIMEOUT, createTestChannel, type TestChannel } from "./testChannel";
 import { readCatalog } from "./toyBoxApi";
 
-/** The lead's release notes routine, on a schedule no run reaches, so only a scenario runs it. */
-const RELEASE_NOTES_ROUTINE = {
-  title: "Release notes",
-  schedule: REQUESTS_ROUTINE.schedule,
-  prompt:
-    "Publish release notes in Slack for tonight's release: pipe a few lines on dark mode and faster search to `toy-box-slack publish --series release-notes`, which posts them once for this run.",
-};
-/** The skill's digest routine, on a schedule no run reaches, so only a scenario runs it. */
-const DIGEST_ROUTINE = {
-  title: "Slack digest",
-  schedule: REQUESTS_ROUTINE.schedule,
-  prompt:
-    "Digest Slack: run `toy-box-slack activity` and post one message here only if it holds something worth the team's attention, such as ideas, decisions, problems, repeated questions or feedback, grouped by topic with permalinks and with no Slack name after @. Then run the `toy-box-slack mark-read` command activity ends with, even if you posted nothing, and repeat while activity says more remain. When you finish, if this run cleared a waiting status that still holds, call finish_agent_turn with it again.",
-};
+const RELEASE_NOTES_ROUTINE = skillRoutine("Release notes");
+const DIGEST_ROUTINE = skillRoutine("Slack digest");
 const PURPOSE = `Answer the release team's questions from Slack, publish release notes there, and digest what they say here. Tonight's release ships dark mode and faster search. In your kickoff turn, add ${adding(REQUESTS_ROUTINE)} Then add ${adding(RELEASE_NOTES_ROUTINE)} Then add ${adding(DIGEST_ROUTINE)} Run toy-box-slack only when a routine asks you to.`;
 
 describeEndToEnd("a channel linked to Slack", (suite) => {
@@ -82,12 +71,16 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
   suite.scenario(
     "release notes post once in the channel when their routine runs twice",
     async () => {
+      // The routine publishes only what git says shipped since its previous run.
+      ship(suite.toyBox, "Add dark mode", "Speed up search");
       // Both tries share a scheduled slot, so a rerun checks every publication, not only its own.
       await channel.run(RELEASE_NOTES_ROUTINE.title);
       await waitFor(() =>
         expect(publications(link)).toMatchObject([{ series: "release-notes", state: "sent" }]),
       );
       const sent = publications(link);
+      // A fix ships after the notes go out, so the second run has news for a slot already used.
+      ship(suite.toyBox, "Fix the search box in dark mode on Safari");
       await channel.run(RELEASE_NOTES_ROUTINE.title);
 
       expect(publications(link)).toEqual(sent);
@@ -143,6 +136,20 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
 /** Asks the lead to add `routine` as given. */
 function adding({ title, schedule, prompt }: typeof REQUESTS_ROUTINE) {
   return `a routine titled "${title}" with the schedule "${schedule}" and exactly this prompt: "${prompt}"`;
+}
+
+/** Commits `subjects` to main in the channel's folder, making it a repository if it isn't one. */
+function ship(toyBox: IsolatedToyBox, ...subjects: string[]) {
+  const identity = ["-c", "user.name=Dana", "-c", "user.email=dana@test"];
+  const commits = subjects.map((subject) => ["commit", "-q", "--allow-empty", "-m", subject]);
+  for (const args of [["init", "-q", "-b", "main"], ...commits]) {
+    const git = Bun.spawnSync(["git", ...identity, ...args], {
+      cwd: toyBox.work,
+      env: { PATH: process.env.PATH, HOME: toyBox.home },
+      stderr: "pipe",
+    });
+    if (!git.success) throw new Error(`git ${args.join(" ")} failed:\n${git.stderr.toString()}`);
+  }
 }
 
 /** What people in C0LINK see of the message at `ts`: its reactions and the bot's replies to it. */

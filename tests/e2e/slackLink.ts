@@ -8,19 +8,22 @@
 // for each.
 
 import { Database, type SQLQueryBindings } from "bun:sqlite";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { resolveDataFolder } from "@bridge/server/dataFolder";
+import { BUNDLED_SKILL } from "@commands/client/skill";
 import type { WakeTimings } from "@wakes/model";
 import { startFakeSlack, type FakeSlack, type FakeSlackMessage } from "../fakes/slack";
 import { ALICE, BOT, MALLORY, posted } from "../integration/connectedBridge";
-import { REQUESTS_ROUTINE as WEEKDAY_REQUESTS_ROUTINE } from "../integration/linkedBridge";
 import { CLI, waitUntil, type IsolatedToyBox } from "./isolatedToyBox";
 import type { TestChannel } from "./testChannel";
 
-/** The routine a linked channel's lead adds, on a schedule no run reaches, so only the bridge runs it. */
-export const REQUESTS_ROUTINE = { ...WEEKDAY_REQUESTS_ROUTINE, schedule: "0 4 1 1 *" };
+/** A routine's bold title, its schedules, and its prompt on one line in a text block. */
+const SKILL_ROUTINE = /^\*\*(.+)\*\*, .+\n\n```text\n(.+)\n```$/gm;
+
+/** The routine a linked channel's lead adds, which the bridge runs to wake it. */
+export const REQUESTS_ROUTINE = skillRoutine("Slack requests");
 
 /** Wakes the lead a second after a request changes, so no scenario waits out the real debounce. */
 const PROMPTLY: Partial<WakeTimings> = { debounce: 1_000, debounceLimit: 2_000 };
@@ -146,6 +149,17 @@ export async function linkSlack(toyBox: IsolatedToyBox, channel: TestChannel): P
     await link.stop().catch((stopFailure: unknown) => console.error(stopFailure));
     throw failure;
   }
+}
+
+/**
+ * The routine the skill has a lead add as `title`, with the prompt leads copy from it, on a schedule
+ * no run reaches, so only the bridge or a scenario runs it.
+ */
+export function skillRoutine(title: string) {
+  for (const [, heading, prompt] of readFileSync(BUNDLED_SKILL, "utf8").matchAll(SKILL_ROUTINE)) {
+    if (heading === title && prompt) return { title, schedule: "0 4 1 1 *", prompt };
+  }
+  throw new Error(`The skill gives no routine titled "${title}".`);
 }
 
 /**
