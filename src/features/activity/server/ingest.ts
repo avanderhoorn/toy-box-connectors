@@ -1,7 +1,7 @@
 import { readClaim, type ClaimText } from "@links/model/claim";
 import { readChannelLink, type ChannelLink } from "@links/server/database";
 import { takeDelete, takeMessage } from "@requests/server/intake";
-import type { SlackMessageEvent } from "@slackapi/model/messages";
+import type { SlackMessage, SlackMessageEvent } from "@slackapi/model/messages";
 import {
   noteReply,
   storeDelete,
@@ -14,12 +14,12 @@ import {
 //
 // Every message event enters the ledger here, whether Socket Mode delivered it or gap repair found
 // it, in the transaction that records where it came from. A claim is consumed before anything
-// else, and nothing from a channel no link watches is stored. Request policy then runs over what
-// the ledger stored.
+// else, and nothing from a channel no link watches is stored. An author is stored and asks under
+// the ID the bridge knows them by, even when Slack names them by an alias. Request policy then runs
+// over what the ledger stored.
 
 /** Who the bridge is in Slack, and how a message reached it. */
 export type IngestContext = {
-  teamId: string;
   botUserId: string;
   ownerUserId: string | null;
   /** Whether gap repair found the message after Socket Mode missed it. */
@@ -53,15 +53,9 @@ export async function ingestMessageEvent(
 
   switch (event.kind) {
     case "message": {
-      const { message } = event;
+      const message = await withKnownAuthor(transaction, event.message);
       const stored = await storeMessage(transaction, ledgerLink(link, context), message);
-      const intake = await takeMessage(
-        transaction,
-        { ...link, teamId: context.teamId },
-        message,
-        stored,
-        context,
-      );
+      const intake = await takeMessage(transaction, link, message, stored, context);
       if (intake.opened) await trackRequestThread(transaction, link.id, message, context.now);
       return {
         kind: "stored",
@@ -87,11 +81,19 @@ export async function ingestMessageEvent(
   }
 }
 
+/** `message` with its author as the person an alias names, when Slack gave the alias. */
+async function withKnownAuthor(transaction: Bun.SQL, message: SlackMessage) {
+  if (message.userId === null) return message;
+  const [alias] = await transaction<{ user_id: string }[]>`
+    SELECT user_id FROM user_aliases WHERE alias_id = ${message.userId}
+  `;
+  return alias ? { ...message, userId: alias.user_id } : message;
+}
+
 function ledgerLink(link: ChannelLink, context: IngestContext): LedgerLink {
   return {
     id: link.id,
     audience: {
-      teamId: context.teamId,
       ownerUserId: context.ownerUserId,
       allowlist: link.allowlist,
       observe: link.observe,

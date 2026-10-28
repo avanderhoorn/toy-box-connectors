@@ -25,7 +25,6 @@ const link: IntakeLink = {
   id: "link",
   status: "active",
   requestMode: "mention",
-  teamId: "T-home",
   linkedAtTs: "1700000000.000100",
 };
 

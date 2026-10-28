@@ -11,7 +11,6 @@ import {
 } from "./ledger";
 
 const audience: LinkAudience = {
-  teamId: "THOME",
   ownerUserId: "UOWNER",
   allowlist: new Set(["UALLOWED"]),
   observe: "requesters",
@@ -48,11 +47,14 @@ describe("author roles", () => {
     expect(authorRole({ ...message, userId: "UOWNER" }, listed)).toBe("owner");
   });
 
-  test("a person from another team is observed even with an allowlisted ID", () => {
-    expect(authorRole({ ...message, teamId: "TGUEST" }, audience)).toBe("observed");
-    expect(authorRole({ ...message, userId: "UOWNER", teamId: "TGUEST" }, audience)).toBe(
-      "observed",
-    );
+  test("a person is matched by user ID, whatever workspace the message names", () => {
+    expect(authorRole({ ...message, teamId: "TSIBLING" }, audience)).toBe("allowed");
+    expect(authorRole({ ...message, userId: "UOWNER", teamId: null }, audience)).toBe("owner");
+  });
+
+  test("a person without a user ID is never the owner, even before one is pinned", () => {
+    const unclaimed = { ...audience, ownerUserId: null };
+    expect(authorRole({ ...message, userId: null }, unclaimed)).toBe("observed");
   });
 
   test("our bot is self, and other bots and notices are other", () => {

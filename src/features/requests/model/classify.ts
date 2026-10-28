@@ -18,7 +18,6 @@ import { requestLifetimeMs, type RequestReason } from "./lifecycle";
 export type NoneReason =
   | "link_inactive"
   | "not_a_person"
-  | "other_team"
   | "before_link"
   | "too_old"
   | "not_allowlisted"
@@ -36,8 +35,6 @@ export type Classification =
 export type ClassifyLink = {
   status: "active" | "paused" | "suspended";
   requestMode: "mention" | "all";
-  /** The installation's team. */
-  teamId: string;
   linkedAtTs: SlackTs;
 };
 
@@ -58,7 +55,6 @@ export function classify(message: SlackMessage, facts: ClassifyFacts): Classific
   const { link } = facts;
   if (link.status !== "active") return none("link_inactive");
   if (message.author !== "person") return none("not_a_person");
-  if (message.teamId !== link.teamId) return none("other_team");
   if (compareTs(message.ts, link.linkedAtTs) <= 0) return none("before_link");
   if (facts.firstSight && compareTs(message.ts, tsAt(facts.now - requestLifetimeMs)) < 0) {
     return none("too_old");

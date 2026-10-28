@@ -14,7 +14,6 @@ import {
 const link: LedgerLink = {
   id: "link",
   audience: {
-    teamId: "T-home",
     ownerUserId: "U-owner",
     allowlist: new Set(["U-allowed"]),
     observe: "requesters",

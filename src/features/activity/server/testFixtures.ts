@@ -11,7 +11,6 @@ export function ledgerLink(audience: Partial<LinkAudience> = {}): LedgerLink {
   return {
     id: "link",
     audience: {
-      teamId: "T-home",
       ownerUserId: "U-owner",
       allowlist: new Set(["U-allowed"]),
       observe: "requesters",

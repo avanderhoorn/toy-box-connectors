@@ -124,8 +124,11 @@ export type SlackMessage = {
   rootTs: SlackTs;
   isReply: boolean;
   userId: string | null;
-  /** The author's team, or the installation's team when the payload leaves it out. */
-  teamId: string;
+  /**
+   * The author's workspace as the message names it, for display only. Trust never reads it,
+   * because an Enterprise coworker can post from a sibling workspace.
+   */
+  teamId: string | null;
   subtype: string | null;
   author: MessageAuthor;
   text: string;
@@ -149,7 +152,6 @@ export type SlackMessageEvent =
 
 /** The installation identity normalization reads authorship against. */
 export type NormalizeContext = {
-  teamId: string;
   botUserId: string;
   botId: string;
   /** Whether the user directory says `userId` is a bot user. */
@@ -214,7 +216,7 @@ function fromSnapshot(
       rootTs: isReply ? threadTs : payload.ts,
       isReply,
       userId: payload.user ?? null,
-      teamId: payload.user_team ?? payload.team ?? context.teamId,
+      teamId: payload.user_team ?? payload.team ?? null,
       subtype: payload.subtype ?? null,
       author: messageAuthor(payload, context),
       text,

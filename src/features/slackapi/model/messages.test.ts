@@ -8,7 +8,6 @@ import {
 } from "./messages";
 
 const context: NormalizeContext = {
-  teamId: "THOME",
   botUserId: "UBOT",
   botId: "BBOT",
   isBotUser: (userId) => userId === "UHELPER",
@@ -73,9 +72,9 @@ describe("normalizing Slack messages", () => {
     expect(message({ ...plain, team: "TGUEST" }).teamId).toBe("TGUEST");
   });
 
-  test("a message that leaves out its team belongs to the installation's team", () => {
-    expect(message({ ...plain, team: undefined }).teamId).toBe("THOME");
-    expect(message({ ...plain, team: null, user_team: null }).teamId).toBe("THOME");
+  test("a message that leaves out its team has none, rather than the installation's", () => {
+    expect(message({ ...plain, team: undefined }).teamId).toBeNull();
+    expect(message({ ...plain, team: null, user_team: null }).teamId).toBeNull();
   });
 
   test("an edit carries the whole message as it is now, versioned by the edit", () => {

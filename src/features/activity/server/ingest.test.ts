@@ -7,7 +7,6 @@ import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtu
 import { ingestMessageEvent, type IngestContext, type Ingested } from "./ingest";
 
 const context: IngestContext = {
-  teamId: "T-home",
   botUserId: "U-bot",
   ownerUserId: "U-owner",
   late: false,
@@ -53,6 +52,12 @@ function readMessages(database: BridgeDatabase) {
 function readRequests(database: BridgeDatabase) {
   return database.read(
     (sql) => sql`SELECT id, source_ts, requester_user_id, late FROM requests ORDER BY id`,
+  );
+}
+
+function readAuthors(database: BridgeDatabase) {
+  return database.read(
+    (sql) => sql`SELECT ts, user_id, team_id, author_role FROM messages ORDER BY ts`,
   );
 }
 
@@ -186,7 +191,6 @@ test("the stored link and the installation decide whose text is kept", async () 
     database,
     posted(askMessage("1700000300.000100", { ...said, userId: "U-observed" })),
   );
-  await ingest(database, posted(askMessage("1700000400.000100", { ...said, teamId: "T-other" })));
   await database.write((transaction) => transaction`UPDATE links SET observe = 'channel'`);
   await ingest(
     database,
@@ -197,8 +201,60 @@ test("the stored link and the installation decide whose text is kept", async () 
     { ts: "1700000100.000100", author_role: "owner", text: said.text },
     { ts: "1700000200.000100", author_role: "allowed", text: said.text },
     { ts: "1700000300.000100", author_role: "observed", text: null },
-    { ts: "1700000400.000100", author_role: "observed", text: null },
     { ts: "1700000500.000100", author_role: "observed", text: said.text },
+  ]);
+});
+
+test("a person asks by their ID, whatever workspace the message names", async () => {
+  const database = await openIngest();
+  const sibling = askMessage(ask.ts, { teamId: "T-sibling" });
+  const unnamed = askMessage("1700000200.000100", { userId: "U-allowed", teamId: null });
+
+  expect(await ingest(database, posted(sibling))).toEqual(stored(true));
+  expect(await ingest(database, posted(unnamed))).toEqual(stored(true));
+  expect(await readAuthors(database)).toEqual([
+    { ts: sibling.ts, user_id: "U-owner", team_id: "T-sibling", author_role: "owner" },
+    { ts: unnamed.ts, user_id: "U-allowed", team_id: null, author_role: "allowed" },
+  ]);
+  expect(await readRequests(database)).toEqual([
+    { id: 1, source_ts: sibling.ts, requester_user_id: "U-owner", late: 0 },
+    { id: 2, source_ts: unnamed.ts, requester_user_id: "U-allowed", late: 0 },
+  ]);
+});
+
+test("an alias is stored, asks and joins as the person it names", async () => {
+  const database = await openIngest();
+  await database.write(
+    (transaction) => transaction`
+      INSERT INTO user_aliases (alias_id, user_id)
+      VALUES ('W-owner', 'U-owner'), ('W-allowed', 'U-allowed')
+    `,
+  );
+  const asked = askMessage(ask.ts, { userId: "W-owner" });
+  const more = replyMessage(asked, "1700000200.000100", { userId: "U-owner" });
+  const allowed = askMessage("1700000300.000100", { userId: "W-allowed" });
+  const stranger = askMessage("1700000400.000100", { userId: "W-stranger" });
+
+  for (const message of [asked, more, allowed]) {
+    expect(await ingest(database, posted(message))).toEqual(stored(true));
+  }
+  expect(await ingest(database, posted(stranger))).toEqual(stored(false));
+  expect(await readAuthors(database)).toEqual([
+    { ts: asked.ts, user_id: "U-owner", team_id: "T-home", author_role: "owner" },
+    { ts: more.ts, user_id: "U-owner", team_id: "T-home", author_role: "owner" },
+    { ts: allowed.ts, user_id: "U-allowed", team_id: "T-home", author_role: "allowed" },
+    { ts: stranger.ts, user_id: "W-stranger", team_id: "T-home", author_role: "observed" },
+  ]);
+  expect(await readRequests(database)).toEqual([
+    { id: 1, source_ts: asked.ts, requester_user_id: "U-owner", late: 0 },
+    { id: 2, source_ts: allowed.ts, requester_user_id: "U-allowed", late: 0 },
+  ]);
+  expect(
+    await database.read((sql) => sql`SELECT request_id, ts FROM request_messages ORDER BY ts`),
+  ).toEqual([
+    { request_id: 1, ts: asked.ts },
+    { request_id: 1, ts: more.ts },
+    { request_id: 2, ts: allowed.ts },
   ]);
 });
 

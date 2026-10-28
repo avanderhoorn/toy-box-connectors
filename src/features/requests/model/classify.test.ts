@@ -38,7 +38,6 @@ const facts: ClassifyFacts = {
   link: {
     status: "active",
     requestMode: "mention",
-    teamId: "THOME",
     linkedAtTs: "1699000000.000100",
   },
   role: "allowed",
@@ -75,11 +74,10 @@ describe("who may ask", () => {
     }
   });
 
-  test("a person from another team never asks, even with an allowlisted ID", () => {
-    expect(classify({ ...ask, teamId: "TGUEST" }, facts)).toEqual({
-      kind: "none",
-      reason: "other_team",
-    });
+  test("an allowlisted person asks from any workspace the message names", () => {
+    for (const teamId of ["TSIBLING", null]) {
+      expect(classify({ ...ask, teamId }, facts)).toEqual({ kind: "request", reason: "mention" });
+    }
   });
 
   test("a message from before the link, or from the moment it was made, never asks", () => {

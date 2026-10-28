@@ -18,10 +18,11 @@ export type AuthorRole =
   /** Another bot, an app, Slackbot or a notice. Never kept. */
   | "other";
 
-/** What a link says about the people in its channel. */
+/**
+ * What a link says about the people in its channel. People are matched by exact user ID, never by
+ * the workspace a message names for its author.
+ */
 export type LinkAudience = {
-  /** The installation's team. Only its people can be the owner or allowed. */
-  teamId: string;
   ownerUserId: string | null;
   allowlist: ReadonlySet<string>;
   observe: "requesters" | "channel";
@@ -35,7 +36,7 @@ export function authorRole(message: SlackMessage, audience: LinkAudience): Autho
     case "notice":
       return "other";
     case "person": {
-      if (message.userId === null || message.teamId !== audience.teamId) return "observed";
+      if (message.userId === null) return "observed";
       if (message.userId === audience.ownerUserId) return "owner";
       return audience.allowlist.has(message.userId) ? "allowed" : "observed";
     }

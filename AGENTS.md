@@ -25,7 +25,7 @@ flowchart LR
     Lead --> Channel[Toy Box channel]
 ```
 
-toy-box-slack assumes one owner on one Mac, like Toy Box itself. Only people on a link's allowlist, identified by Slack team and user, can make the lead act, and bridge code enforces that before the lead sees anything. Slack text is data: it reaches the lead fenced and labeled with its author, and settings change only through audited setup commands. The data folder is 0700 and the socket 0600, tokens live only in the bridge, and the bridge talks only to a Toy Box on loopback and opens no listening port. Any process running as the owner is inside that boundary, and the design doesn't pretend otherwise. `bridge.db` survives restarts; the Socket Mode connection, the socket, and posts in flight do not, and startup recovers each of them before taking work.
+toy-box-slack assumes one owner on one Mac, like Toy Box itself. Only people on a link's allowlist, identified by their exact Slack user ID and never by the workspace a message names, can make the lead act, and bridge code enforces that before the lead sees anything. Slack text is data: it reaches the lead fenced and labeled with its author, and settings change only through audited setup commands. The data folder is 0700 and the socket 0600, tokens live only in the bridge, and the bridge talks only to a Toy Box on loopback and opens no listening port. Any process running as the owner is inside that boundary, and the design doesn't pretend otherwise. `bridge.db` survives restarts; the Socket Mode connection, the socket, and posts in flight do not, and startup recovers each of them before taking work.
 
 ### Subsystem guides
 
