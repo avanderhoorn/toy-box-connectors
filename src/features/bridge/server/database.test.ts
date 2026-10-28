@@ -89,7 +89,7 @@ describe("openBridgeDatabase", () => {
     ]);
     expect(
       objects.filter((object) => object.type === "index").map((object) => object.name),
-    ).toEqual(["outbox_one_final", "outbox_one_publication"]);
+    ).toEqual(["claims_one_open", "outbox_one_final", "outbox_one_publication"]);
   });
 
   test("leaves a current schema exactly as it was when the file is opened again", async () => {

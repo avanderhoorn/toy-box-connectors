@@ -1,8 +1,22 @@
 import { expect, test } from "bun:test";
+import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "./testFixtures";
 
 const OWNED_BY_LINK = ["allowlist", "coverage", "cursors", "link_routines", "wake_state"];
+const OPEN_CLAIM_STATES = ["live", "posted"];
+const CLOSED_CLAIM_STATES = ["confirmed", "declined", "void"];
+
+function insertClaim(database: BridgeDatabase, state: string) {
+  const claim = { code_hash: "hash", created_at: 0, expires_at: 600_000, state };
+  return database.write((transaction) => transaction`INSERT INTO claims ${transaction(claim)}`);
+}
+
+function setClaimState(database: BridgeDatabase, from: string, to: string) {
+  return database.write(
+    (transaction) => transaction`UPDATE claims SET state = ${to} WHERE state = ${from}`,
+  );
+}
 
 test("deleting a link deletes what belongs to it and nothing else", async () => {
   const database = await openTestDatabase();
@@ -46,4 +60,36 @@ test("deleting a link deletes what belongs to it and nothing else", async () => 
     `,
   );
   expect([...remaining]).toEqual(OWNED_BY_LINK.map((name) => ({ name, link_id: "kept" })));
+});
+
+test("allow one open claim at a time, whether it's live or posted", async () => {
+  const database = await openTestDatabase();
+  await insertClaim(database, "void");
+
+  for (const open of OPEN_CLAIM_STATES) {
+    await insertClaim(database, open);
+    for (const another of OPEN_CLAIM_STATES) {
+      await expect(insertClaim(database, another)).rejects.toThrow(
+        "UNIQUE constraint failed: index 'claims_one_open'",
+      );
+      await expect(setClaimState(database, "void", another)).rejects.toThrow(
+        "UNIQUE constraint failed: index 'claims_one_open'",
+      );
+    }
+    await setClaimState(database, open, "declined");
+  }
+});
+
+test("allow a new claim once the open one is confirmed, declined or void", async () => {
+  const database = await openTestDatabase();
+
+  for (const closed of CLOSED_CLAIM_STATES) {
+    await insertClaim(database, "live");
+    await setClaimState(database, "live", "posted");
+    await setClaimState(database, "posted", closed);
+  }
+  await insertClaim(database, "live");
+
+  const states = await database.read((sql) => sql`SELECT state FROM claims ORDER BY id`);
+  expect([...states].map((row) => row.state)).toEqual([...CLOSED_CLAIM_STATES, "live"]);
 });

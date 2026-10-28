@@ -30,6 +30,7 @@ export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
         CHECK (typeof(attempts) = 'integer' AND attempts >= 0),
       next_attempt_at INTEGER,
       slack_ts        TEXT,
+      evidence        TEXT CHECK (evidence IS NULL OR evidence IN ('response', 'metadata', 'text')),
       error           TEXT,
       created_at      INTEGER NOT NULL,
       updated_at      INTEGER NOT NULL,

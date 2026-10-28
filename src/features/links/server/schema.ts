@@ -2,15 +2,22 @@
 export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
   await db.unsafe(`
     CREATE TABLE claims (
-      id              INTEGER PRIMARY KEY,
-      code_hash       TEXT NOT NULL,
-      created_at      INTEGER NOT NULL,
-      expires_at      INTEGER NOT NULL,
-      failed_attempts INTEGER NOT NULL DEFAULT 0
+      id                INTEGER PRIMARY KEY,
+      code_hash         TEXT NOT NULL,
+      created_at        INTEGER NOT NULL,
+      expires_at        INTEGER NOT NULL,
+      failed_attempts   INTEGER NOT NULL DEFAULT 0
         CHECK (typeof(failed_attempts) = 'integer' AND failed_attempts >= 0),
-      used_at         INTEGER,
-      used_by         TEXT
+      state             TEXT NOT NULL
+        CHECK (state IN ('live', 'posted', 'confirmed', 'declined', 'void')),
+      posted_by         TEXT,
+      posted_channel_id TEXT,
+      posted_at         INTEGER,
+      decided_at        INTEGER
     );
+
+    -- Every open claim indexes the same constant, so at most one can be open.
+    CREATE UNIQUE INDEX claims_one_open ON claims((1)) WHERE state IN ('live', 'posted');
 
     CREATE TABLE links (
       id                  TEXT PRIMARY KEY,
@@ -48,21 +55,25 @@ export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
       PRIMARY KEY (link_id, user_id)
     );
 
-    -- id is opaque and the only value a button carries. link_id is NULL for a new link.
+    -- id is opaque and the only value a button carries. link_id is NULL for a new link. patch holds
+    -- only the fields that change, and read_set holds every value the approval was decided against.
     CREATE TABLE approvals (
       id                TEXT PRIMARY KEY,
       number            INTEGER NOT NULL UNIQUE CHECK (typeof(number) = 'integer' AND number > 0),
       toybox_channel_id TEXT NOT NULL,
       link_id           TEXT,
       action            TEXT NOT NULL CHECK (action IN ('link', 'allow', 'set', 'resume', 'owner')),
-      changes           TEXT NOT NULL CHECK (json_valid(changes)),
+      patch             TEXT NOT NULL CHECK (json_valid(patch)),
+      read_set          TEXT NOT NULL CHECK (json_valid(read_set)),
       owner_user_id     TEXT NOT NULL,
       card_channel_id   TEXT NOT NULL,
       card_ts           TEXT,
       state             TEXT NOT NULL
-        CHECK (state IN ('pending', 'applied', 'rejected', 'expired', 'stale')),
+        CHECK (state IN ('pending', 'approved', 'applied', 'rejected', 'expired', 'stale')),
+      stale_reason      TEXT,
       decided_by        TEXT,
       decided_at        INTEGER,
+      applied_at        INTEGER,
       reported_at       INTEGER,
       created_by        TEXT NOT NULL,
       created_at        INTEGER NOT NULL,
