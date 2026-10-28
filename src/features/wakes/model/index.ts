@@ -5,6 +5,7 @@
 // running a routine: the link's requests routine, or a publication series' routine to catch up a
 // period the lead missed.
 
+import type { RequestAttention } from "@requests/model/lifecycle";
 import type { RoutineRunOutcome, RoutineState } from "@toybox/model";
 import type { WakeBudget } from "./budget";
 
@@ -32,7 +33,7 @@ export type WakeDecision =
 /** A request that may still need the lead. Answering and finished requests never do. */
 export type WakeRequest = {
   state: "open" | "seen" | "in_progress";
-  attention: string | null;
+  attention: RequestAttention | null;
   heldAt: number | null;
   changedAt: number;
   seenAt: number | null;
@@ -215,9 +216,10 @@ export function consecutiveFailures(outcomes: readonly WakeOutcome[]): number {
   return settled === -1 ? outcomes.length : settled;
 }
 
-// Answering requests wait on the outbox, not the lead.
-function isPending(request: WakeRequest): boolean {
-  return request.state === "open" || request.attention !== null;
+// Answering requests wait on the outbox, and an unverified source waits on repair, not the lead.
+// Repair flags the request updated if it changed while unverified.
+function isPending({ state, attention }: WakeRequest): boolean {
+  return state === "open" || attention === "updated" || attention === "reply_failed";
 }
 
 function setupDue(
