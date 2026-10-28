@@ -96,7 +96,12 @@ export function createReactionDelivery(
                       ? outcome.nextAttemptAt
                       : at + Math.min(5_000 * 2 ** (item.attempts - 1), 120_000),
                 };
-      const settled = await settleOutboxAttempt(tx, item, settlement, at);
+      const settled = await settleOutboxAttempt(
+        tx,
+        item,
+        { ...settlement, ...(outcome.kind === "queued" ? { called: outcome.called } : {}) },
+        at,
+      );
       if (!settled) return { kind: "changed" };
       if (outcome.kind === "failed" && outcome.suspend !== null) {
         await suspendChannelLinks(tx, item.channelId, outcome.suspend, at);

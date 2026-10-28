@@ -9,7 +9,7 @@ import { readRequest, saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { channelFacts } from "@slackapi/model/testFixtures";
 import { compareTs, tsAt } from "@slackapi/model/ts";
-import { createBotClient, type BotClient } from "@slackapi/server/botClient";
+import { createBotClient, guardBotClient, type BotClient } from "@slackapi/server/botClient";
 import { writeChannelInfo } from "@slackapi/server/channels";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../../../../tests/fakes/slack";
@@ -139,6 +139,53 @@ async function setup({
     },
   };
 }
+
+test.each([false, true])(
+  "a local read hold preserves its pass, deadline and cursor, after a page: %s",
+  async (afterFirstPage) => {
+    const { database, slack, bot, item, read, now } = await setup({ pageSize: 1 });
+    let usable = afterFirstPage;
+    let pause = afterFirstPage;
+    const observed: BotClient = {
+      cooldown: (method) => bot.cooldown(method),
+      call(method, run) {
+        return bot.call(method, async (client) => {
+          const result = await run(client);
+          if (method === "conversations.replies" && pause) {
+            pause = false;
+            usable = false;
+          }
+          return result;
+        });
+      },
+    };
+    const reconciliation = createReconciliation(
+      database,
+      guardBotClient(observed, () => usable),
+      {
+        now,
+      },
+    );
+    onTestFinished(() => reconciliation.close());
+    const before = await read();
+    expect(await reconciliation.reconcile(item.id)).toEqual({
+      kind: "waiting",
+      reason: "slack_unusable",
+      until: null,
+    });
+    expect(await read()).toEqual(before);
+    const reads = () => slack.calls.filter((call) => call.method === "conversations.replies");
+    expect(reads()).toHaveLength(afterFirstPage ? 1 : 0);
+    usable = true;
+    expect(await reconciliation.reconcile(item.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "sent", evidence: "metadata", reconcilePass: 0 },
+    });
+    expect(reads()).toHaveLength(2);
+    expect(reads()[0]!.args.cursor).toBeUndefined();
+    expect(reads()[1]!.args.cursor).toBeTruthy();
+  },
+);
 
 test.each(["reply", "publication"] as const)(
   "a redacted orphan %s is forgotten after proof, without withdrawing its valid Slack post",
@@ -710,6 +757,54 @@ test("a resumed channel hold can complete a miss and keep the original deadline"
     kind: "settled",
     item: { state: "delivery_unknown", reconcilePass: 1, nextAttemptAt: now() + 50_000 },
   });
+});
+
+test("a proposal card's current link owns its channel hold and its exhausted reads", async () => {
+  const { database, slack, item, posted, reconcile, now, advance, read } = await setup({
+    kind: "card",
+  });
+  await database.write((tx) => tx`UPDATE outbox SET link_id = NULL WHERE id = ${item.id}`);
+  slack.failNext("conversations.history", { error: "not_in_channel" });
+  expect(await reconcile(item.id)).toEqual({
+    kind: "waiting",
+    reason: "not_in_channel",
+    until: null,
+  });
+  expect(await database.read((sql) => readApproval(sql, item.approvalId!))).toMatchObject({
+    linkId: "link",
+  });
+  expect(await database.read((sql) => readDueReconciliations(sql, now()))).toEqual([]);
+  const calls = slack.calls.length;
+  expect(await reconcile(item.id)).toEqual({
+    kind: "waiting",
+    reason: "link_inactive",
+    until: null,
+  });
+  expect(slack.calls).toHaveLength(calls);
+  await database.write((tx) => tx`UPDATE links SET status = 'active', status_reason = NULL`);
+  expect(
+    (await database.read((sql) => readDueReconciliations(sql, now()))).map((row) => row.id),
+  ).toEqual([item.id]);
+  slack.deleteMessage("C-link", posted.ts);
+  for (const [pass, wait] of [
+    [1, 0],
+    [2, 50_000],
+    [3, 60_000],
+  ] as const) {
+    advance(wait);
+    expect(await reconcile(item.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "delivery_unknown", reconcilePass: pass },
+    });
+  }
+  expect(await read()).toMatchObject({ state: "delivery_unknown", reconcilePass: 3, linkId: null });
+  expect(await database.read((sql) => readDueReconciliations(sql, now()))).toEqual([]);
+  expect(await reconcile(item.id)).toEqual({
+    kind: "waiting",
+    reason: "reconciliation_stopped",
+    until: null,
+  });
+  expect(await read()).not.toBeNull();
 });
 
 test("a refused linkless card stops automatic reads until manual resolution", async () => {

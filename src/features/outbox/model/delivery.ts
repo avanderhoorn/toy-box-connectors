@@ -16,7 +16,7 @@ export type OutboxMethod =
 
 export type WriteOutcome<Result> =
   | { kind: "accepted"; result: Result }
-  | { kind: "queued"; nextAttemptAt: number | null; error: string }
+  | { kind: "queued"; nextAttemptAt: number | null; error: string; called?: false }
   | { kind: "delivery_unknown"; error: string }
   | { kind: "failed"; error: string; suspend: ChannelSuspendReason | null };
 
@@ -25,6 +25,8 @@ export function writeOutcome<Result>(call: SlackCall<Result>): WriteOutcome<Resu
   switch (call.kind) {
     case "ok":
       return { kind: "accepted", result: call.result };
+    case "unusable":
+      return { kind: "queued", nextAttemptAt: null, error: "slack_unusable", called: false };
     case "auth_failed":
       return { kind: "queued", nextAttemptAt: null, error: call.error };
     case "rate_limited":

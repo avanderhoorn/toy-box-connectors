@@ -98,6 +98,15 @@ test("a lost response stays unknown", () => {
   });
 });
 
+test("a locally guarded write waits without claiming Slack rejected it or might have accepted it", () => {
+  expect(writeOutcome({ kind: "unusable" })).toEqual({
+    kind: "queued",
+    error: "slack_unusable",
+    nextAttemptAt: null,
+    called: false,
+  });
+});
+
 test("an admin refusal keeps the exact code and suspends the whole channel", () => {
   const error = "restricted_action_read_only_channel";
   expect(writeOutcome({ kind: "error", error, data: { ok: false } })).toEqual({

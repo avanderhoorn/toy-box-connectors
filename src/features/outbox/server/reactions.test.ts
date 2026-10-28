@@ -4,7 +4,7 @@ import { createStoredLink } from "@links/server/testFixtures";
 import { readRequest } from "@requests/server/database";
 import { cancelStoredRequest } from "@requests/server/lifecycle";
 import { createStoredRequest } from "@requests/server/testFixtures";
-import { createBotClient, type BotClient } from "@slackapi/server/botClient";
+import { createBotClient, guardBotClient, type BotClient } from "@slackapi/server/botClient";
 import { readInstallation } from "@slackapi/server/installation";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../../../../tests/fakes/slack";
@@ -112,6 +112,72 @@ test("the SDK sees committed sending and only the frozen message reaction argume
   expect(reactions()).toEqual([{ name: "eyes", count: 1, users: ["U-bot"] }]);
   expect(await readRequestState()).toEqual(before);
   expect(await database.read((sql) => sql`SELECT * FROM outbox_channels`)).toEqual([]);
+});
+
+test.each([false, true])(
+  "a locally held reaction preserves any earlier uncertainty: %s",
+  async (uncertain) => {
+    const { database, slack, bot, delivery, queue, read, now, advance, reactions } = await setup({
+      timeoutMs: uncertain ? 40 : 1000,
+    });
+    const item = await queue();
+    if (uncertain) {
+      slack.failNext("reactions.add", { lostResponse: true });
+      expect(await delivery.react(item.id)).toMatchObject({
+        kind: "settled",
+        item: { state: "delivery_unknown" },
+      });
+      advance(5000);
+    }
+    let usable = false;
+    const guarded = createReactionDelivery(
+      database,
+      guardBotClient(bot, () => usable),
+      { now },
+    );
+    expect(await guarded.react(item.id)).toMatchObject({
+      kind: "settled",
+      item: {
+        state: uncertain ? "delivery_unknown" : "queued",
+        error: "slack_unusable",
+        nextAttemptAt: null,
+      },
+    });
+    expect(await read(item.id)).toMatchObject({
+      state: uncertain ? "delivery_unknown" : "queued",
+      attempts: uncertain ? 1 : 0,
+    });
+    expect(slack.calls).toHaveLength(uncertain ? 1 : 0);
+    usable = true;
+    expect(await guarded.react(item.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "sent" },
+    });
+    expect(slack.calls).toHaveLength(uncertain ? 2 : 1);
+    expect(reactions()).toEqual([{ name: "eyes", count: 1, users: ["U-bot"] }]);
+  },
+);
+
+test("an eyes call that never ran needs no compensation when its request disappears", async () => {
+  const { database, slack, bot, queue, read, now } = await setup();
+  const item = await queue();
+  const guarded = createReactionDelivery(
+    database,
+    guardBotClient(bot, () => false),
+    { now },
+  );
+  expect(await guarded.react(item.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "queued", attempts: 0 },
+  });
+  await database.write((tx) => tx`DELETE FROM requests`);
+  expect(await guarded.react(item.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "dropped", attempts: 0, error: "request_missing" },
+  });
+  expect(await read(item.id)).toBeNull();
+  expect(await database.read((sql) => sql`SELECT id FROM outbox`)).toEqual([]);
+  expect(slack.calls).toEqual([]);
 });
 
 test.each(["paused", "suspended", "removed"])(

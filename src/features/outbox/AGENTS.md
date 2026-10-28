@@ -18,6 +18,14 @@ payload hash. Manual resolution may use exact sent text only when metadata is ab
 never when metadata identifies another item. A receipt that shows a reply at the root
 requires withdrawal, not confirmation.
 
+`guardBotClient` checks the current Slack usability inside each SDK callback, after the
+shared cooldown read. A local `unusable` outcome queues a write without claiming delivery
+uncertainty or token rejection, and preserves any earlier uncertain reaction. Its conditional
+settlement undoes the attempt increment so a skipped call never creates a compensating reaction.
+A held channel refresh starts no post. A held reconciliation page spends no pass or backoff, retaining its
+deadline and partial cursor for when the worker is reconsidered. The supervisor uses the raw
+client so its own identity checks can restore usability.
+
 `server/posts.ts` posts finals, follow-ups, publications and new approval cards, and updates cards
 through the shared bot client, never from inside a write. It refreshes missing or stale channel facts before checking
 all authority again, commits sending, then builds metadata from the committed snapshot. Receipt

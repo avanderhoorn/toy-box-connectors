@@ -200,6 +200,9 @@ export function createReconciliation(
         return backoff(item, "malformed_history_page");
       }
       if (call.kind !== "ok") {
+        if (call.kind === "unusable") {
+          return { kind: "waiting", reason: "slack_unusable", until: null };
+        }
         if (
           scope.method === "conversations.replies" &&
           call.kind === "error" &&

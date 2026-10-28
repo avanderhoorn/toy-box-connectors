@@ -4,7 +4,7 @@ import { createStoredApproval, createStoredLink } from "@links/server/testFixtur
 import { readRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { channelFacts } from "@slackapi/model/testFixtures";
-import { createBotClient, type BotClient } from "@slackapi/server/botClient";
+import { createBotClient, guardBotClient, type BotClient } from "@slackapi/server/botClient";
 import { writeChannelInfo } from "@slackapi/server/channels";
 import { markAuthFailed, readInstallation } from "@slackapi/server/installation";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
@@ -121,6 +121,30 @@ test("withdrawing a misplaced reply deletes it and never reopens its cancelled q
   expect(await database.read((sql) => sql`SELECT * FROM outbox_channels`)).toEqual(slots);
   expect(await retract(operation.id)).toEqual({ kind: "changed" });
   expect(slack.calls).toHaveLength(2);
+});
+
+test("a locally held withdrawal keeps its target and spends no attempt", async () => {
+  const { database, slack, bot, operation, now, read, readOriginal } = await setup();
+  const before = await readOriginal();
+  let usable = false;
+  const delivery = createRetraction(
+    database,
+    guardBotClient(bot, () => usable),
+    { now },
+  );
+  expect(await delivery.retract(operation.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "queued", attempts: 0, error: "slack_unusable", nextAttemptAt: null },
+  });
+  expect(await read()).toMatchObject({ state: "queued", attempts: 0 });
+  expect(await readOriginal()).toEqual(before);
+  expect(slack.calls.map((call) => call.method)).toEqual(["chat.postMessage"]);
+  usable = true;
+  expect(await delivery.retract(operation.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "sent", attempts: 1 },
+  });
+  expect(slack.calls.map((call) => call.method)).toEqual(["chat.postMessage", "chat.delete"]);
 });
 
 test.each([false, true])(

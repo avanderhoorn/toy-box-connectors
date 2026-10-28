@@ -108,8 +108,13 @@ export type OutboxSettlement =
       evidence: DeliveryEvidence;
       metadataOk: boolean | null;
     }
-  | { state: "queued" | "delivery_unknown"; error: string; nextAttemptAt: number | null }
-  | { state: "failed" | "dropped"; error: string }
+  | {
+      state: "queued" | "delivery_unknown";
+      error: string;
+      nextAttemptAt: number | null;
+      called?: false;
+    }
+  | { state: "failed" | "dropped"; error: string; called?: false }
   | {
       state: "stray";
       slackTs: SlackTs;
@@ -246,6 +251,7 @@ export async function startOutboxAttempt(
 /**
  * Settles only the attempt the caller observed. A late response or reconciliation cannot
  * overwrite a manual resolution, a newer attempt, or a card's newer payload snapshot.
+ * A locally skipped call undoes its tentative attempt increment.
  */
 export async function settleOutboxAttempt(
   transaction: Bun.SQL,
@@ -264,9 +270,13 @@ export async function settleOutboxAttempt(
       `Outbox item o${item.number} cannot settle from ${item.state} to ${outcome.state}.`,
     );
   }
+  const uncalled = "called" in outcome && outcome.called === false;
+  if (uncalled && (item.state !== "sending" || item.attempts < 1)) {
+    throw new Error(`Outbox item o${item.number} has no started call to undo.`);
+  }
   const metadataOk = "metadataOk" in outcome ? outcome.metadataOk : item.metadataOk;
   const [row] = await transaction<OutboxRow[]>`
-    UPDATE outbox SET state = ${outcome.state},
+    UPDATE outbox SET state = ${outcome.state}, attempts = ${item.attempts - Number(uncalled)},
       slack_ts = ${"slackTs" in outcome ? outcome.slackTs : item.slackTs},
       evidence = ${"evidence" in outcome ? outcome.evidence : item.evidence},
       metadata_ok = ${metadataOk === null ? null : Number(metadataOk)},

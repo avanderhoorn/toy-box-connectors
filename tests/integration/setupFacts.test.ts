@@ -2,7 +2,7 @@ import { describe, expect, onTestFinished, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import type { FactsNeeded } from "@links/model/setup";
 import { createFactsReader } from "@links/server/facts";
-import { createBotClient, type BotClient } from "@slackapi/server/botClient";
+import { createBotClient, guardBotClient, type BotClient } from "@slackapi/server/botClient";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack, type FakeSlack } from "../fakes/slack";
 import { startFakeToyBox } from "../fakes/toybox";
@@ -69,6 +69,25 @@ function methodsCalled(slack: FakeSlack) {
 const signal = () => AbortSignal.timeout(5_000);
 
 describe("reading Slack for a change", () => {
+  test("a local guard leaves facts unverified instead of inventing missing channels or people", async () => {
+    let usable = false;
+    const { slack, reader } = await startReader({
+      wrap: (bot) => guardBotClient(bot, () => usable),
+    });
+    slack.addChannel({ id: "C-watch", members: [BOT, "U-owner"] });
+    expect(await reader.readSlack(needed(), ["U-owner"], signal())).toEqual({
+      kind: "unverified",
+      detail: "The bridge cannot use Slack for conversations.info right now",
+      retryAt: null,
+    });
+    expect(slack.calls).toEqual([]);
+    usable = true;
+    expect(await reader.readSlack(needed(), ["U-owner"], signal())).toMatchObject({
+      kind: "read",
+      facts: { ownerInMonitored: true, ownerInPublish: true },
+    });
+  });
+
   test("reads each channel, the people it admits, and whether the owner is in each channel", async () => {
     const { slack, reader } = await startReader();
     slack.addChannel({ id: "C-watch", name: "release-eng", is_private: true });

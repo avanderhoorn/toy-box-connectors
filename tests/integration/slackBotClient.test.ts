@@ -1,7 +1,7 @@
 import { expect, onTestFinished, spyOn, test } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import { createBotClient } from "@slackapi/server/botClient";
+import { createBotClient, guardBotClient } from "@slackapi/server/botClient";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../fakes/slack";
 
@@ -76,6 +76,144 @@ test("a call returns what Slack answered", async () => {
     result: expect.objectContaining({ ok: true, team_id: "TFAKE", user_id: "UFAKEBOT" }),
   });
 });
+
+test("a guarded view stops calls locally, while the raw client can establish identity", async () => {
+  const { fake, database, bot, authFailures } = await connectBot();
+  let usable = false;
+  const guarded = guardBotClient(bot, () => usable);
+  expect(await guarded.call("auth.test", (client) => client.auth.test())).toEqual({
+    kind: "unusable",
+  });
+  expect(fake.calls).toEqual([]);
+  expect(authFailures).toEqual([]);
+  expect(await readAuthFailure(database)).toEqual({ status: "active", auth_failed_at: null });
+  expect(await bot.call("auth.test", (client) => client.auth.test())).toMatchObject({ kind: "ok" });
+  usable = true;
+  expect(await guarded.call("auth.test", (client) => client.auth.test())).toMatchObject({
+    kind: "ok",
+  });
+  expect(fake.calls.map((call) => call.method)).toEqual(["auth.test", "auth.test"]);
+});
+
+test("the guard checks after the awaited cooldown read, not before entering call", async () => {
+  const { fake, database, bot, authFailures } = await connectBot();
+  let usable = true;
+  const read = database.read.bind(database);
+  database.read = async (operation) => {
+    const result = await read(operation);
+    usable = false;
+    return result;
+  };
+  onTestFinished(() => {
+    database.read = read;
+  });
+  const guarded = guardBotClient(bot, () => usable);
+  expect(await guarded.call("auth.test", (client) => client.auth.test())).toEqual({
+    kind: "unusable",
+  });
+  expect(fake.calls).toEqual([]);
+  expect(authFailures).toEqual([]);
+  expect(await readAuthFailure(database)).toEqual({ status: "active", auth_failed_at: null });
+});
+
+test("raw and guarded clients share the method's cooldown and the clock that ends it", async () => {
+  const { fake, bot, channel, advance } = await connectBot();
+  const guarded = guardBotClient(bot, () => true);
+  fake.failNext("conversations.history", { retryAfter: 3 });
+  expect(
+    await guarded.call("conversations.history", (client) =>
+      client.conversations.history({ channel }),
+    ),
+  ).toEqual({ kind: "rate_limited", until: NOW + 3000 });
+  expect(await guarded.cooldown("conversations.history")).toBe(NOW + 3000);
+  expect(await bot.cooldown("conversations.history")).toBe(NOW + 3000);
+  expect(
+    await bot.call("conversations.history", (client) => client.conversations.history({ channel })),
+  ).toEqual({ kind: "rate_limited", until: NOW + 3000 });
+  expect(fake.calls).toHaveLength(1);
+  advance(3000);
+  expect(await guarded.cooldown("conversations.history")).toBeNull();
+  expect(
+    await guarded.call("conversations.history", (client) =>
+      client.conversations.history({ channel }),
+    ),
+  ).toMatchObject({ kind: "ok" });
+  expect(fake.calls).toHaveLength(2);
+});
+
+test("a guarded token rejection reaches the same installation and callback, only after it calls Slack", async () => {
+  const { fake, database, bot, authFailures } = await connectBot({ token: "xoxb-revoked" });
+  let usable = false;
+  const guarded = guardBotClient(bot, () => usable);
+  expect(await guarded.call("auth.test", (client) => client.auth.test())).toEqual({
+    kind: "unusable",
+  });
+  expect(fake.calls).toEqual([]);
+  expect(authFailures).toEqual([]);
+  expect(await readAuthFailure(database)).toEqual({ status: "active", auth_failed_at: null });
+  usable = true;
+  expect(await guarded.call("auth.test", (client) => client.auth.test())).toEqual({
+    kind: "auth_failed",
+    error: "invalid_auth",
+  });
+  expect(await readAuthFailure(database)).toEqual({ status: "auth_failed", auth_failed_at: NOW });
+  expect(authFailures).toEqual(["invalid_auth"]);
+  expect(await bot.call("auth.test", (client) => client.auth.test())).toMatchObject({
+    kind: "auth_failed",
+  });
+  expect(authFailures).toEqual(["invalid_auth"]);
+});
+
+test.each([
+  { fault: { status: 503 }, expected: { kind: "unknown", detail: "HTTP 503" } },
+  { fault: { error: "missing_scope" }, expected: { kind: "error", error: "missing_scope" } },
+])("the guarded view preserves Slack's failure: %j", async ({ fault, expected }) => {
+  const { fake, bot } = await connectBot();
+  const guarded = guardBotClient(bot, () => true);
+  fake.failNext("auth.test", fault);
+  expect(await guarded.call("auth.test", (client) => client.auth.test())).toMatchObject(expected);
+  expect(fake.calls).toHaveLength(1);
+});
+
+test.each([null, undefined, { kind: "unusable" }])(
+  "a guarded callback's decoded value remains a successful result: %j",
+  async (value) => {
+    const { bot } = await connectBot();
+    const result = await guardBotClient(bot, () => true).call("auth.test", async () => value);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("The callback must have run.");
+    expect(result.result).toBe(value);
+  },
+);
+
+test.each(["predicate", "callback", "storage"])(
+  "a %s error is not disguised as an unusable connection",
+  async (source) => {
+    const { fake, database, bot } = await connectBot();
+    const failure = new Error(`${source} failed`);
+    if (source === "storage") {
+      const read = database.read.bind(database);
+      database.read = async () => {
+        throw failure;
+      };
+      onTestFinished(() => {
+        database.read = read;
+      });
+    }
+    const guarded = guardBotClient(bot, () => {
+      if (source === "predicate") throw failure;
+      return true;
+    });
+    await expect(
+      guarded.call("auth.test", async (client) => {
+        const result = await client.auth.test();
+        if (source === "callback") throw failure;
+        return result;
+      }),
+    ).rejects.toThrow(failure);
+    expect(fake.calls).toHaveLength(source === "callback" ? 1 : 0);
+  },
+);
 
 test("a post whose response is lost is unknown, and nothing sends it again", async () => {
   const { fake, bot, channel } = await connectBot({ timeoutMs: 50 });

@@ -9,7 +9,7 @@ import { confirmAnswer, reviseRequest } from "@requests/model/lifecycle";
 import { readRequest, saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { channelFacts, slackPerson } from "@slackapi/model/testFixtures";
-import { createBotClient, type BotClient } from "@slackapi/server/botClient";
+import { createBotClient, guardBotClient, type BotClient } from "@slackapi/server/botClient";
 import {
   invalidateChannelInfo,
   readChannelInfo,
@@ -112,6 +112,62 @@ async function setup({ fresh = true, requesterUserId = "U-owner", timeoutMs = 1_
   };
 }
 
+test("a locally held channel refresh leaves the queued post eligible without inventing facts", async () => {
+  const { database, slack, bot, queue, read, now } = await setup({ fresh: false });
+  const item = await queue();
+  const delivery = createPostDelivery(
+    database,
+    guardBotClient(bot, () => false),
+    { now },
+  );
+  expect(await delivery.post(item.id)).toEqual({
+    kind: "waiting",
+    reason: "slack_unusable",
+    until: null,
+  });
+  expect(await read(item.id)).toMatchObject({ state: "queued", attempts: 0, nextAttemptAt: null });
+  expect(await database.read((sql) => readChannelInfo(sql, "C-link"))).toBeNull();
+  expect(slack.calls).toEqual([]);
+});
+
+test("losing usability after channel refresh prevents the post, then resumes without posting twice", async () => {
+  const { database, slack, bot, queue, read, now, advance } = await setup({ fresh: false });
+  let usable = true;
+  const observed: BotClient = {
+    cooldown: (method) => bot.cooldown(method),
+    call(method, run) {
+      return bot.call(method, async (client) => {
+        const result = await run(client);
+        if (method === "conversations.info") usable = false;
+        return result;
+      });
+    },
+  };
+  const delivery = createPostDelivery(
+    database,
+    guardBotClient(observed, () => usable),
+    { now },
+  );
+  const item = await queue();
+  expect(await delivery.post(item.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "queued", error: "slack_unusable", nextAttemptAt: null },
+  });
+  expect(await read(item.id)).toMatchObject({ state: "queued", attempts: 0 });
+  expect(slack.calls.map((call) => call.method)).toEqual(["conversations.info"]);
+  expect(slack.getMessages("C-link").filter((message) => message.bot_id === "B-bot")).toEqual([]);
+  usable = true;
+  advance(1000);
+  expect(await delivery.post(item.id)).toMatchObject({ kind: "settled", item: { state: "sent" } });
+  expect(slack.calls.map((call) => call.method)).toEqual([
+    "conversations.info",
+    "chat.postMessage",
+  ]);
+  expect(slack.getMessages("C-link").filter((message) => message.bot_id === "B-bot")).toHaveLength(
+    1,
+  );
+});
+
 async function postedCard(timeoutMs = 1_000) {
   const fixture = await setup({ fresh: false, timeoutMs });
   const { database, delivery, now } = fixture;
@@ -197,11 +253,15 @@ test("a non-thread Slack refusal returns the final to the lead rather than cance
   );
 });
 
-test.each(["sent", "failed", "queued"] as const)(
-  "a %s receipt after unlink forgets a redacted ordinary post without another write",
+test.each(["sent", "failed", "queued", "delivery_unknown"] as const)(
+  "a %s receipt after unlink retains only the post that still needs reconciliation",
   async (state) => {
-    const { database, slack, bot, queue, read, now } = await setup();
+    const { database, slack, bot, queue, read, now, advance } = await setup({
+      timeoutMs: state === "delivery_unknown" ? 40 : 1000,
+    });
     const queued = await queue();
+    const snapshot = await read(queued.id);
+    if (!snapshot) throw new Error("The fixture needs its queued post.");
     const checked: BotClient = {
       cooldown: (method) => bot.cooldown(method),
       call(method, run) {
@@ -220,13 +280,36 @@ test.each(["sent", "failed", "queued"] as const)(
     };
     if (state === "failed") slack.failNext("chat.postMessage", { error: "msg_blocks_too_long" });
     if (state === "queued") slack.failNext("chat.postMessage", { retryAfter: 1 });
+    if (state === "delivery_unknown") slack.failNext("chat.postMessage", { lostResponse: true });
     expect(await createPostDelivery(database, checked, { now }).post(queued.id)).toMatchObject({
       kind: "settled",
       item: { state, payload: { redacted: "unlink" } },
     });
-    expect(await read(queued.id)).toBeNull();
-    expect(slack.getMessages("C-link")).toHaveLength(state === "sent" ? 2 : 1);
+    if (state === "delivery_unknown") {
+      expect(await read(queued.id)).toMatchObject({
+        state,
+        payload: { redacted: "unlink" },
+        payloadHash: snapshot.payloadHash,
+        attempts: 1,
+      });
+    } else {
+      expect(await read(queued.id)).toBeNull();
+    }
+    expect(slack.getMessages("C-link")).toHaveLength(
+      state === "sent" || state === "delivery_unknown" ? 2 : 1,
+    );
     expect(slack.calls.map((call) => call.method)).toEqual(["chat.postMessage"]);
+    if (state === "delivery_unknown") {
+      advance(10_000);
+      const reconciliation = createReconciliation(database, bot, { now });
+      onTestFinished(() => reconciliation.close());
+      expect(await reconciliation.reconcile(queued.id)).toMatchObject({
+        kind: "settled",
+        item: { state: "sent" },
+      });
+      expect(await read(queued.id)).toBeNull();
+      expect(slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
+    }
   },
 );
 

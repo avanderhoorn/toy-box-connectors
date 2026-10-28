@@ -132,6 +132,7 @@ export function createRetraction(
             ? { state: "failed", error: outcome.error }
             : {
                 state: "queued",
+                called: outcome.kind === "queued" ? outcome.called : undefined,
                 error: outcome.kind === "accepted" ? "invalid_delete_response" : outcome.error,
                 nextAttemptAt:
                   outcome.kind === "queued"

@@ -33,6 +33,8 @@ const unreadableRetryAfter = "Retry header did not contain a valid timeout";
 /** What became of one call. */
 export type SlackCall<Result> =
   | { kind: "ok"; result: Result }
+  /** The caller's guard stopped the SDK call locally. Nothing was sent. */
+  | { kind: "unusable" }
   /** Slack asked the bridge to wait until `until` before calling this method again. Nothing was sent. */
   | { kind: "rate_limited"; until: number }
   /** Slack rejected the bot token, and the installation is now auth_failed. */
@@ -119,6 +121,27 @@ export function createBotClient(
       } catch (error) {
         return failed(method, error);
       }
+    },
+  };
+}
+
+/**
+ * Shares a client's cooldowns and token failures, checking `usable` inside each SDK callback.
+ * The supervisor keeps the original client so its identity check can make this view usable.
+ */
+export function guardBotClient(bot: BotClient, usable: () => boolean): BotClient {
+  return {
+    cooldown: (method) => bot.cooldown(method),
+    async call(method, run) {
+      const call = await bot.call(method, async (client) =>
+        usable()
+          ? { kind: "called" as const, result: await run(client) }
+          : { kind: "unusable" as const },
+      );
+      if (call.kind !== "ok") return call;
+      return call.result.kind === "unusable"
+        ? { kind: "unusable" }
+        : { kind: "ok", result: call.result.result };
     },
   };
 }

@@ -163,6 +163,8 @@ async function ask<Result>(
   switch (call.kind) {
     case "ok":
       return call.result;
+    case "unusable":
+      throw new UnverifiedError(`The bridge cannot use Slack for ${method} right now`);
     case "rate_limited":
       throw new UnverifiedError(`Slack is holding back ${method}`, call.until);
     case "auth_failed":

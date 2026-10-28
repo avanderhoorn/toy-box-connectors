@@ -178,6 +178,7 @@ export function createPostDelivery(
         };
       } else if (outcome.kind === "queued") {
         settlement = {
+          called: outcome.called,
           state: "queued",
           error: outcome.error,
           nextAttemptAt: outcome.nextAttemptAt,
@@ -307,6 +308,9 @@ export function createPostDelivery(
       return defer(id, "malformed_channel_info", now() + 5_000);
     }
     if (call.kind !== "ok") {
+      if (call.kind === "unusable") {
+        return { kind: "waiting", reason: "slack_unusable", until: null };
+      }
       if (call.kind === "error") {
         const reason = channelFailureReason(call.error);
         if (reason !== null) {

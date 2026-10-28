@@ -742,6 +742,20 @@ ends an orphan's reads by purging it. Misplaced posts still go through withdrawa
 [Reconciliation implementation](../../src/features/outbox/server/reconcile.ts),
 [credential-free protocol cases](../../src/features/outbox/server/reconcile.test.ts).
 
+The shared bot client's `guardBotClient(bot, usable)` view checks current local
+permission inside every SDK callback, after the awaited cooldown read. The
+supervisor retains the raw client for identity bootstrap. The view shares
+cooldowns, retry configuration and token-failure notification with that client.
+Its `unusable` outcome means no SDK call ran, not rejected authentication or
+uncertain delivery. Conditional settlement restores the attempt count, while
+retaining an earlier uncertain reaction. Channel refresh pauses without
+inventing facts. Each reconciliation page independently checks the guard and
+holds without changing its durable deadline, spending a pass or read-error
+backoff, or forgetting its partial cursor.
+[Client and cooldown-race cases](../../tests/integration/slackBotClient.test.ts),
+[refresh and post cases](../../src/features/outbox/server/posts.test.ts),
+[page pause and resume](../../src/features/outbox/server/reconcile.test.ts).
+
 ### Withdrawal without inventing answer proof
 
 `chat.delete` requires `chat:write` and permits a bot token to delete only its
