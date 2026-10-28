@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test";
-import { channelFailureReason, isAuthFailure, isErrorCode, isRateLimit } from "./errors";
+import {
+  channelFailureReason,
+  isAuthFailure,
+  isErrorCode,
+  isOrgMigration,
+  isRateLimit,
+} from "./errors";
 
 test("a rejected token, or a workspace moving into an Enterprise org, is an auth failure", () => {
   for (const error of [
@@ -24,6 +30,14 @@ test("an error about one call, a channel or a missing scope is the caller's to h
     "ratelimited",
   ]) {
     expect(isAuthFailure(error)).toBe(false);
+  }
+});
+
+test("only a workspace moving into an Enterprise org is a migration", () => {
+  expect(isOrgMigration("team_added_to_org")).toBe(true);
+  expect(isOrgMigration("org_login_required")).toBe(true);
+  for (const error of ["invalid_auth", "token_revoked", "account_inactive", "missing_scope"]) {
+    expect(isOrgMigration(error)).toBe(false);
   }
 });
 

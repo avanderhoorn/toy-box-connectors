@@ -95,7 +95,7 @@ export function openSlackSocket(
   client.start().catch((error: unknown) => {
     settle(
       error === undefined
-        ? { kind: "dropped", detail: "the connection closed before Slack said hello" }
+        ? { kind: "dropped", detail: "The connection closed before Slack said hello" }
         : { kind: "failed", failure: readCallFailure(error) ?? unreadable(error) },
     );
     closed.resolve(now());

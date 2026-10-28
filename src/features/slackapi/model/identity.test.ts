@@ -7,6 +7,7 @@ import {
   identityOf,
   identityRefusal,
   refusalProblem,
+  rejectedTokenProblem,
   tokensRefusal,
   type SlackIdentity,
   type TokenOwner,
@@ -245,6 +246,26 @@ describe("telling the operator what to do", () => {
       refusalProblem({ reason: "rotating", tokens: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"] }),
     ).toStartWith("SLACK_BOT_TOKEN and SLACK_APP_TOKEN rotate, and");
     expect(refusalProblem({ reason: "org_wide" })).toContain("installed to one workspace");
-    expect(refusalProblem({ reason: "not_bot" })).toContain("starts with xoxb-");
+    expect(refusalProblem({ reason: "not_bot" })).toBe(
+      "SLACK_BOT_TOKEN isn't a bot token. Put the app's Bot User OAuth Token, which starts with xoxb-, in credentials.env, then restart the bridge.",
+    );
+  });
+
+  test("a rejected token says which token and where a working one comes from", () => {
+    expect(rejectedTokenProblem("SLACK_BOT_TOKEN", "token_revoked")).toBe(
+      "Slack rejected SLACK_BOT_TOKEN with token_revoked. Put the app's Bot User OAuth Token, which starts with xoxb-, in credentials.env, then restart the bridge.",
+    );
+    expect(rejectedTokenProblem("SLACK_APP_TOKEN", "not_allowed_token_type")).toBe(
+      "Slack rejected SLACK_APP_TOKEN with not_allowed_token_type. Put an app-level token with connections:write from the app's Basic Information page, which starts with xapp-, in credentials.env, then restart the bridge.",
+    );
+  });
+
+  test("a workspace moving into an Enterprise org only has to finish moving", () => {
+    expect(rejectedTokenProblem("SLACK_BOT_TOKEN", "team_added_to_org")).toBe(
+      "Slack is moving the workspace into an Enterprise org and rejects SLACK_BOT_TOKEN with team_added_to_org until that's done.",
+    );
+    expect(rejectedTokenProblem("SLACK_APP_TOKEN", "org_login_required")).toBe(
+      "Slack is moving the workspace into an Enterprise org and rejects SLACK_APP_TOKEN with org_login_required until that's done.",
+    );
   });
 });

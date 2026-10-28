@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isOrgMigration } from "./errors";
 import type { Installation } from "./installation";
 
 // Whose tokens the bridge holds.
@@ -181,6 +182,17 @@ export function helloRefusal(appId: string, helloAppId: string | null): Identity
 
 const resetStep = "stop the bridge and run `toy-box-slack reset --yes`";
 
+/** Where each token comes from, as an instruction to put it in credentials.env names it. */
+const tokenSources: Record<TokenName, string> = {
+  SLACK_BOT_TOKEN: "the app's Bot User OAuth Token, which starts with xoxb-,",
+  SLACK_APP_TOKEN:
+    "an app-level token with connections:write from the app's Basic Information page, which starts with xapp-,",
+};
+
+function replaceStep(token: TokenName): string {
+  return `Put ${tokenSources[token]} in credentials.env, then restart the bridge.`;
+}
+
 const fieldNouns = {
   teamId: "workspace",
   appId: "app",
@@ -200,7 +212,7 @@ export function refusalProblem(refusal: IdentityRefusal): string {
     case "org_wide":
       return "SLACK_BOT_TOKEN comes from an install across an Enterprise org, and the bridge needs the app installed to one workspace. Install an app made from docs/manifest.yaml, which leaves org-wide deployment off, to the workspace and put its tokens in credentials.env, then restart the bridge.";
     case "not_bot":
-      return "SLACK_BOT_TOKEN isn't a bot token. Put the app's Bot User OAuth Token, which starts with xoxb-, in credentials.env, then restart the bridge.";
+      return `SLACK_BOT_TOKEN isn't a bot token. ${replaceStep("SLACK_BOT_TOKEN")}`;
     case "mismatch": {
       const noun = fieldNouns[refusal.field];
       return `SLACK_BOT_TOKEN belongs to ${noun} ${refusal.found}, but the bridge was set up with ${noun} ${refusal.stored}. Put back the tokens it was set up with and restart the bridge, or ${resetStep} to start over with these.`;
@@ -212,6 +224,18 @@ export function refusalProblem(refusal: IdentityRefusal): string {
         ? `Slack didn't say which app SLACK_APP_TOKEN belongs to, so the bridge can't confirm it's app ${refusal.stored}, which SLACK_BOT_TOKEN belongs to. Restart the bridge to ask again.`
         : `SLACK_APP_TOKEN belongs to app ${refusal.found}, but SLACK_BOT_TOKEN to app ${refusal.stored}. Put an app-level token from app ${refusal.stored}'s Basic Information page in credentials.env, then restart the bridge.`;
   }
+}
+
+/**
+ * What's wrong and how the operator fixes it while Slack rejects `token` with `error`, as status
+ * shows it. The bridge goes on asking meanwhile, so a workspace moving into an Enterprise org only
+ * has to finish moving.
+ */
+export function rejectedTokenProblem(token: TokenName, error: string): string {
+  if (isOrgMigration(error)) {
+    return `Slack is moving the workspace into an Enterprise org and rejects ${token} with ${error} until that's done.`;
+  }
+  return `Slack rejected ${token} with ${error}. ${replaceStep(token)}`;
 }
 
 function orgChange(stored: string | null, found: string | null): string {

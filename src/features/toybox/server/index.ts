@@ -21,6 +21,7 @@ import {
 } from "@toybox/model/stream";
 import { defaultWakeTimings, retryDelay, type ToyBoxView, type WakeTimings } from "@wakes/model";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
+import { sleep } from "@/shared/sleep";
 import { fetchToyBoxCatalog, readChannelStream, runToyBoxRoutine } from "./api";
 import {
   readFollowedLinks,
@@ -285,18 +286,6 @@ export function startToyBoxClient(
 
 function isWorking(stream: ToyBoxStream): boolean {
   return stream.lead?.state === "working";
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const done = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", done);
-      resolve();
-    };
-    const timer = setTimeout(done, ms);
-    signal.addEventListener("abort", done, { once: true });
-  });
 }
 
 function describe(error: unknown): string {

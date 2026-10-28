@@ -289,7 +289,7 @@ test("a connection that closes before Slack says hello is dropped", async () => 
 
   expect(await socket.opened).toEqual({
     kind: "dropped",
-    detail: "the connection closed before Slack said hello",
+    detail: "The connection closed before Slack said hello",
   });
   await socket.closed;
 });
