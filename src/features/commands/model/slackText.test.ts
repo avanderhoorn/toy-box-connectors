@@ -66,13 +66,14 @@ describe("rendering Slack text", () => {
     );
   });
 
-  test("neutralizes every @ Toy Box reads as a mention, even one that markup completes", () => {
+  test("neutralizes every @ Toy Box reads as a mention, even one that markup or a control hides", () => {
     expect(renderSlackText("@lead please, cc (@everyone)", names)).toBe(
       `@${ZWSP}lead please, cc (@${ZWSP}everyone)`,
     );
     expect(renderSlackText("ping @<https://x.dev|lead>", names)).toBe(
       `ping @${ZWSP}lead (https://x.dev)`,
     );
+    expect(renderSlackText("ping @\u0007lead", names)).toBe(`ping @${ZWSP}lead`);
   });
 
   test("leaves email addresses alone", () => {
@@ -114,7 +115,7 @@ describe("personName", () => {
     expect(personName("Alice\nChen", "U0A")).toBe("Alice Chen");
     expect(personName("`rm -rf`", "U0A")).toBe("'rm -rf'");
     expect(personName("Bob\u202edrawkcab\u202c", "U0B")).toBe("Bobdrawkcab");
-    expect(personName("@everyone", "U0E")).toBe(`@${ZWSP}everyone`);
+    expect(personName("@\u202e\u0007everyone", "U0E")).toBe(`@${ZWSP}everyone`);
   });
 
   test("falls back to the user ID when nothing's left of the name", () => {
