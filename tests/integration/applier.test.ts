@@ -414,6 +414,47 @@ describe("while Slack isn't connected", () => {
     expect(attempts).toHaveLength(2);
   });
 
+  test("backing off starts over once it's connected again", async () => {
+    const world = await linkFakeChannel();
+    const approval = await world.approve(allow("U-carol"));
+    world.toyBox.refuseStreams(503);
+    let reads = 0;
+
+    const { applier, attempts } = world.startApplying({
+      timings: { retry: 100, retryLimit: 1_000 },
+      wrap: (reader) => ({
+        ...reader,
+        readToyBox: async (toyboxChannelId, signal) => {
+          const read = await reader.readToyBox(toyboxChannelId, signal);
+          // Slack rejects the token during the second read, which proves nothing either.
+          if (++reads === 2) {
+            await world.database.write(
+              (transaction) => transaction`UPDATE installation SET status = 'auth_failed'`,
+            );
+          }
+          return read;
+        },
+      }),
+    });
+
+    await waitFor(() => expect(attempts).toHaveLength(2));
+    // Well past the next try, 200 ms on, which found the bridge disconnected and read nothing.
+    await Bun.sleep(400);
+    expect(attempts).toHaveLength(2);
+    await world.database.write(
+      (transaction) => transaction`UPDATE installation SET status = 'active'`,
+    );
+    applier.reconsider();
+    await waitFor(() => expect(attempts).toHaveLength(3));
+    world.toyBox.acceptStreams();
+
+    await waitFor(() => expect(world.changes).toHaveLength(1));
+    expect(await readState(world.database, approval)).toEqual(applied);
+    // 100 ms, as after the first read, rather than the 400 ms a third read in a row would wait.
+    expect(attempts[3]! - attempts[2]!).toBeGreaterThanOrEqual(95);
+    expect(attempts[3]! - attempts[2]!).toBeLessThan(300);
+  });
+
   test("a change Slack stays disconnected for goes stale when its 15 minutes are up, unread", async () => {
     const world = await linkFakeChannel();
     const clickedAt = world.now() - APPLY_VERIFY_MS + 300;
