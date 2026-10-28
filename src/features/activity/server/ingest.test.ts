@@ -1,9 +1,12 @@
 import { expect, test } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
+import { startClaim } from "@links/server/claims";
+import { changeChannelId } from "@links/server/lifecycle";
 import { createStoredLink } from "@links/server/testFixtures";
 import type { SlackMessage, SlackMessageEvent } from "@slackapi/model/messages";
 import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
+import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { ingestMessageEvent, type IngestContext, type Ingested } from "./ingest";
 
 const context: IngestContext = {
@@ -73,21 +76,46 @@ test("a claim is consumed before anything is stored, wherever it's posted", asyn
   const bot = { botUserId: "U0BOT" };
   const claim = askMessage(ask.ts, { text: "<@U0BOT> claim 4F7Q-2KD9" });
 
-  expect(await ingest(database, posted(claim), bot)).toEqual({
-    kind: "claim",
-    claim: { code: "4F7Q-2KD9" },
-  });
+  expect(await ingest(database, posted(claim), bot)).toEqual({ kind: "claim", changed: false });
   expect(await ingest(database, posted({ ...claim, channelId: "C-elsewhere" }), bot)).toEqual({
     kind: "claim",
-    claim: { code: "4F7Q-2KD9" },
+    changed: false,
   });
   const edit = editMessage(ask, "1700000150.000100", "<@U0BOT> claim it, please");
   expect(await ingest(database, posted(edit, true), bot)).toEqual({
     kind: "claim",
-    claim: { code: null },
+    changed: false,
   });
   expect(await readMessages(database)).toEqual([]);
   expect(await readRequests(database)).toEqual([]);
+});
+
+test("a claim posted live is tried against the open claim, by the person an alias names", async () => {
+  const database = await openIngest();
+  await createStoredInstallation(database, { bot_user_id: "U0BOT", owner_user_id: null });
+  const started = await database.write((transaction) => startClaim(transaction, context.now));
+  if (started.kind !== "started") throw new Error("The claim didn't start.");
+  await database.write(
+    (transaction) => transaction`
+      INSERT INTO user_aliases (alias_id, user_id) VALUES ('W-alias', 'U-allowed')
+    `,
+  );
+  const claim = askMessage(ask.ts, { userId: "W-alias", text: `<@U0BOT> claim ${started.code}` });
+  const bot = { botUserId: "U0BOT" };
+
+  expect(await ingest(database, posted(claim), { ...bot, late: true })).toEqual({
+    kind: "claim",
+    changed: false,
+  });
+  expect(await ingest(database, posted(claim, true), bot)).toEqual({
+    kind: "claim",
+    changed: false,
+  });
+  expect(await ingest(database, posted(claim), bot)).toEqual({ kind: "claim", changed: true });
+  expect(await database.read((sql) => sql`SELECT state, posted_by, posted_at FROM claims`)).toEqual(
+    [{ state: "posted", posted_by: "U-allowed", posted_at: context.now }],
+  );
+  expect(await readMessages(database)).toEqual([]);
 });
 
 test("nothing from a channel no link watches is stored", async () => {
@@ -287,6 +315,24 @@ test("an edit that drops a file, and a delete, hand back local copies to remove"
   expect(await ingest(database, { kind: "deleted", channelId: "C-link", ts: ask.ts })).toEqual(
     stored(true, ["F1.png"]),
   );
+});
+
+test("an event naming the ID Slack moved a channel from is stored under its current ID", async () => {
+  const database = await openIngest();
+  await database.write((transaction) => changeChannelId(transaction, "C-link", "C-new", 1));
+  const reply = replyMessage(ask, "1700000200.000100");
+
+  expect(await ingest(database, posted(ask))).toMatchObject({ kind: "stored", linkId: "link" });
+  expect(await ingest(database, posted(reply))).toMatchObject({ kind: "stored", linkId: "link" });
+  expect(await ingest(database, { kind: "deleted", channelId: "C-link", ts: reply.ts })).toEqual(
+    stored(false),
+  );
+  expect(
+    await database.read((sql) => sql`SELECT channel_id, ts, deleted FROM messages ORDER BY ts`),
+  ).toEqual([
+    { channel_id: "C-new", ts: ask.ts, deleted: 0 },
+    { channel_id: "C-new", ts: reply.ts, deleted: 1 },
+  ]);
 });
 
 test("a reply raises its tracked thread's newest reply and changes no request", async () => {

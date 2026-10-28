@@ -4,6 +4,7 @@ import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import type { SlackMessage } from "@slackapi/model/messages";
 import {
+  moveLedgerChannel,
   noteReply,
   storeDelete,
   storeMessage,
@@ -414,6 +415,41 @@ test("a request's thread is tracked, and hydrated once if it holds other message
       opened_at: 1_700_002_000_000,
     },
   ]);
+});
+
+test("a channel Slack gave a new ID keeps everything the ledger holds for it under the new one", async () => {
+  const database = await openLedger();
+  const reply = { ...aside, ts: "1700000800.000100" };
+  await store(database, { ...ask, files: [file("F1")] });
+  await store(database, reply);
+  await track(database, reply);
+  await store(database, { ...ask, channelId: "C-other", files: [file("F2")] });
+  const channels = () =>
+    database.read(async (sql) => {
+      const channelsOf = async (table: string) => [
+        ...(await sql.unsafe(`SELECT DISTINCT channel_id FROM ${table} ORDER BY channel_id`)),
+      ];
+      return {
+        messages: await channelsOf("messages"),
+        changes: await channelsOf("changes"),
+        threads: await channelsOf("threads"),
+        coverage: await channelsOf("coverage"),
+        files: await channelsOf("files"),
+      };
+    });
+  const before = await database.read((sql) => sql`SELECT ts, version, text FROM messages`);
+
+  await database.write((transaction) => moveLedgerChannel(transaction, "C-link", "C-new"));
+
+  const moved = [{ channel_id: "C-new" }];
+  expect(await channels()).toEqual({
+    messages: [...moved, { channel_id: "C-other" }],
+    changes: [...moved, { channel_id: "C-other" }],
+    threads: moved,
+    coverage: moved,
+    files: [...moved, { channel_id: "C-other" }],
+  });
+  expect(await database.read((sql) => sql`SELECT ts, version, text FROM messages`)).toEqual(before);
 });
 
 function file(id: string) {

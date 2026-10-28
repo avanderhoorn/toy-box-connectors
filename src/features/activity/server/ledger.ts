@@ -163,6 +163,22 @@ export async function noteReply(
   `;
 }
 
+/**
+ * Follows a channel Slack gave a new ID, so its messages, changes, tracked threads, gaps and files
+ * name the new one.
+ */
+export async function moveLedgerChannel(
+  transaction: Bun.SQL,
+  oldId: string,
+  newId: string,
+): Promise<void> {
+  await transaction`UPDATE messages SET channel_id = ${newId} WHERE channel_id = ${oldId}`;
+  await transaction`UPDATE changes SET channel_id = ${newId} WHERE channel_id = ${oldId}`;
+  await transaction`UPDATE threads SET channel_id = ${newId} WHERE channel_id = ${oldId}`;
+  await transaction`UPDATE coverage SET channel_id = ${newId} WHERE channel_id = ${oldId}`;
+  await transaction`UPDATE files SET channel_id = ${newId} WHERE channel_id = ${oldId}`;
+}
+
 async function readMessage(
   transaction: Bun.SQL,
   channelId: string,

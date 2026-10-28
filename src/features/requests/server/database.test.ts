@@ -17,6 +17,7 @@ import {
   assignRequestMessage,
   hashInput,
   insertRequest,
+  moveRequestChannel,
   readActiveRequest,
   readInputHash,
   readMessageRequest,
@@ -122,6 +123,35 @@ test("a message belongs to one request at a time, whatever its state", async () 
   expect(await owner(ask.ts)).toEqual(open);
   expect(await database.read((sql) => sql`SELECT * FROM request_messages`)).toEqual([
     { request_id: open.id, channel_id: "C-link", ts: ask.ts },
+  ]);
+});
+
+test("a channel Slack gave a new ID keeps its requests and their messages under the new one", async () => {
+  const database = await openTestDatabase();
+  const moving = await createStoredRequest(database);
+  const staying = await createStoredRequest(database, {
+    channelId: "C-other",
+    requesterUserId: "U-allowed",
+  });
+  await assign(database, moving.id, ask.ts);
+  await assign(database, moving.id, more.ts);
+  await assign(database, staying.id, ask.ts, "C-other");
+
+  await database.write((transaction) => moveRequestChannel(transaction, "C-link", "C-new"));
+
+  expect(await database.read((sql) => readRequest(sql, moving.id))).toEqual({
+    ...moving,
+    channelId: "C-new",
+  });
+  expect(await database.read((sql) => readRequest(sql, staying.id))).toEqual(staying);
+  expect(
+    await database.read(
+      (sql) => sql`SELECT request_id, channel_id, ts FROM request_messages ORDER BY channel_id, ts`,
+    ),
+  ).toEqual([
+    { request_id: moving.id, channel_id: "C-new", ts: ask.ts },
+    { request_id: moving.id, channel_id: "C-new", ts: more.ts },
+    { request_id: staying.id, channel_id: "C-other", ts: ask.ts },
   ]);
 });
 

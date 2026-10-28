@@ -7,6 +7,7 @@ import type { BridgeDatabase } from "@bridge/server/database";
 export function createStoredInstallation(
   database: BridgeDatabase,
   columns: {
+    bot_user_id?: string;
     enterprise_id?: string | null;
     owner_user_id?: string | null;
     status?: "active" | "auth_failed" | "uninstalled";

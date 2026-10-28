@@ -157,6 +157,16 @@ export async function assignRequestMessage(
   `;
 }
 
+/** Follows a channel Slack gave a new ID, so its requests and their messages name the new one. */
+export async function moveRequestChannel(
+  transaction: Bun.SQL,
+  oldId: string,
+  newId: string,
+): Promise<void> {
+  await transaction`UPDATE requests SET channel_id = ${newId} WHERE channel_id = ${oldId}`;
+  await transaction`UPDATE request_messages SET channel_id = ${newId} WHERE channel_id = ${oldId}`;
+}
+
 /** Hashes a request's input, so any change to which messages it has or what they say shows. */
 export function hashInput(messages: readonly RequestInput[]): string {
   return Bun.SHA256.hash(inputSource(messages), "hex");

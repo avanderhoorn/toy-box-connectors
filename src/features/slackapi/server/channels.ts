@@ -113,6 +113,14 @@ export async function invalidateChannelInfo(
   `;
 }
 
+/** The ID a channel has now, which differs from `channelId` when Slack moved it from there. */
+export async function currentChannelId(sql: Bun.SQL, channelId: string): Promise<string> {
+  const [alias] = await sql<{ channel_id: string }[]>`
+    SELECT channel_id FROM channel_aliases WHERE old_id = ${channelId}
+  `;
+  return alias?.channel_id ?? channelId;
+}
+
 /**
  * Records that Slack moved a channel from `oldId` to `newId`. Aliases of the old ID follow it, so
  * each names a current ID, and a channel moved back to an ID it had before loses that alias.

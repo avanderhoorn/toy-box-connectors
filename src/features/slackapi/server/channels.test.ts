@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { channelFacts } from "@slackapi/model/testFixtures";
 import {
+  currentChannelId,
   invalidateChannelInfo,
   readChannelInfo,
   recordChannelAlias,
@@ -153,4 +154,19 @@ test("each alias names the channel's current ID, however many times it moves", a
     { old_id: "C-2", channel_id: "C-1", changed_at: 2_000 },
     { old_id: "C-3", channel_id: "C-1", changed_at: 3_000 },
   ]);
+});
+
+test("a channel named by an ID it moved from is the channel at its current ID", async () => {
+  const database = await openTestDatabase();
+  await database.write(async (transaction) => {
+    await recordChannelAlias(transaction, "C-1", "C-2", 1_000);
+    await recordChannelAlias(transaction, "C-2", "C-3", 2_000);
+  });
+
+  await database.read(async (sql) => {
+    expect(await currentChannelId(sql, "C-1")).toBe("C-3");
+    expect(await currentChannelId(sql, "C-2")).toBe("C-3");
+    expect(await currentChannelId(sql, "C-3")).toBe("C-3");
+    expect(await currentChannelId(sql, "C-never")).toBe("C-never");
+  });
 });
