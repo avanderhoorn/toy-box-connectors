@@ -179,7 +179,8 @@ export async function readWakeBlock(sql: Bun.SQL, linkId: string): Promise<WakeB
 /**
  * The decided proposals whose lead hasn't heard the outcome, oldest first. A landed run settles
  * each, so does inbox reporting it, and for a proposal without a link a missing routine or a
- * refusal ends it too.
+ * refusal ends it too. One whose link is gone is owed to nobody: unlink keeps it only until Slack
+ * settles its card, and it mustn't wake a routine for that link or land on the channel's next one.
  */
 function readSetupDebts(sql: Bun.SQL): Promise<DebtRow[]> {
   return sql<DebtRow[]>`
@@ -197,6 +198,7 @@ function readSetupDebts(sql: Bun.SQL): Promise<DebtRow[]> {
     FROM approvals a LEFT JOIN links l ON l.toybox_channel_id = a.toybox_channel_id
     WHERE a.decided_by IS NOT NULL AND a.reported_at IS NULL
       AND a.state IN ('applied', 'rejected', 'expired', 'stale')
+      AND (a.link_id IS NULL OR EXISTS (SELECT 1 FROM links WHERE id = a.link_id))
       AND NOT EXISTS (SELECT 1 FROM wakes w WHERE w.approval_id = a.id AND w.outcome = 'ran')
     ORDER BY decidedAt, a.number
   `;

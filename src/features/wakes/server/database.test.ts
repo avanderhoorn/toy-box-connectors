@@ -336,6 +336,27 @@ describe("reading a pass", () => {
       expect(pass.links[0]!.setup).toEqual([{ approvalId: approval, decidedAt: minutes(-9) }]);
       expect(pass.proposals).toEqual([]);
     });
+
+    test("of a link that's gone wake nobody, even once its channel is linked again", async () => {
+      const database = await openTestDatabase();
+      // Unlink keeps the approval that made the link until Slack settles its card.
+      await storeApproval(database, {
+        link_id: "unlinked",
+        action: "link",
+        state: "applied",
+        applied_at: minutes(-9),
+        patch: JSON.stringify([
+          { field: "slack_channel_id", after: "C-old" },
+          { field: "requests_routine_id", after: "routine-old" },
+        ]),
+      });
+      expect((await readPass(database)).proposals).toEqual([]);
+
+      await createStoredLink(database);
+      const pass = await readPass(database);
+      expect(pass.links[0]!.setup).toEqual([]);
+      expect(pass.proposals).toEqual([]);
+    });
   });
 
   describe("catch-ups", () => {
