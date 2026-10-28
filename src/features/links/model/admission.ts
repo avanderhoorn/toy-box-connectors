@@ -3,13 +3,13 @@ import type { SlackPerson } from "@slackapi/model/users";
 
 // Admitting a person.
 //
-// Pinning the owner, and applying allow or owner, give someone a say over what the lead does, so
-// each admits them only if users.info shows a full member: not a guest, a deactivated account, a
-// bot, a workflow bot or Slackbot, and in the installation's workspace or, in an Enterprise org,
-// the installation's org. The workspace a message names for its author is never the test, because
-// an Enterprise coworker can post from a sibling workspace. A response that leaves out whether
-// they're a bot or a guest, or their workspace or org, refuses rather than guesses. The people
-// admitted are rechecked the same way.
+// Allowing someone gives them a say over what the lead does, so allow admits them only if
+// users.info shows a full member: not a guest, a deactivated account, a bot, a workflow bot or
+// Slackbot, and in the installation's workspace or, in an Enterprise org, the installation's org.
+// The workspace a message names for its author is never the test, because an Enterprise coworker
+// can post from a sibling workspace. A response that leaves out whether they're a bot or a guest,
+// or their workspace or org, refuses rather than guesses. The people admitted are rechecked the
+// same way.
 
 /** Why the bridge won't admit someone. */
 export type AdmissionProblem =

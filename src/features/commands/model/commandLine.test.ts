@@ -72,7 +72,7 @@ const status = commandContract({
 });
 
 const reset = {
-  description: "Forget the owner and every link",
+  description: "Forget every link",
   input: z.object({ yes: z.boolean().describe("Confirm it, since it can't be undone") }).strict(),
   local: true,
 } satisfies CommandGrammar;
@@ -415,7 +415,7 @@ describe("a command the CLI runs itself", () => {
   test("shows only the options it has", () => {
     expect(presentUsage("reset", reset)).toBe(
       [
-        "Forget the owner and every link",
+        "Forget every link",
         "",
         "Usage: toy-box-slack reset --yes",
         "",

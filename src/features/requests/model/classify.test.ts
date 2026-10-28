@@ -50,10 +50,6 @@ const facts: ClassifyFacts = {
 describe("who may ask", () => {
   test("an allowlisted person who mentions the bot opens a request", () => {
     expect(classify(ask, facts)).toEqual({ kind: "request", reason: "mention" });
-    expect(classify(ask, { ...facts, role: "owner" })).toEqual({
-      kind: "request",
-      reason: "mention",
-    });
   });
 
   test("a paused or suspended link opens nothing", () => {
@@ -67,7 +63,7 @@ describe("who may ask", () => {
 
   test("bots, notices and our own posts never ask", () => {
     for (const author of ["self", "bot", "notice"] as const) {
-      expect(classify({ ...ask, author }, { ...facts, role: "owner" })).toEqual({
+      expect(classify({ ...ask, author }, facts)).toEqual({
         kind: "none",
         reason: "not_a_person",
       });

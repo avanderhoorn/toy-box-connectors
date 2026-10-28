@@ -59,7 +59,7 @@ export function classify(message: SlackMessage, facts: ClassifyFacts): Classific
   if (facts.firstSight && compareTs(message.ts, tsAt(facts.now - requestLifetimeMs)) < 0) {
     return none("too_old");
   }
-  if (facts.role !== "owner" && facts.role !== "allowed") return none("not_allowlisted");
+  if (facts.role !== "allowed") return none("not_allowlisted");
   if (isCourtesyOnly(message)) return none("courtesy");
   if (message.mentions.length > 0 && !message.mentionsBot) return none("addressed_to_others");
 

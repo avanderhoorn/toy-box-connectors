@@ -74,11 +74,7 @@ export async function confirmIdentity(
     if (failedSince !== null) {
       await recordInterruption(transaction, "auth_failed", failedSince, at, at);
     }
-    const installation: Installation = {
-      ...found,
-      ownerUserId: stored?.ownerUserId ?? null,
-      status: "active",
-    };
+    const installation: Installation = { ...found, status: "active" };
     return { kind: "confirmed", installation, workspaceUrl: owner.workspaceUrl };
   });
 }

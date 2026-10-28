@@ -1,18 +1,18 @@
 import type { ChannelFacts } from "@slackapi/model/channels";
 import type { Installation } from "@slackapi/model/installation";
+import type { SuspendReason } from "./status";
 
 // A channel's audience.
 //
 // Who can read what the lead says in Slack is part of what the owner approves. A link's channels
 // must each be a public or private channel with the bot in it, shared with no other organization,
 // and org-shared only inside the installation's own Enterprise org, with its workspaces listed.
-// Applying link or resume, or a set that moves the publish channel, keeps both channels' audiences
-// on the link as the owner approved them. Every later read is judged against that, never against
-// the read before it, so a refresh nobody compared can't absorb a widening. Narrowing never needs
-// the owner. A link that uses a channel both to watch and to publish is judged in both roles, and
-// the worse verdict holds.
+// Linking or resuming keeps both channels' audiences on the link as the owner approved them. Every
+// later read is judged against that, never against the read before it, so a refresh nobody
+// compared can't absorb a widening. Narrowing never needs the owner. A link that uses a channel
+// both to watch and to publish is judged in both roles, and the worse verdict holds.
 
-/** Who can read a channel, as an approval card shows it and a link keeps it. */
+/** Who can read a channel, as the owner approves it and a link keeps it. */
 export type Audience = {
   channelId: string;
   kind: "public" | "private";
@@ -51,7 +51,7 @@ export type Widening =
   /** A workspace the owner didn't approve can read it. */
   | "workspace_joined";
 
-/** Why a linked channel can't be used until the owner approves resume. */
+/** Why a linked channel can't be used until the owner resumes the link. */
 export type ChannelSuspendReason =
   /** Slack can't find it: it was deleted, or it's private and the bot was removed. */
   | "channel_not_found"
@@ -170,7 +170,7 @@ export function judgeLinkChannel(
 export function signalSuspends(
   approved: ApprovedAudience,
   roles: ChannelRoles,
-  reason: ChannelSuspendReason,
+  reason: SuspendReason,
 ): boolean {
   if (reason !== "channel_made_public") return true;
   return approvedIn(approved, roles).some((audience) => audience.kind === "private");

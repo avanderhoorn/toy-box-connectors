@@ -1,8 +1,7 @@
 // The bridge as launchd runs it, with or without both tokens for a fake Slack.
 
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
 import { inboxResultSchema } from "@commands/model/inbox";
 import { commandPath, commandResultSchema } from "@commands/model/protocol";
@@ -134,19 +133,3 @@ test("inbox links each request to its message in the workspace Slack names", asy
     "https://fake-workspace.slack.com/archives/C-link/p1700000100000100",
   ]);
 }, 15_000);
-
-test("a bridge removes every local copy of a file no row names before it runs", async () => {
-  let stray = "";
-  let kept = "";
-  await startLinkedBridge({
-    async prepare(_database, dataFolder) {
-      stray = join(dataFolder, "files", "F-gone", "notes.txt");
-      kept = join(dataFolder, "notes.txt");
-      mkdirSync(dirname(stray), { recursive: true });
-      for (const path of [stray, kept]) writeFileSync(path, "left behind");
-    },
-  });
-
-  expect(existsSync(stray)).toBe(false);
-  expect(existsSync(kept)).toBe(true);
-});

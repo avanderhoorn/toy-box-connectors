@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import type { Caller } from "@commands/model/callers";
-import { createStoredApproval, createStoredLink } from "@links/server/testFixtures";
+import { createStoredLink } from "@links/server/testFixtures";
 import { createStoredOutboxItem } from "@outbox/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import type { LeadPresence } from "@toybox/model/presence";
@@ -133,7 +133,7 @@ describe("reading the links in view", () => {
 });
 
 describe("reading unsettled posts", () => {
-  test("a channel's are its link's, its requests' and its approval cards'", async () => {
+  test("a channel's are its link's and its requests'", async () => {
     const database = await openTwoLinks();
     const request = await createStoredRequest(database);
     const otherRequest = await createStoredRequest(database, {
@@ -141,7 +141,6 @@ describe("reading unsettled posts", () => {
       rootTs: "1700000200.000100",
       sourceTs: "1700000200.000100",
     });
-    await createStoredApproval(database);
     await createStoredOutboxItem(database, 1, {
       request_id: request.id,
       state: "delivery_unknown",
@@ -151,15 +150,6 @@ describe("reading unsettled posts", () => {
       request_id: request.id,
       phase: "follow_up",
       state: "stray",
-    });
-    await createStoredOutboxItem(database, 3, {
-      link_id: null,
-      request_id: null,
-      request_rev: null,
-      approval_id: "approval-1",
-      kind: "card",
-      phase: "post",
-      state: "delivery_unknown",
     });
     await createStoredOutboxItem(database, 4, {
       link_id: "other",
@@ -175,10 +165,9 @@ describe("reading unsettled posts", () => {
     expect(await database.read((sql) => readUnsettledPosts(sql, "toybox-link"))).toEqual([
       { item: "o1", kind: "reply", state: "delivery_unknown" },
       { item: "o2", kind: "reply", state: "stray" },
-      { item: "o3", kind: "card", state: "delivery_unknown" },
     ]);
     const all = await database.read((sql) => readUnsettledPosts(sql, null));
-    expect(all.map(({ item }) => item)).toEqual(["o1", "o2", "o3", "o4"]);
+    expect(all.map(({ item }) => item)).toEqual(["o1", "o2", "o4"]);
   });
 });
 

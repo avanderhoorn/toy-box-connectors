@@ -5,7 +5,7 @@ import { commandContract } from "@commands/model/contract";
 import { localCommand, socketCommands } from "./cli";
 
 const wait = commandContract({
-  description: "Wait for the code to be posted in Slack",
+  description: "Wait until the bridge is ready",
   roles: ["operator"],
   scope: "bridge",
   step: true,
@@ -20,7 +20,7 @@ function resetCommand() {
   const printed: [stream: string, text: string][] = [];
   const command = localCommand(
     {
-      description: "Forget the owner and every link",
+      description: "Forget every link",
       input: z.object({ yes: z.boolean().describe("Confirm it") }).strict(),
       async run(input) {
         ran.push(input);
@@ -33,7 +33,7 @@ function resetCommand() {
 }
 
 test("offers each command the bridge serves, except the steps of another", () => {
-  const commands = socketCommands({ status: commandContracts.status, "claim-wait": wait });
+  const commands = socketCommands({ status: commandContracts.status, "status-wait": wait });
 
   expect(Object.keys(commands)).toEqual(["status"]);
   expect(commands.status.grammar).toBe(commandContracts.status);
@@ -43,7 +43,7 @@ test("offers each command the bridge serves, except the steps of another", () =>
 test("runs a command the CLI runs itself with the input its command line gives", async () => {
   const { command, ran, printed } = resetCommand();
 
-  expect(command.grammar).toMatchObject({ description: "Forget the owner and every link" });
+  expect(command.grammar).toMatchObject({ description: "Forget every link" });
   expect(command.grammar.local).toBe(true);
   expect(await command.run("reset", ["--yes"])).toBe(3);
   expect(ran).toEqual([{ yes: true }]);

@@ -169,8 +169,7 @@ describe("the bundled skill", () => {
 
   test("teaches everything the lead needs to work with Slack", () => {
     const lessons = {
-      claiming: "`toy-box-slack claim`",
-      approvals: "only the owner's click approves",
+      widening: "Never run them yourself or ask for the passphrase.",
       requests: `\`${REQUESTS_COMMAND}\``,
       revisions: "toy-box-slack reply r14 --revision 1 <<'EOF'",
       "running inbox again": `Run \`${REQUESTS_COMMAND}\` again while it says more requests are waiting.`,
@@ -212,8 +211,6 @@ describe("the bundled skill", () => {
   const planned = [
     "activity",
     "channels",
-    "claim",
-    "config",
     "file",
     "link",
     "mark-read",

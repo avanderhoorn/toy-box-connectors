@@ -124,12 +124,12 @@ function storeRequest(database: BridgeDatabase, at: number, columns: Record<stri
   });
 }
 
-type StoredWake = { kind: string; approval_id: string | null; outcome: string; at: number };
+type StoredWake = { kind: string; outcome: string; at: number };
 
 /** The wakes the scheduler recorded, oldest first. */
 function readWakes(database: BridgeDatabase): Promise<StoredWake[]> {
   return database.read(async (sql) => [
-    ...(await sql<StoredWake[]>`SELECT kind, approval_id, outcome, at FROM wakes ORDER BY id`),
+    ...(await sql<StoredWake[]>`SELECT kind, outcome, at FROM wakes ORDER BY id`),
   ]);
 }
 
@@ -426,67 +426,6 @@ test("a deleted Toy Box channel's link wakes nothing more", async () => {
   await waitFor(async () => expect(await readBlock(database)).toBe("link_inactive"));
   await Bun.sleep(TIMINGS.steerAfter + 100);
   expect(await readOutcomes(database)).toEqual([]);
-});
-
-test("a decided proposal wakes its lead once, with or without a link", async () => {
-  const { toyBox, database, channelId, routine, now, startWaking } = await linkFakeChannel();
-  const newChannelId = toyBox.addChannel({ name: "New" });
-  const newRoutine = toyBox.scheduleRoutine(newChannelId, REQUESTS_ROUTINE);
-  const approval = {
-    action: "set",
-    patch: "[]",
-    read_set: "{}",
-    owner_user_id: "U-owner",
-    card_channel_id: "C-link",
-    state: "rejected",
-    decided_by: "U-owner",
-    decided_at: now(),
-    created_by: "lead",
-    created_at: now(),
-    expires_at: now() + 60 * 60_000,
-  };
-  await database.write(
-    (transaction) => transaction`
-      INSERT INTO approvals ${transaction([
-        { ...approval, id: "approval-1", number: 1, toybox_channel_id: channelId, link_id: "link" },
-        {
-          ...approval,
-          id: "approval-2",
-          number: 2,
-          toybox_channel_id: newChannelId,
-          link_id: null,
-          action: "link",
-          patch: JSON.stringify([{ field: "requests_routine_id", after: newRoutine.id }]),
-        },
-      ])}
-    `,
-  );
-
-  await startWaking();
-
-  await waitFor(() => expect(toyBox.runs).toHaveLength(2));
-  expect(toyBox.runs.map(({ channelId, routineId }) => ({ channelId, routineId }))).toEqual(
-    expect.arrayContaining([
-      { channelId, routineId: routine.id },
-      { channelId: newChannelId, routineId: newRoutine.id },
-    ]),
-  );
-  toyBox.finishTurn(channelId);
-  toyBox.finishTurn(newChannelId);
-  await Bun.sleep(TIMINGS.steerAfter + 100);
-  expect(toyBox.runs).toHaveLength(2);
-  expect(
-    (await readWakes(database)).map(({ kind, approval_id, outcome }) => ({
-      kind,
-      approval_id,
-      outcome,
-    })),
-  ).toEqual(
-    expect.arrayContaining([
-      { kind: "setup", approval_id: "approval-1", outcome: "ran" },
-      { kind: "setup", approval_id: "approval-2", outcome: "ran" },
-    ]),
-  );
 });
 
 test("a missed publication is caught up once, and never for a run before its series", async () => {

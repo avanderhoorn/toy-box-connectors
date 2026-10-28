@@ -6,7 +6,7 @@ import { channelFacts } from "@slackapi/model/testFixtures";
 import type { ChannelFacts } from "@slackapi/model/channels";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { judgeChannelLinks } from "./audience";
-import { createStoredApproval, createStoredLink } from "./testFixtures";
+import { createStoredLink } from "./testFixtures";
 
 function judge(database: BridgeDatabase, channelId: string, facts: ChannelFacts | null) {
   return database.write((transaction) => judgeChannelLinks(transaction, channelId, facts, 60_000));
@@ -21,7 +21,6 @@ describe("judging a fresh read of a linked channel", () => {
     const database = await openTestDatabase();
     await createStoredInstallation(database);
     await createStoredLink(database);
-    await createStoredApproval(database);
 
     const verdicts = await judge(database, "C-link", channelFacts({ name: "renamed" }));
 
@@ -29,16 +28,12 @@ describe("judging a fresh read of a linked channel", () => {
     expect(await readStatuses(database)).toEqual([
       { id: "link", status: "active", status_reason: null },
     ]);
-    expect(await database.read((sql) => sql`SELECT state FROM approvals`)).toEqual([
-      { state: "pending" },
-    ]);
   });
 
-  test("a widened audience suspends the link and stales its cards", async () => {
+  test("a widened audience suspends the link", async () => {
     const database = await openTestDatabase();
     await createStoredInstallation(database);
     await createStoredLink(database);
-    await createStoredApproval(database);
 
     const verdicts = await judge(database, "C-link", channelFacts({ isPendingExtShared: true }));
 
@@ -47,9 +42,6 @@ describe("judging a fresh read of a linked channel", () => {
     );
     expect(await readStatuses(database)).toEqual([
       { id: "link", status: "suspended", status_reason: "channel_external" },
-    ]);
-    expect(await database.read((sql) => sql`SELECT state, stale_reason FROM approvals`)).toEqual([
-      { state: "stale", stale_reason: "link_changed" },
     ]);
   });
 

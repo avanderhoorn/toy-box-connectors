@@ -1,7 +1,5 @@
 import { expect, test } from "bun:test";
-import { renderCard } from "@links/model/cards";
-import { pendingApproval } from "@links/model/testFixtures";
-import { checkCardPayload, checkCardUpdatePayload, checkLeadPayload } from "./payload";
+import { checkLeadPayload } from "./payload";
 import { renderMarkdown } from "./rendering";
 
 function message(markdown = "A safe **answer** with [docs](https://example.com/a?a=1&b=2).") {
@@ -108,78 +106,4 @@ test("the largest fallback and sections fit, but each independent one-over limit
       problem: "invalid_snapshot",
     });
   }
-});
-
-function cardUpdate() {
-  const { text, blocks, parse } = renderCard(
-    pendingApproval({ state: "approved", decidedBy: "U-owner", decidedAt: 1 }),
-    {},
-  );
-  return { text, blocks, parse, ts: "1.1" };
-}
-
-test("card posts preserve trusted controls but edits snapshot only their actual arguments", () => {
-  const post = renderCard(pendingApproval(), {});
-  expect(checkCardPayload(post)).toEqual({ kind: "valid", message: post });
-  const update = cardUpdate();
-  expect(checkCardUpdatePayload(update)).toEqual({ kind: "valid", message: update });
-});
-
-test("an edit cannot restore pending approval buttons", () => {
-  const pending = renderCard(pendingApproval(), {});
-  expect(
-    checkCardUpdatePayload({
-      text: pending.text,
-      blocks: pending.blocks,
-      parse: pending.parse,
-      ts: "1.1",
-    }),
-  ).toEqual({ kind: "refused", problem: "invalid_snapshot" });
-});
-
-test("a card snapshot cannot invent another interactive action", () => {
-  const pending = renderCard(pendingApproval(), {});
-  const actions = pending.blocks.find((block) => block.type === "actions");
-  if (!actions) throw new Error("The pending fixture needs decision controls.");
-  expect(
-    checkCardPayload({
-      ...pending,
-      blocks: [
-        { ...actions, elements: [{ ...actions.elements[0], action_id: "untrusted_action" }] },
-      ],
-    }),
-  ).toEqual({ kind: "refused", problem: "invalid_snapshot" });
-});
-
-test("card snapshots require disabled unfurls and verbatim text", () => {
-  const pending = renderCard(pendingApproval(), {});
-  for (const change of [
-    { unfurl_links: true },
-    { unfurl_media: true },
-    {
-      blocks: pending.blocks.map((block) =>
-        block.type === "section" ? { ...block, text: { ...block.text, verbatim: false } } : block,
-      ),
-    },
-  ]) {
-    expect(checkCardPayload({ ...pending, ...change })).toEqual({
-      kind: "refused",
-      problem: "invalid_snapshot",
-    });
-  }
-});
-
-test.each([
-  { ts: null },
-  { ts: undefined },
-  { ts: "not-a-ts" },
-  { parse: "full" },
-  { unfurl_links: false },
-  { unfurl_media: false },
-  { metadata: {} },
-])("an edit snapshot refuses missing proof or unsupported arguments: %j", (change) => {
-  expect(checkCardUpdatePayload({ ...cardUpdate(), ...change })).toEqual({
-    kind: "refused",
-    problem: "invalid_snapshot",
-  });
 });

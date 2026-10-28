@@ -1,12 +1,11 @@
 // The inbox command.
 //
 // Inbox reads and serves the caller's link in one transaction, so what it marks read is exactly
-// what it returns. It reports each proposal that ended once, shows each request that wakes the lead
-// with every message the request holds and marks it read at that revision, lists the requests the
-// lead read and hasn't answered, reports once each one it read that was cancelled or expired, and
-// records the read, which ends the link's wake backoff and any stall. Roles, names and files are
-// read as they are now, not as they were when someone asked. With no link, it says which open
-// proposal would link the channel, if one does.
+// what it returns. It shows each request that wakes the lead with every message the request holds
+// and marks it read at that revision, lists the requests the lead read and hasn't answered, reports
+// once each one it read that was cancelled or expired, and records the read, which ends the link's
+// wake backoff and any stall. Roles, names and files are read as they are now, not as they were
+// when someone asked.
 
 import type { BridgeDatabase } from "@bridge/server/database";
 import type { CommandHandler } from "@commands/model/contract";
@@ -17,8 +16,6 @@ import {
   type InboxResult,
   type inboxContract,
   type ServedRequest,
-  type SettingChange,
-  type SettingOutcome,
   type WaitingRequest,
 } from "@commands/model/inbox";
 import { isCancelReason } from "@commands/model/requests";
@@ -29,15 +26,6 @@ import {
   withoutLeadingMention,
   type SlackNames,
 } from "@commands/model/slackText";
-import {
-  allowlistUser,
-  approvalStates,
-  isOpen,
-  type Approval,
-  type ApprovalState,
-  type PatchEntry,
-} from "@links/model/approvals";
-import { readApproval, saveApproval } from "@links/server/approvals";
 import { readChannelLink } from "@links/server/database";
 import { reportEnding, serveRequest } from "@requests/model/lifecycle";
 import {
@@ -73,7 +61,6 @@ export function inboxCommand({
   return async ({ limit }, { caller, at }) => {
     const inbox = await database.write(async (transaction) => {
       const names = nameReader(transaction);
-      const settings = await reportSettings(transaction, caller.channelId, names, at);
       const [link] = await transaction<{ id: string; slackChannelId: string }[]>`
         SELECT id, slack_channel_id AS slackChannelId FROM links
         WHERE toybox_channel_id = ${caller.channelId}
@@ -86,14 +73,10 @@ export function inboxCommand({
         ended: [],
         moreEnded: 0,
       };
-      if (!link) {
-        const linkProposal = await readLinkProposal(transaction, caller.channelId);
-        return checked({ linked: false, linkProposal, settings, ...unlinked });
-      }
+      if (!link) return checked({ linked: false, ...unlinked });
 
       const installation = await readInstallation(transaction);
       const audience: Audience = {
-        ownerUserId: installation?.ownerUserId ?? null,
         allowlist:
           (await readChannelLink(transaction, link.slackChannelId))?.allowlist ?? new Set(),
       };
@@ -117,8 +100,6 @@ export function inboxCommand({
       const { more, moreWaiting } = listed;
       return checked({
         linked: true,
-        linkProposal: null,
-        settings,
         requests,
         more,
         waiting,
@@ -137,7 +118,7 @@ function checked(inbox: InboxResult): InboxResult {
 }
 
 /** Who may ask on the caller's link now. */
-type Audience = { ownerUserId: string | null; allowlist: ReadonlySet<string> };
+type Audience = { allowlist: ReadonlySet<string> };
 
 /** Everything showing a request reads besides the request. */
 type Reading = {
@@ -147,107 +128,6 @@ type Reading = {
   botUserId: string | null;
   workspaceUrl: string | null;
 };
-
-/**
- * The caller's proposals that ended since inbox last reported them, oldest first, each now
- * reported. Ending means the owner decided it, it expired or it went stale.
- */
-async function reportSettings(
-  transaction: Bun.SQL,
-  channelId: string,
-  names: NameReader,
-  at: number,
-): Promise<SettingOutcome[]> {
-  const unreported = await transaction<{ id: string }[]>`
-    SELECT id FROM approvals
-    WHERE toybox_channel_id = ${channelId} AND reported_at IS NULL
-    ORDER BY number
-  `;
-  const settings: SettingOutcome[] = [];
-  for (const { id } of unreported) {
-    const approval = await readApproval(transaction, id);
-    if (approval === null || !hasEnded(approval)) continue;
-    settings.push(await settingOutcome(approval, names));
-    await saveApproval(transaction, { ...approval, reportedAt: at });
-  }
-  return settings;
-}
-
-function hasEnded(
-  approval: Approval,
-): approval is Approval & { state: Exclude<ApprovalState, "pending" | "approved"> } {
-  return !isOpen(approval.state);
-}
-
-const openStates = approvalStates.filter(isOpen);
-
-/**
- * The newest open proposal to link the caller's channel, which names no link until it applies. The
- * bridge refuses to propose a link for a channel that has one, and unlink voids this one.
- */
-async function readLinkProposal(transaction: Bun.SQL, channelId: string): Promise<number | null> {
-  const [proposal] = await transaction<{ number: number }[]>`
-    SELECT number FROM approvals
-    WHERE toybox_channel_id = ${channelId} AND action = 'link'
-      AND state IN ${transaction(openStates)}
-    ORDER BY number DESC LIMIT 1
-  `;
-  return proposal?.number ?? null;
-}
-
-async function settingOutcome(
-  approval: Approval & { state: SettingOutcome["state"] },
-  names: NameReader,
-): Promise<SettingOutcome> {
-  const changes: SettingChange[] = [];
-  for (const entry of approval.patch) {
-    const change = await settingChange(entry, names);
-    if (change !== null) changes.push(change);
-  }
-  return {
-    approval: approval.number,
-    action: approval.action,
-    state: approval.state,
-    owner: await names.person(approval.readSet.ownerUserId),
-    decidedBy: approval.decidedBy === null ? null : await names.person(approval.decidedBy),
-    staleReason: approval.staleReason,
-    changes,
-  };
-}
-
-/** What one patch entry changes, or null for the requests routine, which inbox doesn't show. */
-async function settingChange(
-  { field, after }: PatchEntry,
-  names: NameReader,
-): Promise<SettingChange | null> {
-  switch (field) {
-    case "slack_channel_id":
-      return typeof after === "string"
-        ? { kind: "watch", channel: await names.channel(after) }
-        : null;
-    case "publish_channel_id":
-      return typeof after === "string"
-        ? { kind: "publish", channel: await names.channel(after) }
-        : null;
-    case "request_mode":
-      return after === "mention" || after === "all" ? { kind: "requests", mode: after } : null;
-    case "observe":
-      return after === "requesters" || after === "channel"
-        ? { kind: "observe", mode: after }
-        : null;
-    case "owner_user_id":
-      return typeof after === "string"
-        ? { kind: "owner", person: await names.person(after) }
-        : null;
-    case "status":
-      return after === "active" ? { kind: "resume" } : null;
-    default: {
-      // Deny applies at once, so a proposal only ever allows someone.
-      const userId = allowlistUser(field);
-      return userId === null ? null : { kind: "allow", person: await names.person(userId) };
-    }
-  }
-}
 
 async function servedRequest(reading: Reading, request: StoredRequest): Promise<ServedRequest> {
   const { sql, names } = reading;
@@ -330,12 +210,7 @@ async function requester(
   { names, audience }: Reading,
   userId: string,
 ): Promise<ServedRequest["requester"]> {
-  const role =
-    userId === audience.ownerUserId
-      ? "owner"
-      : audience.allowlist.has(userId)
-        ? "allowed"
-        : "not_allowed";
+  const role = audience.allowlist.has(userId) ? "allowed" : "not_allowed";
   return { ...(await names.person(userId)), role };
 }
 
@@ -449,9 +324,6 @@ function nameReader(sql: Bun.SQL) {
   return {
     async person(userId: string) {
       return { userId, name: await personName(userId) };
-    },
-    async channel(channelId: string) {
-      return { id: channelId, name: await channelName(channelId) };
     },
     /** The names of the people and channels `text` refers to that the bridge has stored. */
     async in(text: string): Promise<SlackNames> {

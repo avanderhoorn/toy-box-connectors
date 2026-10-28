@@ -4,15 +4,14 @@ import type { SlackMessage } from "@slackapi/model/messages";
 import { storeMessage, type LedgerLink } from "./ledger";
 
 /**
- * The ledger's view of the link `createStoredLink` stores: U-owner owns it, U-allowed may ask, and
+ * The ledger's view of the link `createStoredLink` stores: U-owner and U-allowed may ask, and
  * others keep their text only in request threads. `audience` replaces its settings.
  */
 export function ledgerLink(audience: Partial<LinkAudience> = {}): LedgerLink {
   return {
     id: "link",
     audience: {
-      ownerUserId: "U-owner",
-      allowlist: new Set(["U-allowed"]),
+      allowlist: new Set(["U-owner", "U-allowed"]),
       observe: "requesters",
       ...audience,
     },

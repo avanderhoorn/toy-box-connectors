@@ -133,28 +133,12 @@ describe("reading Socket Mode frames", () => {
     });
   });
 
-  test("an interactive envelope keeps its payload for approvals and has no event", () => {
-    const payload = { type: "block_actions", user: { id: "UOWNER" }, actions: [] };
-    expect(
-      readFrame(
-        frame({
-          type: "interactive",
-          envelope_id: "env-3",
-          payload,
-          accepts_response_payload: true,
-        }),
-      ),
-    ).toEqual({ kind: "interactive", envelopeId: "env-3", payload });
-  });
-
   test("a frame type the bridge doesn't use is passed on with its envelope ID", () => {
-    expect(readFrame(frame({ type: "slash_commands", envelope_id: "env-4", payload: {} }))).toEqual(
-      {
-        kind: "other",
-        type: "slash_commands",
-        envelopeId: "env-4",
-      },
-    );
+    expect(readFrame(frame({ type: "interactive", envelope_id: "env-4", payload: {} }))).toEqual({
+      kind: "other",
+      type: "interactive",
+      envelopeId: "env-4",
+    });
   });
 });
 
@@ -193,10 +177,6 @@ describe("malformed frames", () => {
     expect(readFrame(frame({ type: "events_api", envelope_id: "env-7" }))).toMatchObject({
       kind: "malformed",
       envelopeId: "env-7",
-    });
-    expect(readFrame(frame({ type: "interactive" }))).toMatchObject({
-      kind: "malformed",
-      envelopeId: null,
     });
   });
 

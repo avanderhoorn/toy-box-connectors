@@ -34,7 +34,6 @@ function facts(): Facts {
       botId: "B-bot",
       botUserId: "U-bot",
       enterpriseId: null,
-      ownerUserId: "U-owner",
       status: "active",
     },
     link: {
@@ -43,7 +42,7 @@ function facts(): Facts {
       slackChannelId: "C-link",
       publishChannelId: "C-link",
       approved: { monitored: privateAudience(), publish: privateAudience() },
-      allowlist: new Set(),
+      allowlist: new Set(["U-owner"]),
     },
     request: {
       ...openRequest(
@@ -80,7 +79,7 @@ function check(value: Facts) {
 }
 
 describe("send-time posting authority", () => {
-  test("the current owner is implicit, and another requester needs their exact ID allowed", () => {
+  test("a requester needs their exact ID allowed", () => {
     const value = facts();
     expect(check(value)).toEqual({ kind: "allowed" });
     value.request.requesterUserId = "U-carol";
@@ -88,12 +87,6 @@ describe("send-time posting authority", () => {
     value.link.allowlist = new Set(["U-carol"]);
     expect(check(value)).toEqual({ kind: "allowed" });
     value.link.allowlist = new Set(["W-carol"]);
-    expect(check(value)).toEqual({ kind: "failed", error: "requester_denied" });
-  });
-
-  test("a former owner is no longer implicit after an owner handoff", () => {
-    const value = facts();
-    value.installation.ownerUserId = "U-new-owner";
     expect(check(value)).toEqual({ kind: "failed", error: "requester_denied" });
   });
 
@@ -106,13 +99,11 @@ describe("send-time posting authority", () => {
     },
   );
 
-  test("an absent or unclaimed installation holds output", () => {
+  test("an absent installation holds output", () => {
     const value = facts();
     expect(
       postingPermission(value.post, null, value.link, value.request, value.channel, now),
     ).toEqual({ kind: "waiting", reason: "installation_inactive" });
-    value.installation.ownerUserId = null;
-    expect(check(value)).toEqual({ kind: "waiting", reason: "installation_inactive" });
   });
 
   test.each(["paused", "suspended"] as const)("a link that's %s holds output", (status) => {
@@ -241,9 +232,9 @@ describe("send-time posting authority", () => {
     expect(check(value)).toEqual({ kind: "failed", error: "destination_changed" });
   });
 
-  test("cards and feedback cannot accidentally use the lead-post gate", () => {
+  test("feedback cannot accidentally use the lead-post gate", () => {
     const value = facts();
-    value.post.kind = "card";
+    value.post.kind = "reaction";
     expect(check(value)).toEqual({ kind: "failed", error: "invalid_post" });
   });
 });

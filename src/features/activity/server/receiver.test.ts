@@ -5,9 +5,7 @@ import { join } from "node:path";
 import { ACK_DEADLINE_MS, type SlackDelivery } from "@activity/model/receiver";
 import { openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
 import { createTestFolder } from "@bridge/server/testFixtures";
-import { APPROVAL_LIFETIME_MS, APPROVE_ACTION_ID } from "@links/model/approvals";
-import { startClaim } from "@links/server/claims";
-import { createStoredApproval, createStoredLink } from "@links/server/testFixtures";
+import { createStoredLink } from "@links/server/testFixtures";
 import { readFrame } from "@slackapi/model/envelopes";
 import { channelFacts, slackPerson } from "@slackapi/model/testFixtures";
 import { readChannelInfo, recordChannelAlias, writeChannelInfo } from "@slackapi/server/channels";
@@ -36,9 +34,8 @@ type ReceiverSetup = Partial<SlackReceiverOptions> & {
 };
 
 /**
- * A receiver for the installation whose bot is U0BOT, which link watches in C-link for U-owner and
- * U-allowed. It commits everything at `committedAt`, and records what it acks and how often it
- * reports a change.
+ * A receiver for the installation whose bot is U0BOT, which link watches in C-link for U-alice. It
+ * commits everything at `committedAt`, and records what it acks and how often it reports a change.
  */
 async function openReceiver({ installation = {}, ...options }: ReceiverSetup = {}) {
   const folder = createTestFolder();
@@ -51,7 +48,7 @@ async function openReceiver({ installation = {}, ...options }: ReceiverSetup = {
   await createStoredLink(database);
   await database.write(
     (transaction) => transaction`
-      INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-allowed', 0)
+      INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-alice', 0)
     `,
   );
   const filesFolder = join(folder, "files");
@@ -103,12 +100,12 @@ function eventFrame(id: string, event: object, payload: object = {}): SlackDeliv
 
 type RawMessage = { channel: string; ts: string; text: string; [field: string]: unknown };
 
-/** A message U-owner posted in C-link at `ts`. `changes` replace its fields. */
+/** A message U-alice posted in C-link at `ts`. `changes` replace its fields. */
 function message(ts: string, text: string, changes: Record<string, unknown> = {}): RawMessage {
   return {
     type: "message",
     channel: "C-link",
-    user: "U-owner",
+    user: "U-alice",
     team: "T-home",
     text,
     ts,
@@ -411,7 +408,7 @@ describe("what's taken", () => {
     await receive(eventFrame("1", ask));
     await receive(eventFrame("2", unrelated));
     await receive(eventFrame("3", { ...ask, channel: "C-elsewhere" }));
-    await receive(eventFrame("4", { type: "reaction_added", user: "U-owner" }));
+    await receive(eventFrame("4", { type: "reaction_added", user: "U-alice" }));
     await receive(delivery({ type: "slash_commands", envelope_id: "env-5", payload: {} }));
 
     expect(acks).toEqual(["env-1", "env-2", "env-3", "env-4", "env-5"]);
@@ -450,25 +447,6 @@ describe("what's taken", () => {
       { ts: helper.ts, author_role: "other", text: null },
     ]);
     expect(await database.read((sql) => sql`SELECT id FROM requests`)).toEqual([]);
-  });
-
-  test("a claim posted live is consumed and reported as a change", async () => {
-    const { database, receive, changes } = await openReceiver({
-      installation: { owner_user_id: null },
-    });
-    const started = await database.write((transaction) => startClaim(transaction, committedAt));
-    if (started.kind !== "started") throw new Error("The claim didn't start.");
-
-    await receive(eventFrame("1", message("1700000100.000100", `<@U0BOT> claim ${started.code}`)));
-
-    expect(await database.read((sql) => sql`SELECT state, posted_by FROM claims`)).toEqual([
-      { state: "posted", posted_by: "U-owner" },
-    ]);
-    expect(await readMessages(database)).toEqual([]);
-    expect(await readReceipts(database)).toEqual([
-      { key: "Ev-1", type: "message", disposition: "claim" },
-    ]);
-    expect(changes()).toBe(1);
   });
 
   test("a deleted file or message loses its local copies once the delete commits", async () => {
@@ -517,42 +495,6 @@ describe("what's taken", () => {
       { id: 1, state: "open", closed_reason: null, source_unverified_at: committedAt },
     ]);
     expect(changes()).toBe(2);
-  });
-
-  test("a click that decides an approval is taken once, and reported as a change", async () => {
-    const { database, receive, acks, changes } = await openReceiver();
-    await createStoredApproval(database, {
-      createdAt: committedAt - 1_000,
-      expiresAt: committedAt + APPROVAL_LIFETIME_MS,
-    });
-    const click = (envelopeId: string, userId: string) =>
-      delivery({
-        type: "interactive",
-        envelope_id: envelopeId,
-        payload: {
-          type: "block_actions",
-          api_app_id: "A-app",
-          team: { id: "T-home" },
-          user: { id: userId, team_id: "T-home" },
-          container: { type: "message", message_ts: "1000.000100", channel_id: "C-link" },
-          actions: [{ action_id: APPROVE_ACTION_ID, value: "approval-1" }],
-        },
-      });
-
-    await receive(click("env-stranger", "U-stranger"));
-    expect(changes()).toBe(0);
-    await receive(click("env-owner", "U-owner"));
-    await receive(click("env-owner", "U-owner"));
-
-    expect(acks).toEqual(["env-stranger", "env-owner", "env-owner"]);
-    expect(await database.read((sql) => sql`SELECT state, decided_by FROM approvals`)).toEqual([
-      { state: "approved", decided_by: "U-owner" },
-    ]);
-    expect(await readReceipts(database)).toEqual([
-      { key: "env-owner", type: "interactive", disposition: "interactive" },
-      { key: "env-stranger", type: "interactive", disposition: "interactive" },
-    ]);
-    expect(changes()).toBe(1);
   });
 
   test("while Slack rejects the bot token, only what repair can't find later is taken", async () => {
@@ -882,7 +824,7 @@ describe("a channel's lifecycle", () => {
     );
     const late = message("1700000300.000100", "still here");
     await receive(eventFrame("3", late));
-    await receive(eventFrame("4", { type: "channel_archive", channel: "C-link", user: "U-owner" }));
+    await receive(eventFrame("4", { type: "channel_archive", channel: "C-link", user: "U-alice" }));
 
     expect(await readMessages(database)).toEqual([
       stored(ask, { channel_id: "C-new" }),
@@ -937,7 +879,7 @@ describe("a channel's lifecycle", () => {
     });
 
     await receive(eventFrame("2", { type: "message", channel: "C-old", ts: "garbled" }));
-    await receive(eventFrame("3", { type: "channel_archive", channel: "C-old", user: "U-owner" }));
+    await receive(eventFrame("3", { type: "channel_archive", channel: "C-old", user: "U-alice" }));
 
     expect(await readGaps(database)).toEqual([
       { link_id: "link", channel_id: "C-link", ...eventGap, reason: "malformed" },
@@ -947,7 +889,7 @@ describe("a channel's lifecycle", () => {
     ]);
   });
 
-  test("an uninstall purges everything, removes local copies, and leaves nothing to take", async () => {
+  test("an uninstall deletes everything, removes local copies, and leaves nothing to take", async () => {
     const uninstalled: number[] = [];
     const { database, filesFolder, receive, acks, changes } = await openReceiver({
       onUninstalled: () => uninstalled.push(changes()),
@@ -965,9 +907,9 @@ describe("a channel's lifecycle", () => {
     await receive(eventFrame("4", message("1700000200.000100", "<@U0BOT> anyone?")));
 
     expect(acks).toEqual(["env-1", "env-2", "env-3", "env-4"]);
-    expect(
-      await database.read((sql) => sql`SELECT status, owner_user_id FROM installation`),
-    ).toEqual([{ status: "uninstalled", owner_user_id: null }]);
+    expect(await database.read((sql) => sql`SELECT status FROM installation`)).toEqual([
+      { status: "uninstalled" },
+    ]);
     expect(await readLinks(database)).toEqual([]);
     expect(await readMessages(database)).toEqual([]);
     expect(await readReceipts(database)).toEqual([]);
@@ -988,7 +930,7 @@ describe("Slack's own sequences", () => {
     const before = await readUpdates(database);
 
     // Slack names no thread on the delete, then sends the root as it was, minus its replies.
-    await receive(eventFrame("4", deleted(reply.ts, { ...reply, user: "U-owner" })));
+    await receive(eventFrame("4", deleted(reply.ts, { ...reply, user: "U-alice" })));
     await receive(eventFrame("5", changed(edited)));
 
     expect(await readMessages(database)).toEqual([

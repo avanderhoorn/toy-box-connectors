@@ -5,7 +5,6 @@ import {
   cancelQueuedRequestItems,
   forgetLinkOutbox,
   moveOutboxChannel,
-  queueCard,
   queueItem,
   queueReaction,
 } from "./database";
@@ -57,7 +56,6 @@ test("a channel's new ID readdresses every item for it, sent or not, and nothing
 type QueuedRow = {
   number: number;
   link_id: string | null;
-  approval_id: string | null;
   kind: string;
   phase: string | null;
   channel_id: string;
@@ -71,7 +69,7 @@ type QueuedRow = {
 function readQueued(database: BridgeDatabase) {
   return database.read(
     (sql) => sql<QueuedRow[]>`
-      SELECT number, link_id, approval_id, kind, phase, channel_id, payload, payload_hash, state,
+      SELECT number, link_id, kind, phase, channel_id, payload, payload_hash, state,
         created_at, updated_at
       FROM outbox ORDER BY number
     `,
@@ -94,7 +92,6 @@ test("a reaction is queued after every item before it, naming only its message a
   expect((await readQueued(database))[1]).toEqual({
     number: 8,
     link_id: null,
-    approval_id: null,
     kind: "reaction",
     phase: null,
     channel_id: "D-owner",
@@ -169,41 +166,6 @@ test.each([
   expect(await readQueued(database)).toHaveLength(2);
 });
 
-test("a card update supersedes the approval's queued updates, but not its post or others' updates", async () => {
-  const database = await openTestDatabase();
-  const card = { approvalId: "approval", linkId: "link", channelId: "C-link" };
-  await database.write(async (transaction) => {
-    await queueCard(transaction, { ...card, phase: "post" }, 1_000);
-    await queueCard(transaction, { ...card, phase: "update" }, 2_000);
-    await queueCard(transaction, { ...card, approvalId: "other", phase: "update" }, 3_000);
-  });
-
-  await database.write((transaction) =>
-    queueCard(transaction, { ...card, phase: "update" }, 4_000),
-  );
-
-  expect(
-    (await readQueued(database)).map(({ number, approval_id, phase, state, updated_at }) => ({
-      number,
-      approval_id,
-      phase,
-      state,
-      updated_at,
-    })),
-  ).toEqual([
-    { number: 1, approval_id: "approval", phase: "post", state: "queued", updated_at: 1_000 },
-    { number: 2, approval_id: "approval", phase: "update", state: "superseded", updated_at: 4_000 },
-    { number: 3, approval_id: "other", phase: "update", state: "queued", updated_at: 3_000 },
-    { number: 4, approval_id: "approval", phase: "update", state: "queued", updated_at: 4_000 },
-  ]);
-  expect((await readQueued(database))[0]).toMatchObject({
-    link_id: "link",
-    kind: "card",
-    channel_id: "C-link",
-    payload: "{}",
-  });
-});
-
 test("an item is queued with every column it names, and comes back as its ID and number", async () => {
   const database = await openTestDatabase();
   await createStoredOutboxItem(database, 3);
@@ -231,7 +193,6 @@ test("an item is queued with every column it names, and comes back as its ID and
     number: 4,
     link_id: "link",
     request_id: 14,
-    approval_id: null,
     request_rev: 2,
     kind: "reply",
     phase: "final",
@@ -490,16 +451,4 @@ test("a post that landed where it wasn't meant to stays, with one more withdrawa
     thread_ts: "1700000100.000100",
     created_at: 60_000,
   });
-});
-
-test("a link's cards and their withdrawals are left for their approvals to let go", async () => {
-  const database = await openTestDatabase();
-  const card = { kind: "card", approval_id: "approval-1", request_id: null, request_rev: null };
-  await storeItem(database, 1, { ...card, phase: "post", state: "stray", slack_ts: "1000.000100" });
-  await storeItem(database, 2, { ...card, phase: "update" });
-  await storeSaying(database, 3, { target: "item-1" }, { kind: "retract", state: "failed" });
-
-  await forgetLink(database);
-
-  expect((await readItems(database)).map((item) => item.number)).toEqual([1, 2, 3]);
 });

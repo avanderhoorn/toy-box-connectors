@@ -204,13 +204,13 @@ describe("telling the operator what to do", () => {
     expect(
       refusalProblem({ reason: "mismatch", field: "botUserId", stored: "U-bot", found: "U-new" }),
     ).toBe(
-      "SLACK_BOT_TOKEN belongs to bot user U-new, but the bridge was set up with bot user U-bot. Put back the tokens it was set up with and restart the bridge, or stop the bridge and run `toy-box-slack reset --yes` to start over with these.",
+      "SLACK_BOT_TOKEN belongs to bot user U-new, but the bridge was set up with bot user U-bot. Put back the tokens it was set up with and restart the bridge, or stop the bridge and delete `bridge.db`, with any `-wal` and `-shm` files beside it, from the data folder to start over with these.",
     );
   });
 
-  test("a change of org says why it takes a reset", () => {
+  test("a change of org says why it takes starting over", () => {
     expect(refusalProblem({ reason: "moved_org", stored: null, found: "E-org" })).toBe(
-      "The workspace joined Enterprise org E-org since the bridge was set up, so the people it admitted were checked against the old org. To set it up again, stop the bridge and run `toy-box-slack reset --yes`.",
+      "The workspace joined Enterprise org E-org since the bridge was set up, so the people it admitted were checked against the old org. To set it up again, stop the bridge and delete `bridge.db`, with any `-wal` and `-shm` files beside it, from the data folder.",
     );
     expect(refusalProblem({ reason: "moved_org", stored: "E-org", found: null })).toStartWith(
       "The workspace left Enterprise org E-org since",
@@ -236,7 +236,7 @@ describe("telling the operator what to do", () => {
       { reason: "org_wide" },
       { reason: "not_bot" },
     ] as const) {
-      expect(refusalProblem(refusal)).toMatch(/(restart the bridge|reset --yes`)\.$/);
+      expect(refusalProblem(refusal)).toMatch(/(restart the bridge|from the data folder)\.$/);
     }
     expect(refusalProblem({ reason: "uninstalled" })).toContain("reinstall the app");
     expect(refusalProblem({ reason: "rotating", tokens: ["SLACK_APP_TOKEN"] })).toStartWith(

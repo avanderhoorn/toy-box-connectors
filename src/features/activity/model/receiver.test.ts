@@ -34,8 +34,7 @@ const deliveries = {
     appId: "A-app",
     minute: 1700000040,
   },
-  interactive: { kind: "interactive", envelopeId: "env-3", payload: {} },
-  other: { kind: "other", type: "slash_commands", envelopeId: "env-4" },
+  other: { kind: "other", type: "interactive", envelopeId: "env-4" },
   malformed: {
     kind: "malformed",
     envelopeId: "env-5",
@@ -54,7 +53,6 @@ describe("receipts", () => {
   test("a receipt is keyed by what a redelivery repeats, and an event by its ID", () => {
     expect(receiptKey(deliveries.event)).toBe("Ev1");
     expect(receiptKey({ ...deliveries.event, envelopeId: "env-redelivered" })).toBe("Ev1");
-    expect(receiptKey(deliveries.interactive)).toBe("env-3");
     expect(receiptKey(deliveries.other)).toBe("env-4");
     expect(receiptKey(deliveries.malformed)).toBe("env-5");
     expect(receiptKey(deliveries.unreadable)).toBeNull();
@@ -70,8 +68,7 @@ describe("receipts", () => {
   test("a receipt names its event's type, or its frame's", () => {
     expect(receiptType(deliveries.event)).toBe("member_joined_channel");
     expect(receiptType(deliveries.rateLimited)).toBe("app_rate_limited");
-    expect(receiptType(deliveries.interactive)).toBe("interactive");
-    expect(receiptType(deliveries.other)).toBe("slash_commands");
+    expect(receiptType(deliveries.other)).toBe("interactive");
     expect(receiptType(deliveries.malformed)).toBe("unknown");
   });
 });

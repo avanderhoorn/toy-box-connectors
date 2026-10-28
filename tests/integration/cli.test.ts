@@ -258,7 +258,7 @@ Usage: toy-box-slack <command> [options]
 
 Commands:
   status         Show Slack's connection and the health of each link
-  inbox          Read new and changed Slack requests, and how the owner decided your proposals
+  inbox          Read new and changed Slack requests
   hold           Stop reminders about a request while you wait for the owner to decide
   dismiss        Close a request that needs no answer, without replying in Slack
   routines       Show the routines to register in Toy Box, with their prompts
@@ -281,7 +281,7 @@ Options:
   ],
   [
     ["inbox", "--help"],
-    `Read new and changed Slack requests, and how the owner decided your proposals
+    `Read new and changed Slack requests
 
 Usage: toy-box-slack inbox [options]
 

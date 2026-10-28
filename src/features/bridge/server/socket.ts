@@ -24,7 +24,7 @@ export type CommandSocketOptions = {
   grace?: number;
   /**
    * How long a call may wait for its answer before the socket drops it. Bun's own default of 10
-   * seconds would drop a slow command, such as claim's wait, while the CLI still waits for it.
+   * seconds would drop a slow command while the CLI still waits for it.
    */
   idleTimeout?: number;
 };

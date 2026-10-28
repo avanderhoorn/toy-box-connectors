@@ -7,7 +7,7 @@ import { channelFacts } from "@slackapi/model/testFixtures";
 import { readChannelInfo, writeChannelInfo } from "@slackapi/server/channels";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { changeChannelId, recordUninstall, suspendChannelLinks } from "./lifecycle";
-import { countRows, createStoredApproval, createStoredLink, fillEveryTable } from "./testFixtures";
+import { countRows, createStoredLink, fillEveryTable } from "./testFixtures";
 
 type LinkRow = {
   id: string;
@@ -113,25 +113,11 @@ describe("a lifecycle signal about a linked channel", () => {
 });
 
 describe("a channel's new ID", () => {
-  test("moves every link, card, claim and outbox item to it, and suspends the links using it", async () => {
+  test("moves every link and outbox item to it, and suspends the links using it", async () => {
     const database = await openTestDatabase();
     await createStoredLink(database);
     await createStoredLink(database, "publishes", { publish_channel_id: "C-link" });
     await createStoredLink(database, "elsewhere");
-    await createStoredApproval(database);
-    await createStoredApproval(database, {
-      id: "elsewhere-card",
-      number: 2,
-      linkId: "elsewhere",
-      toyboxChannelId: "toybox-elsewhere",
-    });
-    await database.write(
-      (transaction) => transaction`
-        INSERT INTO claims (code_hash, state, created_at, expires_at, posted_by, posted_channel_id,
-          posted_ts, posted_at, decided_at)
-        VALUES ('hash', 'confirmed', 0, 600_000, 'U-owner', 'C-link', '1000.000200', 0, 0)
-      `,
-    );
     await createStoredOutboxItem(database, 1);
     await storeChannelInfo(database, "C-link");
     await storeChannelInfo(database, "C-new");
@@ -166,24 +152,9 @@ describe("a channel's new ID", () => {
     ]);
     expect(
       await database.read(
-        (sql) => sql`SELECT id, card_channel_id, state FROM approvals ORDER BY number`,
-      ),
-    ).toEqual([
-      { id: "approval-1", card_channel_id: "C-new", state: "stale" },
-      { id: "elsewhere-card", card_channel_id: "C-new", state: "pending" },
-    ]);
-    expect(await database.read((sql) => sql`SELECT posted_channel_id FROM claims`)).toEqual([
-      { posted_channel_id: "C-new" },
-    ]);
-    // The card update the suspension queued goes to where the card is now.
-    expect(
-      await database.read(
         (sql) => sql`SELECT number, kind, channel_id FROM outbox ORDER BY number`,
       ),
-    ).toEqual([
-      { number: 1, kind: "reply", channel_id: "C-new" },
-      { number: 2, kind: "card", channel_id: "C-new" },
-    ]);
+    ).toEqual([{ number: 1, kind: "reply", channel_id: "C-new" }]);
     expect(await database.read((sql) => sql`SELECT * FROM channel_aliases`)).toEqual([
       { old_id: "C-link", channel_id: "C-new", changed_at: 60_000 },
     ]);
@@ -206,36 +177,28 @@ describe("a channel's new ID", () => {
 });
 
 describe("uninstalling the app", () => {
-  test("purges every row but the installation and the record of the purge", async () => {
+  test("deletes every row but the installation, and the files it kept", async () => {
     const database = await openTestDatabase();
     await fillEveryTable(database);
     const before = await countRows(database);
     expect(Object.keys(before).filter((table) => before[table] === 0)).toEqual([]);
 
-    const copies = await database.write((transaction) => recordUninstall(transaction, 60_000));
+    const copies = await database.write(recordUninstall);
 
     expect(copies).toEqual(["F-kept/report.pdf"]);
     const after = await countRows(database);
-    expect(Object.keys(after).filter((table) => after[table] !== 0)).toEqual([
-      "audit",
-      "installation",
+    expect(Object.keys(after).filter((table) => after[table] !== 0)).toEqual(["installation"]);
+    expect(await database.read((sql) => sql`SELECT team_id, status FROM installation`)).toEqual([
+      { team_id: "T-home", status: "uninstalled" },
     ]);
-    expect(
-      await database.read((sql) => sql`SELECT at, actor, action, link_id, subject FROM audit`),
-    ).toEqual([
-      { at: 60_000, actor: "bridge", action: "purge", link_id: null, subject: "uninstalled" },
-    ]);
-    expect(
-      await database.read((sql) => sql`SELECT team_id, owner_user_id, status FROM installation`),
-    ).toEqual([{ team_id: "T-home", owner_user_id: null, status: "uninstalled" }]);
   });
 
-  test("an installation whose token was already failing is purged too", async () => {
+  test("an installation whose token was already failing is emptied too", async () => {
     const database = await openTestDatabase();
     await createStoredInstallation(database, { status: "auth_failed" });
     await createStoredLink(database);
 
-    await database.write((transaction) => recordUninstall(transaction, 60_000));
+    await database.write(recordUninstall);
 
     expect(await readLinks(database)).toEqual([]);
     expect(await database.read((sql) => sql`SELECT status FROM installation`)).toEqual([
@@ -243,16 +206,15 @@ describe("uninstalling the app", () => {
     ]);
   });
 
-  test("a second signal purges nothing more and records nothing more", async () => {
+  test("a second signal deletes nothing it didn't already", async () => {
     const database = await openTestDatabase();
     await createStoredInstallation(database);
-    await database.write((transaction) => recordUninstall(transaction, 60_000));
+    await database.write(recordUninstall);
+    await createStoredLink(database);
 
-    const copies = await database.write((transaction) => recordUninstall(transaction, 120_000));
+    const copies = await database.write(recordUninstall);
 
     expect(copies).toEqual([]);
-    expect(await database.read((sql) => sql`SELECT at, action FROM audit`)).toEqual([
-      { at: 60_000, action: "purge" },
-    ]);
+    expect((await readLinks(database)).map((link) => link.id)).toEqual(["link"]);
   });
 });

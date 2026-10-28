@@ -16,8 +16,7 @@ import {
 const link: LedgerLink = {
   id: "link",
   audience: {
-    ownerUserId: "U-owner",
-    allowlist: new Set(["U-allowed"]),
+    allowlist: new Set(["U-owner", "U-allowed"]),
     observe: "requesters",
   },
 };
@@ -133,7 +132,7 @@ test("a message stored again is still one row with one change", async () => {
     {
       ts: ask.ts,
       eligible: 1,
-      author_role: "owner",
+      author_role: "allowed",
       text: ask.text,
       files: "[]",
       hashed: 1,
@@ -203,7 +202,7 @@ test("a delete drops the content for good, and every later version is ignored", 
     {
       ts: ask.ts,
       eligible: 1,
-      author_role: "owner",
+      author_role: "allowed",
       text: null,
       files: null,
       hashed: 0,
@@ -264,7 +263,7 @@ test("a withdrawal empties a message for good, and keeps who wrote it", async ()
     {
       ts: ask.ts,
       eligible: 1,
-      author_role: "owner",
+      author_role: "allowed",
       text: null,
       files: null,
       hashed: 0,

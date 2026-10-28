@@ -7,8 +7,6 @@ import { compareTs, type SlackTs } from "@slackapi/model/ts";
 
 /** The author's standing in a link, fixed when a message is stored. */
 export type AuthorRole =
-  /** The installation's owner, who is always allowed. */
-  | "owner"
   /** A person on the link's allowlist. */
   | "allowed"
   /** Any other person. */
@@ -23,7 +21,6 @@ export type AuthorRole =
  * the workspace a message names for its author.
  */
 export type LinkAudience = {
-  ownerUserId: string | null;
   allowlist: ReadonlySet<string>;
   observe: "requesters" | "channel";
 };
@@ -37,7 +34,6 @@ export function authorRole(message: SlackMessage, audience: LinkAudience): Autho
       return "other";
     case "person": {
       if (message.userId === null) return "observed";
-      if (message.userId === audience.ownerUserId) return "owner";
       return audience.allowlist.has(message.userId) ? "allowed" : "observed";
     }
   }
@@ -56,7 +52,6 @@ export function keepsText(
   switch (role) {
     case "other":
       return false;
-    case "owner":
     case "allowed":
     case "self":
       return true;

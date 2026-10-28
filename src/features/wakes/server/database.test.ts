@@ -36,34 +36,9 @@ function storeRequest(database: BridgeDatabase, columns: Record<string, unknown>
   });
 }
 
-async function storeApproval(database: BridgeDatabase, columns: Record<string, unknown> = {}) {
-  stored += 1;
-  const row = {
-    id: `approval-${stored}`,
-    number: stored,
-    toybox_channel_id: "toybox-link",
-    link_id: "link",
-    action: "set",
-    patch: "[]",
-    read_set: "{}",
-    owner_user_id: "U-owner",
-    card_channel_id: "C-link",
-    state: "rejected",
-    decided_by: "U-owner",
-    decided_at: minutes(-10),
-    created_by: "lead",
-    created_at: minutes(-20),
-    expires_at: minutes(40),
-    ...columns,
-  };
-  await database.write((transaction) => transaction`INSERT INTO approvals ${transaction(row)}`);
-  return row.id;
-}
-
 function storeWake(database: BridgeDatabase, columns: Record<string, unknown> = {}) {
   const row = {
     link_id: "link",
-    approval_id: null,
     at: minutes(-1),
     kind: "requests",
     publication_key: null,
@@ -79,7 +54,6 @@ function wake(changes: Partial<Wake> = {}): Wake {
     channelId: "toybox-link",
     routineId: "routine-link",
     linkId: "link",
-    approvalId: null,
     catchUp: null,
     reminded: [],
     ...changes,
@@ -131,7 +105,6 @@ describe("reading a pass", () => {
           wakesSinceInbox: 0,
           retryAt: null,
           requests: [],
-          setup: [],
           catchUps: [],
         },
         {
@@ -146,11 +119,9 @@ describe("reading a pass", () => {
           wakesSinceInbox: 2,
           retryAt: seconds(15),
           requests: [],
-          setup: [],
           catchUps: [],
         },
       ],
-      proposals: [],
       ran: [],
     });
   });
@@ -210,153 +181,11 @@ describe("reading a pass", () => {
   test("counts the runs that landed in the budget's last hour", async () => {
     const database = await openTestDatabase();
     await createStoredLink(database);
-    const approval = await storeApproval(database, { reported_at: minutes(-1) });
     await storeWake(database, { at: minutes(-61) });
     await storeWake(database, { at: minutes(-59) });
     await storeWake(database, { at: minutes(-2), outcome: "failed" });
-    await storeWake(database, {
-      link_id: null,
-      approval_id: approval,
-      kind: "setup",
-      at: minutes(-5),
-    });
 
-    expect((await readPass(database)).ran).toEqual([
-      { linkId: "link", at: minutes(-59) },
-      { linkId: null, at: minutes(-5) },
-    ]);
-  });
-
-  describe("setup debts", () => {
-    test("are the clicked proposals that are final and unreported, oldest first", async () => {
-      const database = await openTestDatabase();
-      await createStoredLink(database);
-      const rejected = await storeApproval(database, { decided_at: minutes(-8) });
-      const applied = await storeApproval(database, {
-        state: "applied",
-        decided_at: minutes(-12),
-        applied_at: minutes(-9),
-      });
-      const stale = await storeApproval(database, {
-        state: "stale",
-        stale_reason: "the owner changed",
-        decided_at: minutes(-7),
-      });
-      await storeApproval(database, { state: "approved" });
-      await storeApproval(database, { state: "pending", decided_by: null, decided_at: null });
-      await storeApproval(database, { state: "expired", decided_by: null, decided_at: null });
-      await storeApproval(database, { reported_at: minutes(-1) });
-
-      const [link] = (await readPass(database)).links;
-      expect(link!.setup).toEqual([
-        { approvalId: applied, decidedAt: minutes(-9) },
-        { approvalId: rejected, decidedAt: minutes(-8) },
-        { approvalId: stale, decidedAt: minutes(-7) },
-      ]);
-    });
-
-    test("are settled by a run that landed, not one that failed", async () => {
-      const database = await openTestDatabase();
-      await createStoredLink(database);
-      const told = await storeApproval(database);
-      const untold = await storeApproval(database);
-      await storeWake(database, { kind: "setup", approval_id: told, outcome: "ran" });
-      await storeWake(database, { kind: "setup", approval_id: untold, outcome: "failed" });
-
-      const [link] = (await readPass(database)).links;
-      expect(link!.setup.map(({ approvalId }) => approvalId)).toEqual([untold]);
-    });
-
-    test("for a channel without a link run the routine the proposal named", async () => {
-      const database = await openTestDatabase();
-      const proposed = (routineId: string) =>
-        JSON.stringify([
-          { field: "slack_channel_id", after: "C-new" },
-          { field: "requests_routine_id", after: routineId },
-        ]);
-      const columns = { toybox_channel_id: "toybox-new", link_id: null, action: "link" };
-      const failing = await storeApproval(database, {
-        ...columns,
-        patch: proposed("routine-new"),
-        decided_at: minutes(-6),
-      });
-      const fresh = await storeApproval(database, {
-        ...columns,
-        toybox_channel_id: "toybox-fresh",
-        patch: proposed("routine-fresh"),
-        decided_at: minutes(-3),
-      });
-      const missing = await storeApproval(database, { ...columns, patch: proposed("gone") });
-      const refused = await storeApproval(database, { ...columns, patch: proposed("refused") });
-      await storeApproval(database, { ...columns, action: "allow" });
-      for (const at of [minutes(-5), minutes(-4)]) {
-        await storeWake(database, {
-          link_id: null,
-          approval_id: failing,
-          kind: "setup",
-          at,
-          outcome: "failed",
-        });
-      }
-      for (const [approval_id, outcome] of [
-        [missing, "missing"],
-        [refused, "refused"],
-      ]) {
-        await storeWake(database, { link_id: null, approval_id, kind: "setup", outcome });
-      }
-
-      expect((await readPass(database)).proposals).toEqual([
-        {
-          approvalId: failing,
-          channelId: "toybox-new",
-          routineId: "routine-new",
-          failures: { count: 2, lastAt: minutes(-4) },
-        },
-        {
-          approvalId: fresh,
-          channelId: "toybox-fresh",
-          routineId: "routine-fresh",
-          failures: { count: 0, lastAt: null },
-        },
-      ]);
-    });
-
-    test("belong to the link that now holds the proposal's channel", async () => {
-      const database = await openTestDatabase();
-      const approval = await storeApproval(database, {
-        link_id: null,
-        action: "link",
-        state: "applied",
-        applied_at: minutes(-9),
-        patch: JSON.stringify([{ field: "requests_routine_id", after: "routine-link" }]),
-      });
-      await createStoredLink(database);
-
-      const pass = await readPass(database);
-      expect(pass.links[0]!.setup).toEqual([{ approvalId: approval, decidedAt: minutes(-9) }]);
-      expect(pass.proposals).toEqual([]);
-    });
-
-    test("of a link that's gone wake nobody, even once its channel is linked again", async () => {
-      const database = await openTestDatabase();
-      // Unlink keeps the approval that made the link until Slack settles its card.
-      await storeApproval(database, {
-        link_id: "unlinked",
-        action: "link",
-        state: "applied",
-        applied_at: minutes(-9),
-        patch: JSON.stringify([
-          { field: "slack_channel_id", after: "C-old" },
-          { field: "requests_routine_id", after: "routine-old" },
-        ]),
-      });
-      expect((await readPass(database)).proposals).toEqual([]);
-
-      await createStoredLink(database);
-      const pass = await readPass(database);
-      expect(pass.links[0]!.setup).toEqual([]);
-      expect(pass.proposals).toEqual([]);
-    });
+    expect((await readPass(database)).ran).toEqual([{ linkId: "link", at: minutes(-59) }]);
   });
 
   describe("catch-ups", () => {
@@ -581,17 +410,13 @@ describe("recording a wake", () => {
     ).toEqual([{ kind: "catch_up", publication_key: "standup/1", outcome: "ran" }]);
   });
 
-  test("a run for no link, or for a link removed meanwhile, keeps only the log", async () => {
+  test("a run for a link removed meanwhile keeps only the log", async () => {
     const database = await openTestDatabase();
-    const approval = await storeApproval(database, { link_id: null });
-    const proposal = wake({ kind: "setup", linkId: null, approvalId: approval });
 
-    await database.write((transaction) => recordWake(transaction, proposal, "failed", now));
     await database.write((transaction) => recordWake(transaction, wake(), "ran", now));
     await database.write((transaction) => recordWake(transaction, wake(), "refused", now));
 
     expect(await database.read((sql) => sql`SELECT link_id, kind, outcome FROM wakes`)).toEqual([
-      { link_id: null, kind: "setup", outcome: "failed" },
       { link_id: "link", kind: "requests", outcome: "ran" },
       { link_id: "link", kind: "requests", outcome: "refused" },
     ]);

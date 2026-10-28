@@ -9,7 +9,6 @@ import {
 } from "@activity/model/receiver";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
 import type { BridgeDatabase } from "@bridge/server/database";
-import { takeClick } from "@links/server/approvals";
 import { changeChannelId, recordUninstall, suspendChannelLinks } from "@links/server/lifecycle";
 import { moveRequestChannel } from "@requests/server/database";
 import type { EventCallback, MalformedHint } from "@slackapi/model/envelopes";
@@ -65,7 +64,7 @@ export interface SlackReceiver {
 export type SlackReceiverOptions = {
   /** The folder local copies of files are kept in. */
   filesFolder: string;
-  /** Called after a delivery changed a link, request, approval or channel's stored facts. */
+  /** Called after a delivery changed a link, request or channel's stored facts. */
   onChange?: () => void;
   /** Called after a delivery uninstalled the app and the purge committed. */
   onUninstalled?: () => void;
@@ -204,8 +203,6 @@ async function takeDelivery(
       return takeEvent(transaction, delivery.callback, context);
     case "rate_limited":
       return takeRateLimit(transaction, delivery, context);
-    case "interactive":
-      return takeInteraction(transaction, delivery.payload, context.now);
     case "malformed":
       return takeMalformed(transaction, delivery.hint, delivery.issues, "a frame", context);
     case "other":
@@ -266,13 +263,10 @@ async function takeMessage(
 
   const ingested = await ingestMessageEvent(transaction, event, {
     botUserId: installation.botUserId,
-    ownerUserId: installation.ownerUserId,
     late: false,
     now,
   });
   switch (ingested.kind) {
-    case "claim":
-      return { disposition: "claim", changed: ingested.changed };
     case "unlinked":
       return { disposition: "unlinked" };
     case "stored":
@@ -318,7 +312,7 @@ async function takeLifecycle(
       return {
         disposition: "applied",
         changed: true,
-        purged: await recordUninstall(transaction, now),
+        purged: await recordUninstall(transaction),
         uninstalled: true,
       };
   }
@@ -339,15 +333,6 @@ async function takeRateLimit(
     rateLimitedGap(delivery.minute, linkedAtTs),
   );
   return { disposition: "rate_limited" };
-}
-
-async function takeInteraction(
-  transaction: Bun.SQL,
-  payload: unknown,
-  now: number,
-): Promise<Taken> {
-  const click = await takeClick(transaction, payload, now);
-  return { disposition: "interactive", changed: click.kind === "settled" };
 }
 
 /**

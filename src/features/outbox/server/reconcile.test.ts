@@ -2,9 +2,8 @@ import { expect, onTestFinished, test } from "bun:test";
 import { gapOverlapMs } from "@activity/model/gaps";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import { readApproval, staleApprovals } from "@links/server/approvals";
 import { changeChannelId } from "@links/server/lifecycle";
-import { createStoredApproval, createStoredLink } from "@links/server/testFixtures";
+import { createStoredLink } from "@links/server/testFixtures";
 import { readRequest, saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { channelFacts } from "@slackapi/model/testFixtures";
@@ -17,7 +16,6 @@ import { outboxMetadata } from "../model/delivery";
 import { renderMarkdown } from "../model/rendering";
 import { settleRequestAnswer } from "./answers";
 import {
-  queueCard,
   queueItem,
   readDueReconciliations,
   readOutboxItem,
@@ -35,7 +33,7 @@ async function setup({
   misplaced = false,
   slackClockOffsetMs = 0,
 }: {
-  kind?: "reply" | "publication" | "card";
+  kind?: "reply" | "publication";
   pageSize?: number;
   misplaced?: boolean;
   slackClockOffsetMs?: number;
@@ -52,6 +50,9 @@ async function setup({
   slack.addChannel({ id: "C-link", is_private: true, members: ["U-owner", "U-bot"] });
   await createStoredInstallation(database);
   await createStoredLink(database);
+  await database.write(
+    (tx) => tx`INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-owner', 0)`,
+  );
   await database.write((tx) => writeChannelInfo(tx, channelFacts(), now()));
   const request = await createStoredRequest(database, {
     state: "answering",
@@ -71,41 +72,25 @@ async function setup({
     now,
   });
   const delivery = createPostDelivery(database, bot, { now });
-  const approval =
-    kind === "card"
-      ? await createStoredApproval(database, {
-          card: { channelId: "C-link", ts: null },
-          createdAt: at,
-          expiresAt: at + 3_600_000,
-        })
-      : null;
   const rendered = renderMarkdown("A safe **answer**.");
   if (rendered.kind !== "rendered") throw new Error("The fixture needs rendered output.");
-  await database.write(async (tx) => {
-    if (approval) {
-      await queueCard(
-        tx,
-        { approvalId: approval.id, linkId: "link", channelId: "C-link", phase: "post" },
-        now(),
-      );
-    } else {
-      await queueItem(
-        tx,
-        {
-          kind,
-          phase: kind === "reply" ? "final" : null,
-          linkId: "link",
-          requestId: kind === "reply" ? request.id : null,
-          requestRev: kind === "reply" ? request.inputRev : null,
-          publicationKey: kind === "publication" ? "release-notes/2023-11-14" : null,
-          channelId: "C-link",
-          threadTs: kind === "reply" ? request.rootTs : null,
-          payload: { ...rendered.message },
-        },
-        now(),
-      );
-    }
-  });
+  await database.write((tx) =>
+    queueItem(
+      tx,
+      {
+        kind,
+        phase: kind === "reply" ? "final" : null,
+        linkId: "link",
+        requestId: kind === "reply" ? request.id : null,
+        requestRev: kind === "reply" ? request.inputRev : null,
+        publicationKey: kind === "publication" ? "release-notes/2023-11-14" : null,
+        channelId: "C-link",
+        threadTs: kind === "reply" ? request.rootTs : null,
+        payload: { ...rendered.message },
+      },
+      now(),
+    ),
+  );
   const item = (await database.read((sql) => readReadyOutbox(sql, now())))[0]!;
   at += 2_000;
   slack.failNext(
@@ -129,7 +114,6 @@ async function setup({
     item,
     read,
     request,
-    approval,
     posted,
     now,
     reconcile: reconciliation.reconcile,
@@ -370,37 +354,6 @@ test("a redacted old-message edit keeps its target ts and can be proved after un
   expect(await database.read((sql) => readOutboxItem(sql, queued.id))).toBeNull();
 });
 
-test("an unlinked unknown card post survives until its stale update can follow proved delivery", async () => {
-  const { database, slack, item, approval, delivery, now, read, reconcile } = await setup({
-    kind: "card",
-  });
-  if (!approval) throw new Error("The fixture needs an approval.");
-  await database.write(async (tx) => {
-    await staleApprovals(tx, [approval], "link_changed", now());
-    await tx`DELETE FROM links`;
-  });
-  const update = (await database.read((sql) => readReadyOutbox(sql, now()))).find(
-    (row) => row.kind === "card" && row.phase === "update",
-  );
-  if (!update) throw new Error("The card needs its stale update.");
-  expect(await delivery.updateCard(update.id)).toMatchObject({
-    kind: "waiting",
-    reason: "card_not_posted",
-  });
-  expect(await reconcile(item.id)).toMatchObject({ kind: "settled", item: { state: "sent" } });
-  expect(await read()).not.toBeNull();
-  expect(await delivery.updateCard(update.id)).toMatchObject({
-    kind: "settled",
-    item: { state: "sent" },
-  });
-  expect(await database.read((sql) => sql`SELECT id FROM outbox WHERE link_id = 'link'`)).toEqual(
-    [],
-  );
-  expect(await database.read((sql) => readApproval(sql, approval.id))).toBeNull();
-  const card = slack.getMessages("C-link").find((message) => message.bot_id === "B-bot");
-  expect(card?.blocks).not.toContainEqual(expect.objectContaining({ type: "actions" }));
-});
-
 test("a complete thread read finds exact metadata, commits proof and answers in one transaction", async () => {
   const { database, slack, item, request, reconcile } = await setup({ pageSize: 1 });
   slack.emptyNextPage("conversations.replies");
@@ -449,7 +402,7 @@ test("publication roots page from the attempt rather than the queue time", async
   expect(stored!.attemptStartedAt).toBe(now() - 10_000);
 });
 
-test.each(["publication", "card", "misplaced_reply"] as const)(
+test.each(["publication", "misplaced_reply"] as const)(
   "clock overlap finds a %s stamped one second before this Mac's attempt time",
   async (kind) => {
     const { slack, item, posted, read, reconcile } = await setup({
@@ -488,58 +441,6 @@ test("a lost reply response correlated at root cancels its request before withdr
   expect(
     await database.read((sql) => sql`SELECT payload FROM outbox WHERE kind = 'retract'`),
   ).toEqual([{ payload: JSON.stringify({ target: item.id }) }]);
-});
-
-test("initial card proof records its ts and releases the current decision update", async () => {
-  const { database, slack, item, approval, posted, reconcile, delivery, now } = await setup({
-    kind: "card",
-  });
-  await database.write((tx) => staleApprovals(tx, [approval!], "link_changed", now()));
-  const update = (await database.read((sql) => readReadyOutbox(sql, now())))[0]!;
-  expect(await delivery.updateCard(update.id)).toMatchObject({
-    kind: "waiting",
-    reason: "card_not_posted",
-  });
-  expect(await reconcile(item.id)).toMatchObject({ kind: "settled", item: { state: "sent" } });
-  expect(await database.read((sql) => readApproval(sql, approval!.id))).toMatchObject({
-    state: "stale",
-    card: { ts: posted.ts },
-  });
-  expect(await delivery.updateCard(update.id)).toMatchObject({
-    kind: "settled",
-    item: { state: "sent" },
-  });
-  expect(slack.calls.map((call) => call.method)).toEqual([
-    "chat.postMessage",
-    "conversations.history",
-    "chat.update",
-  ]);
-});
-
-test("an unknown card edit reads its older known target and never repeats the update", async () => {
-  const { database, slack, item, approval, posted, reconcile, delivery, now, advance } =
-    await setup({ kind: "card" });
-  await reconcile(item.id);
-  const current = await database.read((sql) => readApproval(sql, approval!.id));
-  await database.write((tx) => staleApprovals(tx, [current!], "link_changed", now()));
-  const update = (await database.read((sql) => readReadyOutbox(sql, now())))[0]!;
-  slack.failNext("chat.update", { lostResponse: true });
-  expect(await delivery.updateCard(update.id)).toMatchObject({
-    kind: "settled",
-    item: { state: "delivery_unknown" },
-  });
-  advance(10_000);
-  expect(await reconcile(update.id)).toMatchObject({
-    kind: "settled",
-    item: { state: "sent", slackTs: posted.ts, evidence: "metadata" },
-  });
-  expect(slack.calls.at(-1)!.args).toMatchObject({
-    oldest: posted.ts,
-    latest: posted.ts,
-    inclusive: "true",
-    include_all_metadata: "true",
-  });
-  expect(slack.calls.filter((call) => call.method === "chat.update")).toHaveLength(1);
 });
 
 test("read proof cannot answer an unverified source until repair settles it", async () => {
@@ -757,81 +658,6 @@ test("a resumed channel hold can complete a miss and keep the original deadline"
     kind: "settled",
     item: { state: "delivery_unknown", reconcilePass: 1, nextAttemptAt: now() + 50_000 },
   });
-});
-
-test("a proposal card's current link owns its channel hold and its exhausted reads", async () => {
-  const { database, slack, item, posted, reconcile, now, advance, read } = await setup({
-    kind: "card",
-  });
-  await database.write((tx) => tx`UPDATE outbox SET link_id = NULL WHERE id = ${item.id}`);
-  slack.failNext("conversations.history", { error: "not_in_channel" });
-  expect(await reconcile(item.id)).toEqual({
-    kind: "waiting",
-    reason: "not_in_channel",
-    until: null,
-  });
-  expect(await database.read((sql) => readApproval(sql, item.approvalId!))).toMatchObject({
-    linkId: "link",
-  });
-  expect(await database.read((sql) => readDueReconciliations(sql, now()))).toEqual([]);
-  const calls = slack.calls.length;
-  expect(await reconcile(item.id)).toEqual({
-    kind: "waiting",
-    reason: "link_inactive",
-    until: null,
-  });
-  expect(slack.calls).toHaveLength(calls);
-  await database.write((tx) => tx`UPDATE links SET status = 'active', status_reason = NULL`);
-  expect(
-    (await database.read((sql) => readDueReconciliations(sql, now()))).map((row) => row.id),
-  ).toEqual([item.id]);
-  slack.deleteMessage("C-link", posted.ts);
-  for (const [pass, wait] of [
-    [1, 0],
-    [2, 50_000],
-    [3, 60_000],
-  ] as const) {
-    advance(wait);
-    expect(await reconcile(item.id)).toMatchObject({
-      kind: "settled",
-      item: { state: "delivery_unknown", reconcilePass: pass },
-    });
-  }
-  expect(await read()).toMatchObject({ state: "delivery_unknown", reconcilePass: 3, linkId: null });
-  expect(await database.read((sql) => readDueReconciliations(sql, now()))).toEqual([]);
-  expect(await reconcile(item.id)).toEqual({
-    kind: "waiting",
-    reason: "reconciliation_stopped",
-    until: null,
-  });
-  expect(await read()).not.toBeNull();
-});
-
-test("a refused linkless card stops automatic reads until manual resolution", async () => {
-  const { database, slack, item, reconcile, now, advance, read } = await setup({ kind: "card" });
-  await database.write(async (tx) => {
-    await tx`UPDATE outbox SET link_id = NULL WHERE id = ${item.id}`;
-    await tx`UPDATE approvals SET link_id = NULL WHERE id = ${item.approvalId}`;
-  });
-  slack.failNext("conversations.history", { error: "channel_not_found" });
-  expect(await reconcile(item.id)).toEqual({
-    kind: "waiting",
-    reason: "channel_not_found",
-    until: null,
-  });
-  expect(await read()).toMatchObject({
-    state: "delivery_unknown",
-    nextAttemptAt: null,
-    reconcilePass: 0,
-  });
-  advance(86_400_000);
-  expect(await reconcile(item.id)).toEqual({
-    kind: "waiting",
-    reason: "channel_unavailable",
-    until: null,
-  });
-  expect(await database.read((sql) => readDueReconciliations(sql, now()))).toEqual([]);
-  expect(slack.calls).toHaveLength(2);
 });
 
 test("a missing thread still finds its stray root without calling the read complete", async () => {

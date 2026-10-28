@@ -35,7 +35,7 @@ const postSchema = z
   .object({
     item: z.string().describe("The outbox item, such as o31"),
     kind: z
-      .enum(["reply", "progress", "publication", "retract", "card", "reaction", "status"])
+      .enum(["reply", "progress", "publication", "retract", "reaction", "status"])
       .describe("What the post was"),
   })
   .strict();
@@ -213,7 +213,7 @@ export function describeSuspension(reason: string | null): Suspension {
   }
   return {
     because: reason === null ? "for a reason it didn't record" : `(${reason})`,
-    fix: "Fix what suspended it, then run `toy-box-slack resume` for the owner to approve in Slack.",
+    fix: "Fix what suspended it, then have the owner run `toy-box-slack resume`.",
   };
 }
 
@@ -222,7 +222,6 @@ const postNouns: Record<BannerPost["kind"], [string, string]> = {
   progress: ["progress note", "progress notes"],
   publication: ["publication", "publications"],
   retract: ["retraction", "retractions"],
-  card: ["approval card", "approval cards"],
   reaction: ["reaction", "reactions"],
   status: ["thread status", "thread statuses"],
 };

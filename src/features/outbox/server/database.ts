@@ -6,18 +6,16 @@ import { nextReconciliation, type OutboxMethod } from "../model/delivery";
 // Stored outbox items.
 //
 // An item is queued in the transaction of whatever owes it and numbered after every item there has
-// ever been, so a purge never lets a number the lead still holds name another item. Cards and
-// reactions carry only what names their target, because a card is rendered from its approval when
-// it's sent.
+// ever been, so a purge never lets a number the lead still holds name another item. Reactions
+// carry only what names their target.
 
 /** An item to queue, by column. Queueing assigns its ID, number, payload hash and state. */
 export type NewOutboxItem = {
-  kind: "reply" | "progress" | "publication" | "retract" | "card" | "reaction" | "status";
-  /** final or follow_up for a reply, post or update for a card. */
+  kind: "reply" | "progress" | "publication" | "retract" | "reaction" | "status";
+  /** final or follow_up for a reply. */
   phase?: string | null;
   linkId?: string | null;
   requestId?: number | null;
-  approvalId?: string | null;
   /** The request revision a reply answers. */
   requestRev?: number | null;
   channelId: string;
@@ -48,10 +46,9 @@ export type OutboxItem = {
   number: number;
   linkId: string | null;
   requestId: number | null;
-  approvalId: string | null;
   requestRev: number | null;
   kind: NewOutboxItem["kind"];
-  phase: "final" | "follow_up" | "post" | "update" | null;
+  phase: "final" | "follow_up" | null;
   channelId: string;
   threadTs: SlackTs | null;
   publicationKey: string | null;
@@ -77,7 +74,6 @@ type OutboxRow = {
   number: number;
   link_id: string | null;
   request_id: number | null;
-  approval_id: string | null;
   request_rev: number | null;
   kind: NewOutboxItem["kind"];
   phase: OutboxItem["phase"];
@@ -126,7 +122,7 @@ export type OutboxSettlement =
 
 type AttemptStart =
   | { kind: "started"; item: OutboxItem }
-  | { kind: "waiting"; reason: "retry_after" | "card_in_flight" | "post_slot"; until: number }
+  | { kind: "waiting"; reason: "retry_after" | "post_slot"; until: number }
   | { kind: "changed" };
 
 /** Reads an opaque ID, or the number shown to the lead as o31. */
@@ -149,30 +145,26 @@ export async function readReadyOutbox(sql: Bun.SQL, now: number): Promise<Outbox
       AND (next_attempt_at IS NULL OR next_attempt_at <= ${now})
     ORDER BY CASE kind
       WHEN 'retract' THEN 0 WHEN 'reply' THEN 1 WHEN 'publication' THEN 1
-      WHEN 'card' THEN 2 WHEN 'progress' THEN 3 ELSE 4 END, number
+      WHEN 'progress' THEN 2 ELSE 3 END, number
   `;
   return rows.map(outboxItem);
 }
 
 /** Exhausted linked work stops; stopped orphans remain due for local disposal. */
 export async function readDueReconciliations(sql: Bun.SQL, now: number): Promise<OutboxItem[]> {
-  const rows = await sql<
-    (OutboxRow & { owner_link_id: string | null; link_status: string | null })[]
-  >`
-    SELECT outbox.*, COALESCE(approvals.link_id, outbox.link_id) AS owner_link_id,
-      links.status AS link_status FROM outbox
-    LEFT JOIN approvals ON outbox.kind = 'card' AND approvals.id = outbox.approval_id
-    LEFT JOIN links ON links.id = COALESCE(approvals.link_id, outbox.link_id)
-    WHERE outbox.state = 'delivery_unknown' AND outbox.kind IN ('reply', 'progress', 'publication', 'card')
+  const rows = await sql<(OutboxRow & { link_status: string | null })[]>`
+    SELECT outbox.*, links.status AS link_status FROM outbox
+    LEFT JOIN links ON links.id = outbox.link_id
+    WHERE outbox.state = 'delivery_unknown' AND outbox.kind IN ('reply', 'progress', 'publication')
       AND (outbox.reconcile_pass < 3
-      OR (owner_link_id IS NOT NULL AND links.id IS NULL))
+      OR (outbox.link_id IS NOT NULL AND links.id IS NULL))
       AND (outbox.next_attempt_at IS NULL OR outbox.next_attempt_at <= ${now})
     ORDER BY outbox.next_attempt_at, outbox.number
   `;
   return rows
     .filter(
       (row) =>
-        (row.owner_link_id !== null && row.link_status === null) ||
+        (row.link_id !== null && row.link_status === null) ||
         (channelFailureReason(row.error ?? "") !== null
           ? row.link_status === "active"
           : row.next_attempt_at !== null),
@@ -207,13 +199,6 @@ export async function startOutboxAttempt(
   if (current.nextAttemptAt !== null && current.nextAttemptAt > now) {
     return { kind: "waiting", reason: "retry_after", until: current.nextAttemptAt };
   }
-  if (current.kind === "card" && current.approvalId !== null) {
-    const [sending] = await transaction<{ id: string }[]>`
-      SELECT id FROM outbox WHERE kind = 'card' AND approval_id = ${current.approvalId}
-        AND state = 'sending' AND id <> ${current.id} LIMIT 1
-    `;
-    if (sending) return { kind: "waiting", reason: "card_in_flight", until: now + 1_000 };
-  }
   if (postsMessage) {
     const [slot] = await transaction<{ next_post_at: number }[]>`
       SELECT next_post_at FROM outbox_channels WHERE channel_id = ${current.channelId}
@@ -225,7 +210,7 @@ export async function startOutboxAttempt(
   const encoded = encodePayload(payload);
   if (
     current.attempts > 0 &&
-    ((current.kind !== "card" && encoded.hash !== current.payloadHash) ||
+    (encoded.hash !== current.payloadHash ||
       (current.attemptMethod !== null && current.attemptMethod !== method))
   ) {
     throw new Error(`Retry o${current.number} with its stored method and payload snapshot.`);
@@ -250,7 +235,7 @@ export async function startOutboxAttempt(
 
 /**
  * Settles only the attempt the caller observed. A late response or reconciliation cannot
- * overwrite a manual resolution, a newer attempt, or a card's newer payload snapshot.
+ * overwrite a manual resolution or a newer attempt.
  * A locally skipped call undoes its tentative attempt increment.
  */
 export async function settleOutboxAttempt(
@@ -287,16 +272,6 @@ export async function settleOutboxAttempt(
       AND state IN ('sending', 'delivery_unknown', 'stray')
     RETURNING *
   `;
-  if (
-    row &&
-    item.kind === "card" &&
-    item.phase === "update" &&
-    item.approvalId !== null &&
-    (outcome.state === "queued" || outcome.state === "delivery_unknown")
-  ) {
-    await supersedeCardUpdates(transaction, item.approvalId, now);
-    return readOutboxItem(transaction, item.id);
-  }
   return row ? outboxItem(row) : null;
 }
 
@@ -332,7 +307,6 @@ export async function recoverOutboxAttempts(transaction: Bun.SQL, now: number): 
     WHERE state = 'sending'
     RETURNING id
   `;
-  await supersedeCardUpdates(transaction, null, now);
   return rows.map((row) => row.id);
 }
 
@@ -356,7 +330,7 @@ export async function cancelQueuedRequestItems(
   `;
 }
 
-/** Queues adding or removing a reaction, such as ✅ on a claim the terminal confirmed. */
+/** Queues adding or removing a reaction, such as 👀 on a request the lead is reading. */
 export async function queueReaction(
   transaction: Bun.SQL,
   reaction: {
@@ -394,20 +368,6 @@ export async function queueReaction(
   );
 }
 
-/**
- * Queues posting an approval's card, or updating it to show the approval as it is when the update
- * is sent. A new update supersedes older queued or unknown updates. A sending one finishes first,
- * and its settlement or startup recovery supersedes it if its result still needs another attempt.
- */
-export async function queueCard(
-  transaction: Bun.SQL,
-  card: { approvalId: string; linkId: string | null; channelId: string; phase: "post" | "update" },
-  now: number,
-): Promise<void> {
-  await queueItem(transaction, { kind: "card", ...card, payload: {} }, now);
-  if (card.phase === "update") await supersedeCardUpdates(transaction, card.approvalId, now);
-}
-
 /** Repeated cleanup or an explicit retract shares the outstanding operation for this item. */
 export async function queueRetraction(
   transaction: Bun.SQL,
@@ -440,75 +400,13 @@ export async function queueRetraction(
 }
 
 /**
- * Lets go of the card of an approval whose link is gone once nothing more can happen to it, and
- * returns whether it did, after which the approval can go too. `posted` says the card reached
- * Slack. A queued post goes at once, so no card reaches Slack for a link that's gone, and so do
- * the updates of a card no post can still bring there. While any other row of the card, or a
- * withdrawal of one, is queued or unsettled, everything stays, so delivery can still render and
- * settle it. Then it all goes, but for a post that reached the wrong place, which stays redacted
- * with one more withdrawal queued.
- */
-export async function forgetCard(
-  transaction: Bun.SQL,
-  approvalId: string,
-  posted: boolean,
-  now: number,
-): Promise<boolean> {
-  await transaction`
-    DELETE FROM outbox
-    WHERE kind = 'card' AND phase = 'post' AND approval_id = ${approvalId} AND state = 'queued'
-  `;
-  if (!posted) {
-    await transaction`
-      DELETE FROM outbox
-      WHERE kind = 'card' AND phase = 'update' AND approval_id = ${approvalId} AND state = 'queued'
-        AND NOT EXISTS (
-          SELECT 1 FROM outbox AS post WHERE post.kind = 'card' AND post.phase = 'post'
-            AND post.approval_id = ${approvalId} AND post.state IN ('sending', 'delivery_unknown')
-        )
-    `;
-  }
-  const [unsettled] = await transaction`
-    SELECT id FROM outbox
-    WHERE state IN ('queued', 'sending', 'delivery_unknown') AND (
-      (kind = 'card' AND approval_id = ${approvalId})
-      OR (kind = 'retract' AND json_extract(payload, '$.target') IN (
-        SELECT id FROM outbox WHERE kind = 'card' AND approval_id = ${approvalId}
-      ))
-    )
-    LIMIT 1
-  `;
-  if (unsettled) return false;
-  const strays = await transaction<OutboxRow[]>`
-    SELECT * FROM outbox
-    WHERE kind = 'card' AND phase = 'post' AND approval_id = ${approvalId} AND state = 'stray'
-    ORDER BY number
-  `;
-  await transaction`
-    DELETE FROM outbox WHERE kind = 'retract' AND json_extract(payload, '$.target') IN (
-      SELECT id FROM outbox WHERE kind = 'card' AND approval_id = ${approvalId}
-    )
-  `;
-  await transaction`
-    DELETE FROM outbox WHERE kind = 'card' AND approval_id = ${approvalId}
-      AND NOT (phase = 'post' AND state = 'stray')
-  `;
-  for (const stray of strays.map(outboxItem)) {
-    await redact(transaction, stray);
-    await queueRetraction(transaction, stray, now);
-  }
-  return true;
-}
-
-/**
  * Lets go of what the outbox holds for a link that's being removed, but for what Slack may still
  * settle and the removals the bridge owes. A post, edit, reaction, status or withdrawal already
  * sending or of unknown delivery stays until it settles. So do a queued 👀 removal, a queued status
  * clear, and a queued withdrawal of a post that reached Slack, with that post. A post that reached
  * the wrong place stays too, with one more withdrawal queued unless one is pending already. What
  * stays keeps no text, and an edit only the ts of the message it changes. Everything else goes, so
- * nothing else queued for the link reaches Slack. Cards and their withdrawals follow their
- * approvals, which `forgetUnlinkedApprovals` lets go.
+ * nothing else queued for the link reaches Slack.
  */
 export async function forgetLinkOutbox(
   transaction: Bun.SQL,
@@ -516,11 +414,7 @@ export async function forgetLinkOutbox(
   now: number,
 ): Promise<void> {
   const rows = await transaction<OutboxRow[]>`
-    SELECT * FROM outbox WHERE link_id = ${linkId} AND kind <> 'card'
-      AND NOT (kind = 'retract' AND json_extract(payload, '$.target') IN (
-        SELECT id FROM outbox WHERE kind = 'card'
-      ))
-    ORDER BY number
+    SELECT * FROM outbox WHERE link_id = ${linkId} ORDER BY number
   `;
   const items = new Map(rows.map((row) => [row.id, outboxItem(row)]));
   const kept = new Set([...items.values()].filter((item) => owed(item, items)));
@@ -568,22 +462,6 @@ async function redact(transaction: Bun.SQL, item: OutboxItem): Promise<void> {
 
 const REDACTED = { redacted: "unlink" };
 
-async function supersedeCardUpdates(
-  transaction: Bun.SQL,
-  approvalId: string | null,
-  now: number,
-): Promise<void> {
-  await transaction`
-    UPDATE outbox SET state = 'superseded', next_attempt_at = NULL, updated_at = ${now}
-    WHERE kind = 'card' AND phase = 'update' AND state IN ('queued', 'delivery_unknown')
-      AND (${approvalId} IS NULL OR approval_id = ${approvalId})
-      AND EXISTS (
-        SELECT 1 FROM outbox AS newer WHERE newer.kind = 'card' AND newer.phase = 'update'
-          AND newer.approval_id = outbox.approval_id AND newer.number > outbox.number
-      )
-  `;
-}
-
 /**
  * Readdresses every item for a channel, sent or not, to the new ID Slack gave it, so a post still
  * to send, an update or a retraction reaches the channel.
@@ -614,12 +492,12 @@ export async function queueItem(
   const payload = encodePayload(item.payload);
   const [queued] = await transaction<{ id: string; number: number }[]>`
     INSERT INTO outbox (
-      id, link_id, request_id, approval_id, request_rev, kind, phase, channel_id,
+      id, link_id, request_id, request_rev, kind, phase, channel_id,
       thread_ts, publication_key, replaces, payload, payload_hash, state, created_at, updated_at
     )
     VALUES (
       ${crypto.randomUUID()},
-      ${item.linkId ?? null}, ${item.requestId ?? null}, ${item.approvalId ?? null},
+      ${item.linkId ?? null}, ${item.requestId ?? null},
       ${item.requestRev ?? null}, ${item.kind}, ${item.phase ?? null}, ${item.channelId},
       ${item.threadTs ?? null}, ${item.publicationKey ?? null}, ${item.replaces ?? null},
       ${payload.text}, ${payload.hash}, 'queued', ${now}, ${now}
@@ -645,7 +523,6 @@ function outboxItem(row: OutboxRow): OutboxItem {
     number: row.number,
     linkId: row.link_id,
     requestId: row.request_id,
-    approvalId: row.approval_id,
     requestRev: row.request_rev,
     kind: row.kind,
     phase: row.phase,

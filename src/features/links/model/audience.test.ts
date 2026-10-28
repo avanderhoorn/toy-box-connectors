@@ -8,8 +8,8 @@ import {
   signalSuspends,
   widening,
   type Audience,
-  type ChannelSuspendReason,
 } from "./audience";
+import type { SuspendReason } from "./status";
 
 const home = { teamId: "T-home", enterpriseId: null };
 const orgHome = { teamId: "T-home", enterpriseId: "E-org" };
@@ -316,7 +316,8 @@ describe("whether a lifecycle signal suspends a link", () => {
   };
 
   test("every signal but a channel made public suspends, whatever was approved", () => {
-    const reasons: ChannelSuspendReason[] = [
+    const reasons: SuspendReason[] = [
+      "channel_id_changed",
       "channel_not_found",
       "channel_archived",
       "bot_removed",

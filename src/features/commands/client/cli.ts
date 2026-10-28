@@ -50,7 +50,7 @@ export function socketCommands(
 }
 
 /**
- * A command the CLI runs itself, such as claim, with a grammar like a contract's but without
+ * A command the CLI runs itself, such as serve, with a grammar like a contract's but without
  * --channel and --json. Its command line is read as strictly as any other, and `run` gets the
  * input its schema parsed.
  */

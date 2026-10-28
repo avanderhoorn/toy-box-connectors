@@ -16,7 +16,7 @@ import type { RoutineRunOutcome, RoutineState } from "@toybox/model";
 import type { WakeBudget } from "./budget";
 
 /** Why the bridge ran a routine. */
-export type WakeKind = "requests" | "reminder" | "setup" | "catch_up";
+export type WakeKind = "requests" | "reminder" | "catch_up";
 
 /** What Toy Box did with a wake. */
 export type WakeOutcome = RoutineRunOutcome;
@@ -48,17 +48,13 @@ export type WakeRequest = {
   remindedAt: number | null;
 };
 
-/** A proposal the owner decided whose outcome the lead hasn't heard. */
-export type SetupDebt = { approvalId: string; decidedAt: number };
-
-/** What the wake policy reads of a link. `setup` is oldest first. */
+/** What the wake policy reads of a link. */
 export type LinkWakeState = {
   id: string;
   status: "active" | "paused" | "suspended";
   routineState: RoutineState;
   blockedReason: "refused" | null;
   requests: readonly WakeRequest[];
-  setup: readonly SetupDebt[];
   lastWakeAt: number | null;
   lastInboxAt: number | null;
   wakesSinceInbox: number;
@@ -114,10 +110,7 @@ export const defaultWakeTimings: WakeTimings = {
 /** After this many wakes without an inbox call, a link stalls until something new arrives. */
 export const STALL_AFTER = 4;
 
-/**
- * Whether to run a link's requests routine now. Setup debts skip the debounce, backoff and stall,
- * because the lead learns a decision's outcome only from inbox and one landed run settles them.
- */
+/** Whether to run a link's requests routine now. */
 export function decideWake(
   now: number,
   link: LinkWakeState,
@@ -130,23 +123,19 @@ export function decideWake(
 
   const pending = link.requests.filter(isPending);
   const reminderAt = toyBox.leadWorking ? null : nextReminderAt(link.requests, timings);
-  if (!pending.length && reminderAt === null && !link.setup.length) return { kind: "idle" };
+  if (!pending.length && reminderAt === null) return { kind: "idle" };
   if (!toyBox.connected || toyBox.provider === null) return { kind: "wait", until: "toy_box" };
   if (link.retryAt !== null && link.retryAt > now) return { kind: "wait", until: link.retryAt };
 
-  const setup = setupDue(now, link, toyBox.leadWorking, timings);
   const requests = requestsDue(now, link, pending, reminderAt, toyBox.leadWorking, timings);
-  const candidates = [setup, typeof requests === "number" ? requests : null].filter(
-    (due) => due !== null,
-  );
-  if (!candidates.length) {
+  if (typeof requests !== "number") {
     return requests === "stalled" ? { kind: "stalled" } : { kind: "wait", until: "lead_idle" };
   }
-  const due = Math.max(Math.min(...candidates), budget.nextSlot(link.id, now));
+  const due = Math.max(requests, budget.nextSlot(link.id, now));
   if (due > now) return { kind: "wait", until: due };
   return {
     kind: "wake",
-    reason: link.setup.length ? "setup" : pending.length ? "requests" : "reminder",
+    reason: pending.length ? "requests" : "reminder",
   };
 }
 
@@ -173,23 +162,6 @@ export function decideCatchUp(
   if (toyBox.leadWorking) return { kind: "wait", until: "lead_idle" };
   const slot = budget.nextSlot(link.id, now);
   return slot > now ? { kind: "wait", until: slot } : { kind: "wake", reason: "catch_up" };
-}
-
-/**
- * Whether to run the requests routine a proposal named, for a proposal that never became a link.
- * Only a failed run retries. A missing routine or a refusal ends the debt, because there's no link
- * to block and retrying can't help.
- */
-export function decideProposalWake(
-  now: number,
-  failures: { count: number; lastAt: number | null },
-  budget: WakeBudget,
-  timings = defaultWakeTimings,
-): WakeDecision {
-  const retryAt =
-    failures.lastAt === null ? now : failures.lastAt + retryDelay(failures.count, timings);
-  const due = Math.max(now, retryAt, budget.nextSlot(null, now));
-  return due > now ? { kind: "wait", until: due } : { kind: "wake", reason: "setup" };
 }
 
 /**
@@ -243,19 +215,6 @@ export function catchUpPeriod(
  */
 export function isPending({ state, attention }: Pick<WakeRequest, "state" | "attention">): boolean {
   return state === "open" || attention === "updated" || attention === "reply_failed";
-}
-
-function setupDue(
-  now: number,
-  link: LinkWakeState,
-  leadWorking: boolean,
-  timings: WakeTimings,
-): number | null {
-  const [oldest] = link.setup;
-  if (!oldest) return null;
-  if (!leadWorking) return now;
-  // A turn the bridge just started reads inbox soon enough, so only steer into one that's older.
-  return Math.max(oldest.decidedAt, link.lastWakeAt ?? -Infinity) + timings.steerAfter;
 }
 
 function requestsDue(

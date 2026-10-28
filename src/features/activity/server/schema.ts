@@ -14,7 +14,7 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       subtype      TEXT,
       eligible     INTEGER NOT NULL CHECK (eligible IN (0, 1)),
       author_role  TEXT NOT NULL
-        CHECK (author_role IN ('owner', 'allowed', 'observed', 'self', 'other')),
+        CHECK (author_role IN ('allowed', 'observed', 'self', 'other')),
       text         TEXT,
       files        TEXT CHECK (files IS NULL OR json_valid(files)),
       content_hash TEXT,
@@ -25,7 +25,7 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       version      TEXT NOT NULL,
       updated_seq  INTEGER NOT NULL CHECK (typeof(updated_seq) = 'integer' AND updated_seq > 0),
       PRIMARY KEY (channel_id, ts),
-      CHECK (eligible = (author_role IN ('owner', 'allowed', 'observed'))),
+      CHECK (eligible = (author_role IN ('allowed', 'observed'))),
       CHECK ((content_hash IS NULL) = (text IS NULL)),
       CHECK ((files IS NULL) = (text IS NULL)),
       CHECK (text IS NOT NULL OR mentions_bot = 0),

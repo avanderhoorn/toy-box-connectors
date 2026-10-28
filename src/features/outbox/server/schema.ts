@@ -9,11 +9,10 @@ export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
       number          INTEGER NOT NULL UNIQUE CHECK (typeof(number) = 'integer' AND number > 0),
       link_id         TEXT,
       request_id      INTEGER,
-      approval_id     TEXT,
       request_rev     INTEGER
         CHECK (request_rev IS NULL OR (typeof(request_rev) = 'integer' AND request_rev >= 1)),
       kind            TEXT NOT NULL CHECK (kind IN (
-        'reply', 'progress', 'publication', 'retract', 'card', 'reaction', 'status'
+        'reply', 'progress', 'publication', 'retract', 'reaction', 'status'
       )),
       phase           TEXT,
       channel_id      TEXT NOT NULL,
@@ -35,9 +34,8 @@ export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
       evidence        TEXT CHECK (evidence IS NULL OR evidence IN ('response', 'metadata', 'text')),
       created_at      INTEGER NOT NULL,
       updated_at      INTEGER NOT NULL,
-      CHECK ((phase IS NOT NULL) = (kind IN ('reply', 'card'))),
+      CHECK ((phase IS NOT NULL) = (kind = 'reply')),
       CHECK (kind <> 'reply' OR phase IN ('final', 'follow_up')),
-      CHECK (kind <> 'card' OR phase IN ('post', 'update')),
       CHECK (kind <> 'reply' OR (request_id IS NOT NULL AND request_rev IS NOT NULL)),
       CHECK (kind <> 'publication' OR (link_id IS NOT NULL AND publication_key IS NOT NULL))
     );
@@ -53,7 +51,7 @@ export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
   `);
 }
 
-/** Version 2: preserve each attempt's clock and a post slot shared by every link and card. */
+/** Version 2: preserve each attempt's clock and a post slot shared by every link. */
 export async function addOutboxDeliverySchema(db: Bun.SQL): Promise<void> {
   await db.unsafe(`
     ALTER TABLE outbox ADD COLUMN attempt_method TEXT CHECK (attempt_method IS NULL OR attempt_method IN (
@@ -96,7 +94,7 @@ export async function addOutboxDeliverySchema(db: Bun.SQL): Promise<void> {
  */
 export async function numberOutboxItemsOnce(db: Bun.SQL): Promise<void> {
   const columns = `
-    id, number, link_id, request_id, approval_id, request_rev, kind, phase, channel_id, thread_ts,
+    id, number, link_id, request_id, request_rev, kind, phase, channel_id, thread_ts,
     publication_key, replaces, payload, payload_hash, metadata_ok, state, attempts,
     next_attempt_at, slack_ts, error, evidence, created_at, updated_at, attempt_method,
     attempt_started_at, reconcile_pass
@@ -107,11 +105,10 @@ export async function numberOutboxItemsOnce(db: Bun.SQL): Promise<void> {
       number             INTEGER PRIMARY KEY AUTOINCREMENT CHECK (number > 0),
       link_id            TEXT,
       request_id         INTEGER,
-      approval_id        TEXT,
       request_rev        INTEGER
         CHECK (request_rev IS NULL OR (typeof(request_rev) = 'integer' AND request_rev >= 1)),
       kind               TEXT NOT NULL CHECK (kind IN (
-        'reply', 'progress', 'publication', 'retract', 'card', 'reaction', 'status'
+        'reply', 'progress', 'publication', 'retract', 'reaction', 'status'
       )),
       phase              TEXT,
       channel_id         TEXT NOT NULL,
@@ -143,9 +140,8 @@ export async function numberOutboxItemsOnce(db: Bun.SQL): Promise<void> {
         )),
       reconcile_pass     INTEGER NOT NULL DEFAULT 0
         CHECK (typeof(reconcile_pass) = 'integer' AND reconcile_pass BETWEEN 0 AND 3),
-      CHECK ((phase IS NOT NULL) = (kind IN ('reply', 'card'))),
+      CHECK ((phase IS NOT NULL) = (kind = 'reply')),
       CHECK (kind <> 'reply' OR phase IN ('final', 'follow_up')),
-      CHECK (kind <> 'card' OR phase IN ('post', 'update')),
       CHECK (kind <> 'reply' OR (request_id IS NOT NULL AND request_rev IS NOT NULL)),
       CHECK (kind <> 'publication' OR (link_id IS NOT NULL AND publication_key IS NOT NULL))
     );

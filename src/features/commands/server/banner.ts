@@ -94,7 +94,7 @@ export async function readLinksInView(
 
 /**
  * Posts that may have reached Slack or landed outside their thread, oldest first. For one channel,
- * these are the posts of its link, its link's requests and its approval cards.
+ * these are the posts of its link and its link's requests.
  */
 export async function readUnsettledPosts(
   sql: Bun.SQL,
@@ -109,7 +109,6 @@ export async function readUnsettledPosts(
         SELECT requests.id FROM requests JOIN links ON links.id = requests.link_id
         WHERE links.toybox_channel_id = ${channelId}
       )
-      OR approval_id IN (SELECT id FROM approvals WHERE toybox_channel_id = ${channelId})
     )
     ORDER BY number
   `;

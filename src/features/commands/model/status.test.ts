@@ -66,7 +66,7 @@ describe("presenting status", () => {
       "Toy Box: http://127.0.0.1:3000",
       "",
       "## Toy Box channel release-eng and Slack channel C0RELEASE",
-      "- Link: suspended because the bot was removed from its Slack channel, so nothing new opens and posts wait. Invite the bot back to the channel, then run `toy-box-slack resume` for the owner to approve in Slack.",
+      "- Link: suspended because the bot was removed from its Slack channel, so nothing new opens and posts wait. Invite the bot back to the channel, then have the owner run `toy-box-slack resume`.",
       "- Coverage: partial, a repair couldn't finish, so some messages may be missing.",
       "- Toy Box: not following the channel's stream yet, retrying",
       "- Wakes: blocked, because the requests routine is gone. Register a new one from `toy-box-slack routines --template requests`.",
@@ -120,7 +120,7 @@ describe("presenting status", () => {
   test("still says how to resume a link suspended for a reason this version doesn't know", () => {
     const unknown = { ...healthy, status: "suspended", statusReason: "restricted_action" };
     expect(presentStatus(status([unknown] as LinkStatus[]), { at: AT })).toContain(
-      "- Link: suspended (restricted_action), so nothing new opens and posts wait. Fix what suspended it, then run `toy-box-slack resume` for the owner to approve in Slack.",
+      "- Link: suspended (restricted_action), so nothing new opens and posts wait. Fix what suspended it, then have the owner run `toy-box-slack resume`.",
     );
   });
 

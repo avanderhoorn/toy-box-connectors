@@ -12,7 +12,6 @@ import {
 } from "./ledger";
 
 const audience: LinkAudience = {
-  ownerUserId: "UOWNER",
   allowlist: new Set(["UALLOWED"]),
   observe: "requesters",
 };
@@ -37,39 +36,27 @@ const message: SlackMessage = {
 };
 
 describe("author roles", () => {
-  test("the owner and allowlisted people in our team are named, and other people observed", () => {
-    expect(authorRole({ ...message, userId: "UOWNER" }, audience)).toBe("owner");
+  test("allowlisted people are named, and other people observed", () => {
     expect(authorRole(message, audience)).toBe("allowed");
     expect(authorRole({ ...message, userId: "USOMEONE" }, audience)).toBe("observed");
   });
 
-  test("the owner is the owner even when the allowlist names them too", () => {
-    const listed = { ...audience, allowlist: new Set(["UOWNER"]) };
-    expect(authorRole({ ...message, userId: "UOWNER" }, listed)).toBe("owner");
-  });
-
   test("a person is matched by user ID, whatever workspace the message names", () => {
     expect(authorRole({ ...message, teamId: "TSIBLING" }, audience)).toBe("allowed");
-    expect(authorRole({ ...message, userId: "UOWNER", teamId: null }, audience)).toBe("owner");
-  });
-
-  test("a person without a user ID is never the owner, even before one is pinned", () => {
-    const unclaimed = { ...audience, ownerUserId: null };
-    expect(authorRole({ ...message, userId: null }, unclaimed)).toBe("observed");
+    expect(authorRole({ ...message, teamId: null }, audience)).toBe("allowed");
   });
 
   test("our bot is self, and other bots and notices are other", () => {
     expect(authorRole({ ...message, author: "self" }, audience)).toBe("self");
     expect(authorRole({ ...message, author: "bot" }, audience)).toBe("other");
-    expect(authorRole({ ...message, author: "notice", userId: "UOWNER" }, audience)).toBe("other");
+    expect(authorRole({ ...message, author: "notice" }, audience)).toBe("other");
   });
 });
 
 describe("keeping text", () => {
-  test("the owner, allowlisted people and our bot are always kept, other bots never", () => {
+  test("allowlisted people and our bot are always kept, other bots never", () => {
     for (const observe of ["requesters", "channel"] as const) {
       for (const inThread of [false, true]) {
-        expect(keepsText("owner", observe, inThread)).toBe(true);
         expect(keepsText("allowed", observe, inThread)).toBe(true);
         expect(keepsText("self", observe, inThread)).toBe(true);
         expect(keepsText("other", observe, inThread)).toBe(false);

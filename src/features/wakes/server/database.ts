@@ -1,7 +1,7 @@
 // What the wake scheduler reads and records.
 //
-// A pass reads everything it decides from in one read, so links, requests, debts and the budget
-// agree. A run's outcome is recorded with every change it makes to its link in one transaction.
+// A pass reads everything it decides from in one read, so links, requests and the budget agree.
+// A run's outcome is recorded with every change it makes to its link in one transaction.
 // Failures are counted from the wakes log, so a restart keeps a link's retry backoff.
 
 import type { RoutineRunOutcome, RoutineState } from "@toybox/model";
@@ -15,23 +15,12 @@ import {
   type WakeRequest,
 } from "@wakes/model";
 import { WAKE_BUDGET_WINDOW, type RanWake } from "@wakes/model/budget";
-import type { OwedCatchUp, ProposalDebt, ScheduledLink, Wake, WakePass } from "@wakes/model/plan";
+import type { OwedCatchUp, ScheduledLink, Wake, WakePass } from "@wakes/model/plan";
 
-type LinkRow = Omit<ScheduledLink, "requests" | "setup" | "catchUps">;
+type LinkRow = Omit<ScheduledLink, "requests" | "catchUps">;
 
 type BlockRow = Pick<LinkWakeState, "status" | "routineState" | "blockedReason"> & {
   provider: string | null;
-};
-
-type DebtRow = {
-  approvalId: string;
-  channelId: string;
-  decidedAt: number;
-  linkId: string | null;
-  routineId: string | null;
-  failures: number;
-  lastFailedAt: number | null;
-  ended: 0 | 1;
 };
 
 type SeriesRow = {
@@ -62,12 +51,6 @@ export async function readWakePass(sql: Bun.SQL, now: number): Promise<WakePass>
       ORDER BY id
     `,
   );
-  const debts = await readSetupDebts(sql);
-  const setup = groupByLink(
-    debts.flatMap(({ linkId, approvalId, decidedAt }) =>
-      linkId === null ? [] : [{ linkId, approvalId, decidedAt }],
-    ),
-  );
   const catchUps = groupByLink(await readOwedCatchUps(sql, now));
   const ran = await sql<RanWake[]>`
     SELECT link_id AS linkId, at FROM wakes
@@ -78,10 +61,8 @@ export async function readWakePass(sql: Bun.SQL, now: number): Promise<WakePass>
     links: links.map((link) => ({
       ...link,
       requests: requests.get(link.id) ?? [],
-      setup: setup.get(link.id) ?? [],
       catchUps: catchUps.get(link.id) ?? [],
     })),
-    proposals: debts.flatMap(proposalDebt),
     ran,
   };
 }
@@ -100,7 +81,6 @@ export async function recordWake(
 ): Promise<void> {
   const row = {
     link_id: wake.linkId,
-    approval_id: wake.approvalId,
     at,
     kind: wake.kind,
     publication_key: wake.catchUp?.key ?? null,
@@ -109,7 +89,7 @@ export async function recordWake(
   await transaction`INSERT INTO wakes ${transaction(row)}`;
   const linkId = wake.linkId;
   // A link removed while its run was in flight keeps only the log.
-  if (linkId === null || !(await linkExists(transaction, linkId))) return;
+  if (!(await linkExists(transaction, linkId))) return;
 
   if (outcome === "failed") {
     const retryAt = at + retryDelay(await failuresInARow(transaction, linkId), timings);
@@ -174,47 +154,6 @@ export async function readWakeBlock(sql: Bun.SQL, linkId: string): Promise<WakeB
     WHERE l.id = ${linkId}
   `;
   return link ? wakeBlock(link, link.routineState, link.provider) : "link_inactive";
-}
-
-/**
- * The decided proposals whose lead hasn't heard the outcome, oldest first. A landed run settles
- * each, so does inbox reporting it, and for a proposal without a link a missing routine or a
- * refusal ends it too. One whose link is gone is owed to nobody: unlink keeps it only until Slack
- * settles its card, and it mustn't wake a routine for that link or land on the channel's next one.
- */
-function readSetupDebts(sql: Bun.SQL): Promise<DebtRow[]> {
-  return sql<DebtRow[]>`
-    SELECT a.id AS approvalId, a.toybox_channel_id AS channelId,
-      COALESCE(a.applied_at, a.decided_at) AS decidedAt, l.id AS linkId,
-      (SELECT json_extract(field.value, '$.after') FROM json_each(a.patch) AS field
-        WHERE json_extract(field.value, '$.field') = 'requests_routine_id') AS routineId,
-      (SELECT COUNT(*) FROM wakes w WHERE w.approval_id = a.id AND w.outcome = 'failed')
-        AS failures,
-      (SELECT MAX(w.at) FROM wakes w WHERE w.approval_id = a.id AND w.outcome = 'failed')
-        AS lastFailedAt,
-      EXISTS (
-        SELECT 1 FROM wakes w WHERE w.approval_id = a.id AND w.outcome IN ('missing', 'refused')
-      ) AS ended
-    FROM approvals a LEFT JOIN links l ON l.toybox_channel_id = a.toybox_channel_id
-    WHERE a.decided_by IS NOT NULL AND a.reported_at IS NULL
-      AND a.state IN ('applied', 'rejected', 'expired', 'stale')
-      AND (a.link_id IS NULL OR EXISTS (SELECT 1 FROM links WHERE id = a.link_id))
-      AND NOT EXISTS (SELECT 1 FROM wakes w WHERE w.approval_id = a.id AND w.outcome = 'ran')
-    ORDER BY decidedAt, a.number
-  `;
-}
-
-function proposalDebt(debt: DebtRow): ProposalDebt[] {
-  // A proposal that never became a link and names no routine has nothing to run.
-  if (debt.linkId !== null || debt.ended || debt.routineId === null) return [];
-  return [
-    {
-      approvalId: debt.approvalId,
-      channelId: debt.channelId,
-      routineId: debt.routineId,
-      failures: { count: debt.failures, lastAt: debt.lastFailedAt },
-    },
-  ];
 }
 
 /**

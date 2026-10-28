@@ -10,7 +10,7 @@ export type ChannelLink = {
   requestMode: "mention" | "all";
   observe: "requesters" | "channel";
   linkedAtTs: SlackTs;
-  /** The allowed people's user IDs. The owner is implicit. */
+  /** The allowed people's user IDs. */
   allowlist: ReadonlySet<string>;
 };
 

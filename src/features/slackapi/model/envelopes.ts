@@ -4,8 +4,8 @@ import { epochSecondsSchema } from "./ts";
 // Socket Mode frames.
 //
 // Slack sends JSON frames over the socket: hello once the connection is ready,
-// disconnect when it wants a fresh one, and envelopes that carry events or clicks
-// and are acked by envelope ID. The receiver reads every frame here before the
+// disconnect when it wants a fresh one, and envelopes that carry events and are
+// acked by envelope ID. The receiver reads every frame here before the
 // SDK sees it, so a payload the SDK can't dispatch, such as app_rate_limited, is
 // still handled, and an envelope whose payload is malformed can still be acked.
 
@@ -140,9 +140,7 @@ export type SocketFrame =
       appId: string;
       minute: number;
     }
-  /** A click or other interaction, which goes to approvals. Its payload isn't an event. */
-  | { kind: "interactive"; envelopeId: string; payload: unknown }
-  /** A frame type the bridge doesn't use, such as slash_commands. */
+  /** A frame type the bridge doesn't use, such as interactive or slash_commands. */
   | { kind: "other"; type: string; envelopeId: string | null }
   /** `issues` names zod issue codes and paths only, never content, so it's safe to log. */
   | { kind: "malformed"; envelopeId: string | null; hint: MalformedHint; issues: string[] };
@@ -193,15 +191,6 @@ export function readFrame(raw: string): SocketFrame {
           eventTime: callback.event_time,
           event: callback.event,
         },
-      };
-    }
-    case "interactive": {
-      const envelope = envelopeSchema.safeParse(value);
-      if (!envelope.success) return malformed(envelopeId, value, issuesOf(envelope.error));
-      return {
-        kind: "interactive",
-        envelopeId: envelope.data.envelope_id,
-        payload: envelope.data.payload,
       };
     }
     default:

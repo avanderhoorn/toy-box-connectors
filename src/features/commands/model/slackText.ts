@@ -14,7 +14,7 @@ export type SlackNames = {
   channels: ReadonlyMap<string, string>;
 };
 
-/** The most characters a person's or a file's name shows, as on a card. */
+/** The most characters a person's or a file's name shows. */
 export const NAME_LIMIT = 80;
 
 const markupPattern = /<([^<>]*)>/g;
@@ -27,8 +27,8 @@ const controls = /[^\P{Cc}\n\t]/gu;
 
 const directionControls = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
-// Brackets of every script, so a name can't pass for "(owner)", and the dot between a heading's
-// fields.
+// Brackets of every script, so a name can't pass for a label the bridge adds, and the dot between
+// a heading's fields.
 const labelMarks = /[\p{Ps}\p{Pe}\u00b7]/gu;
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });

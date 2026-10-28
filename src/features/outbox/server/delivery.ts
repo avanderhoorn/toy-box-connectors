@@ -1,5 +1,4 @@
 import type { ChannelSuspendReason } from "@links/model/audience";
-import { forgetUnlinkedApprovals, recordCardPosted } from "@links/server/approvals";
 import { suspendChannelLinks } from "@links/server/lifecycle";
 import { isActive } from "@requests/model/lifecycle";
 import { readRequest } from "@requests/server/database";
@@ -31,15 +30,6 @@ export async function settleDelivery(
   const settled = await settleOutboxAttempt(tx, item, outcome, now);
   if (!settled) return null;
   if (suspend !== null) await suspendChannelLinks(tx, item.channelId, suspend, now);
-  if (
-    settled.state === "sent" &&
-    item.kind === "card" &&
-    item.phase === "post" &&
-    item.approvalId !== null
-  ) {
-    if (settled.slackTs === null) throw new Error("A confirmed card has no Slack timestamp.");
-    await recordCardPosted(tx, item.approvalId, settled.slackTs);
-  }
   if (settled.state === "stray") {
     await queueRetraction(tx, settled, now);
   }
@@ -50,27 +40,19 @@ export async function settleDelivery(
     await cancelThreadRequest(tx, settled, now);
   }
   if (item.requestId !== null) await settleRequestAnswer(tx, item.requestId, now);
-  await purgeRemovedLinkItem(tx, settled, now);
+  await purgeRemovedLinkItem(tx, settled);
   return settled;
 }
 
-/** A linkless card is not an orphan of a link that was removed. */
+/** An item without a link is not an orphan of a link that was removed. */
 export async function linkWasRemoved(tx: Bun.SQL, linkId: string | null): Promise<boolean> {
   if (linkId === null) return false;
   const [link] = await tx`SELECT id FROM links WHERE id = ${linkId}`;
   return !link;
 }
 
-/** Retire a settled or forgotten orphan without discarding another pending card operation. */
-export async function purgeRemovedLinkItem(
-  tx: Bun.SQL,
-  item: OutboxItem,
-  now: number,
-): Promise<void> {
-  if (item.kind === "card") {
-    await forgetUnlinkedApprovals(tx, now);
-    return;
-  }
+/** Retire a settled or forgotten orphan. */
+export async function purgeRemovedLinkItem(tx: Bun.SQL, item: OutboxItem): Promise<void> {
   if (!(await linkWasRemoved(tx, item.linkId))) return;
   if (["sending", "delivery_unknown", "stray"].includes(item.state)) return;
   if (["reply", "progress", "publication"].includes(item.kind)) {
@@ -115,7 +97,7 @@ export async function settleQueuedDelivery(
   if (item.kind === "reply" && item.phase === "final" && item.requestId !== null) {
     await settleRequestAnswer(tx, item.requestId, now);
   }
-  if (settled) await purgeRemovedLinkItem(tx, settled, now);
+  if (settled) await purgeRemovedLinkItem(tx, settled);
   return settled;
 }
 

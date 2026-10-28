@@ -1,7 +1,7 @@
 # Slack app review
 
 toy-box-slack lets a Toy Box channel's lead read a selected Slack channel,
-answer approved people in threads, and publish scheduled updates. A local Bun
+answer allowed people in threads, and publish scheduled updates. A local Bun
 process holds the Slack tokens and a SQLite ledger. The lead runs on Copilot
 and uses a CLI to read that ledger and queue Slack posts.
 
@@ -21,22 +21,22 @@ destination. There is no autojoin, DM access, user token or impersonation.
 
 [The manifest](manifest.yaml) requests these nine bot scopes:
 
-| Scope                                                                                     | Why it is needed                                                                                                                     |
-| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| [`channels:history`](https://docs.slack.dev/reference/scopes/channels.history/)           | Receive public-channel messages and recover history and tracked threads after a gap.                                                 |
-| [`channels:read`](https://docs.slack.dev/reference/scopes/channels.read/)                 | List public channels and check their membership, archive state and audience before linking or sending.                               |
-| [`groups:history`](https://docs.slack.dev/reference/scopes/groups.history/)               | The same message and recovery access for private channels the bot has joined.                                                        |
-| [`groups:read`](https://docs.slack.dev/reference/scopes/groups.read/)                     | Identify those private channels and check their membership and audience.                                                             |
-| [`users:read`](https://docs.slack.dev/reference/scopes/users.read/)                       | Resolve names, verify accounts before admission, refresh membership and identify the installed bot. Email access is not requested.   |
-| [`chat:write`](https://docs.slack.dev/reference/scopes/chat.write/)                       | Post replies, progress notes, approval cards and publications, update the bot's own progress notes and cards, and retract its posts. |
-| [`metadata.message:read`](https://docs.slack.dev/reference/scopes/metadata.message.read/) | Find the bridge's outbox metadata when a post may have succeeded but its response was lost.                                          |
-| [`files:read`](https://docs.slack.dev/reference/scopes/files.read/)                       | Read attachment metadata and download a linked message's file when requested. No file upload scope is requested.                     |
-| [`reactions:write`](https://docs.slack.dev/reference/scopes/reactions.write/)             | Add or remove the bot's status reactions and acknowledge a confirmed ownership claim.                                                |
+| Scope                                                                                     | Why it is needed                                                                                                                   |
+| ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| [`channels:history`](https://docs.slack.dev/reference/scopes/channels.history/)           | Receive public-channel messages and recover history and tracked threads after a gap.                                               |
+| [`channels:read`](https://docs.slack.dev/reference/scopes/channels.read/)                 | List public channels and check their membership, archive state and audience before linking or sending.                             |
+| [`groups:history`](https://docs.slack.dev/reference/scopes/groups.history/)               | The same message and recovery access for private channels the bot has joined.                                                      |
+| [`groups:read`](https://docs.slack.dev/reference/scopes/groups.read/)                     | Identify those private channels and check their membership and audience.                                                           |
+| [`users:read`](https://docs.slack.dev/reference/scopes/users.read/)                       | Resolve names, verify accounts before admission, refresh membership and identify the installed bot. Email access is not requested. |
+| [`chat:write`](https://docs.slack.dev/reference/scopes/chat.write/)                       | Post replies, progress notes and publications, update the bot's own progress notes, and retract its posts.                         |
+| [`metadata.message:read`](https://docs.slack.dev/reference/scopes/metadata.message.read/) | Find the bridge's outbox metadata when a post may have succeeded but its response was lost.                                        |
+| [`files:read`](https://docs.slack.dev/reference/scopes/files.read/)                       | Read attachment metadata and download a linked message's file when requested. No file upload scope is requested.                   |
+| [`reactions:write`](https://docs.slack.dev/reference/scopes/reactions.write/)             | Add or remove the bot's status reactions.                                                                                          |
 
-Socket Mode also needs an **app-level** token with `connections:write`. Both
-Socket Mode and interactivity are enabled. Slack connections are outbound
-HTTPS and secure WebSockets, so no public request endpoint or inbound firewall
-opening is needed.
+Socket Mode also needs an **app-level** token with `connections:write`.
+Socket Mode is enabled, and interactivity is not. Slack connections are
+outbound HTTPS and secure WebSockets, so no public request endpoint or inbound
+firewall opening is needed.
 There are no admin, SCIM, Discovery, search or `chat:write.public` scopes.
 
 **Slack permissions are broader than our filter.** A bot token can access the
@@ -45,22 +45,22 @@ allowlisted authors. The app can receive subscribed events from other channels
 it has joined. The bridge discards unlinked message content before storing it,
 but local filtering does not narrow the credential's capability.
 
-By default, `requesters` observation keeps text from approved people, the bot,
+By default, `requesters` observation keeps text from allowed people, the bot,
 and **anyone posting in a request thread**. Other messages become content-free
 markers. Opt-in `channel` observation keeps other people's text throughout the
-channel too. Other bots' text and claim-code messages are never kept. The
-allowlist limits who opens requests, not whose words can become model context.
-It is not a reader access list for Toy Box.
+channel too. Other bots' text is never kept. The allowlist limits who opens
+requests, not whose words can become model context. It is not a reader access
+list for Toy Box.
 
 ## Where copies go
 
-| Destination                                     | Data and purpose                                                                                                                                                                                                                                                                           |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Bridge data folder, normally `~/.toy-box-slack` | `bridge.db` and its SQLite write-ahead log (WAL) hold retained message text, request context, profiles and account IDs, settings, approvals, audit and coverage records, and queued output. Requested attachments are saved in the files folder. Credentials are separate from the ledger. |
-| Local Toy Box                                   | CLI output and other tool results enter the lead's session transcript and conversation context. The lead may post digests into the Toy Box channel and create reports or other workspace files. The bridge does not mirror a Toy Box transcript into Slack.                                |
-| Copilot and the selected model provider         | Slack text the lead reads, tool results and file content it opens can enter model requests. A Copilot-only lead does not establish a provider, processing region, retention period or no-training contract.                                                                                |
-| Slack                                           | Thread replies, progress, reactions and approved publications are written back. Approval cards disclose the proposed settings, people and channel audiences to everyone who can see that channel.                                                                                          |
-| Host backups and diagnostics                    | Backups, snapshots, copied reports and support bundles can become additional copies. Approve their contents, access and retention before enabling them.                                                                                                                                    |
+| Destination                                     | Data and purpose                                                                                                                                                                                                                                                      |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bridge data folder, normally `~/.toy-box-slack` | `bridge.db` and its SQLite write-ahead log (WAL) hold retained message text, request context, profiles and account IDs, settings, coverage records, and queued output. Requested attachments are saved in the files folder. Credentials are separate from the ledger. |
+| Local Toy Box                                   | CLI output and other tool results enter the lead's session transcript and conversation context. The lead may post digests into the Toy Box channel and create reports or other workspace files. The bridge does not mirror a Toy Box transcript into Slack.           |
+| Copilot and the selected model provider         | Slack text the lead reads, tool results and file content it opens can enter model requests. A Copilot-only lead does not establish a provider, processing region, retention period or no-training contract.                                                           |
+| Slack                                           | Thread replies, progress, reactions and approved publications are written back.                                                                                                                                                                                       |
+| Host backups and diagnostics                    | Backups, snapshots, copied reports and support bundles can become additional copies. Approve their contents, access and retention before enabling them.                                                                                                               |
 
 Before approval, name the actual Copilot account and plan, permitted models and
 providers and their subprocessors, processing regions, retention, support access
@@ -81,52 +81,48 @@ complies.** The company must approve the actual data-processing terms.
 
 ## Who can act or widen access
 
-One person owns the installation. At an interactive terminal, the operator
-starts a short-lived claim, posts its code in Slack, and confirms the displayed
-account. A claim code alone cannot establish ownership.
+One person owns the installation: whoever holds the passphrase set when the
+bridge was installed. The bridge keeps only an argon2id hash of it, and a
+forgotten passphrase, or a handover, means removing its line from the config
+file and setting a new one.
 
-The owner and each link's allowlist are matched by exact Slack IDs and
-Slack-established aliases, never names, email or the workspace named on a
-message. Admission uses `users.info` and accepts only active full members of
-the installation's workspace, or its Enterprise org. Guests, foreign-org
-accounts, bots, workflow bots and Slackbot are refused. Checks repeat at
-startup and hourly. A failed lookup retains the previous decision, so an
-outage can prolong stale membership evidence.
+Each link's allowlist is matched by exact Slack IDs and Slack-established
+aliases, never names, email or the workspace named on a message. Admission
+uses `users.info` and accepts only active full members of the installation's
+workspace, or its Enterprise org. Guests, foreign-org accounts, bots, workflow
+bots and Slackbot are refused. Checks repeat at startup and hourly. A failed
+lookup retains the previous decision, so an outage can prolong stale
+membership evidence.
 
 An allowed person whose account is deactivated or who leaves the org is removed
-at the next successful hourly check, as if denied. When the owner is gone, status
-warns that nobody can approve changes. Existing links and allowlists keep
-working under the approvals already given, and narrowing still works. **A
-departed owner's approvals stay in force until the operator acts.** To hand over,
-the operator must stop the bridge and run `toy-box-slack reset --yes`. This
-deletes every link, allowlist entry, approval and the owner before someone
-claims again.
+at the next successful hourly check, as if denied.
 
-By default, an approved person mentions the bot to open a request and can
-follow up in its thread. The owner can approve `all` request mode instead.
+By default, an allowed person mentions the bot to open a request and can
+follow up in its thread. The owner can choose `all` request mode instead.
 Other people cannot open requests, but their retained text can influence the
 lead. Scheduled digests and publications are opt-in routines, not requests
 from arbitrary Slack authors.
 
-Widening changes require the **current owner's click in Slack**: linking,
-allowing someone, resuming, transferring ownership, widening observation or
-request mode, or moving the publish channel. The bridge binds the click to
-the exact app, owner, proposal, channel and card, then rechecks the facts the
-card showed before applying it. The CLI has no approve command. Narrowing,
-including pause, deny and unlink, applies immediately and is audited.
+Widening changes require the **owner's passphrase at a terminal**: linking a
+channel, allowing someone and resuming a link. Each shows what it widens, with
+names from Slack, before it asks, and the bridge checks the passphrase itself,
+so neither a Slack message nor the lead can widen access. There is no way to
+approve a change from Slack. Narrowing, including pause, deny and unlink,
+applies immediately.
 
-An internally shared channel is allowed only within the pinned Enterprise
-org with a known workspace audience. Adding a workspace or changing private
-to public widens the audience and needs approval. Send-time checks compare
-fresh channel facts with **what the owner approved**, not the previous refresh.
-They bound staleness but cannot make a send atomic with Slack's next change.
-Company admins still control app access and channel placement.
+An internally shared channel is allowed only within the pinned Enterprise org
+with a known workspace audience. Adding a workspace or changing private to
+public widens the audience and suspends the link until the owner resumes it.
+Send-time checks compare fresh channel facts with **what the owner approved**,
+not the previous refresh. They bound staleness but cannot make a send atomic
+with Slack's next change. Company admins still control app access and channel
+placement.
 
 Only the channel's lead can reply or publish through the CLI. Members can
-read, and the operator can read and propose setup but cannot reply or publish.
+read, and the operator can read and change setup but cannot reply or publish.
 These caller roles prevent mistakes, not hostile local processes. The rule
-that only the owner may ask for consequential work lives in the skill and
-routine prompt. It is not an execution sandbox.
+that consequential work asked for in Slack waits for the owner's go-ahead in
+Toy Box lives in the skill and routine prompt. It is not an execution sandbox.
 
 ## Host and secret boundary
 
@@ -142,8 +138,8 @@ with `--host 127.0.0.1`. Loopback and Unix permissions are not protection
 against another process running as the same OS user.
 
 A shell-capable lead with that UID can read credentials, edit the database,
-forge caller identity, stop or reset the bridge or replace its code. FileVault
-protects a locked disk, not a running same-UID attacker. Slack approval is an
+forge caller identity, stop the bridge or replace its code. FileVault protects
+a locked disk, not a running same-UID attacker. The passphrase is an
 authorization boundary only while the bridge and host remain intact. v1 does
 not isolate the bridge under a separate OS user.
 
@@ -158,14 +154,14 @@ can run. The reviewer must accept that trust boundary or reject this deployment.
 The design keeps message text for 30 days, except the source of an unfinished
 request. Files expire after 7 days and are removed sooner when Slack deletes
 the file or its message, or when the link is removed. Content-free event receipts
-expire after 7 days. Audit and log entries carry identifiers, not message text;
+expire after 7 days. Log entries carry identifiers, not message text;
 identifiers still require an access and retention policy.
 
-Unlinking purges that link's bridge data. Once observed, app uninstall or
-revocation naming the pinned bot user purges all Slack data and
-settings, leaving only a purge record. Other credential errors suspend work
-without deleting it; after 10 continuous days the bridge purges Slack content
-but keeps settings. An offline bridge cannot promise immediate detection.
+Unlinking deletes that link's bridge data. Once observed, app uninstall or
+revocation naming the pinned bot user deletes all Slack data and settings,
+keeping only the installation, marked uninstalled. Other credential errors
+suspend work without deleting it. An offline bridge cannot promise immediate
+detection.
 
 When Slack withdraws access through EKM redaction or a hidden or tombstoned
 snapshot, the design removes cached text and files even without a newer edit,
@@ -174,7 +170,7 @@ that text from an older snapshot. Slack EKM does not by itself revoke our
 local or model copies, and Slack DLP is not a guaranteed pre-export gate.
 Data can reach the model before an administrator later hides or deletes it.
 
-**Bridge purge stops at bridge-managed data.** It does not erase Toy Box
+**Bridge deletion stops at bridge-managed data.** It does not erase Toy Box
 transcripts, already-consumed model context, provider copies, reports or files
 the lead copied elsewhere, Slack posts already sent, backups or snapshots.
 Logical SQLite deletion is not a forensic-erasure guarantee for the database
@@ -238,13 +234,13 @@ also enforce a custom Events API bot's processing policy.
   refuse rotating credentials and org-wide installs, pin the workspace, org,
   app and bot, route Enterprise events correctly and never retain raw credentials
   in logs.
-- Claim, exact-ID and alias admission, hourly rechecks and owner-only, card-bound
-  approvals enforce the stated rules, including failed lookups, races and
-  prompt-injection attempts and account departures. No running-service command
-  can clear the owner.
+- Exact-ID and alias admission, hourly rechecks and the passphrase check on
+  every widening command enforce the stated rules, including failed lookups,
+  races, prompt-injection attempts and account departures. No command the
+  bridge serves can set or clear the passphrase.
 - Observation and file reads enforce linked-channel filtering, and sends recheck
   requester, revision and the approved audience without an admin-policy bypass.
-- Retention and purge cover message text, request context, outbox text, files
+- Retention and deletion cover message text, request context, outbox text, files
   and all owned rows, with the stated exceptions and triggers. Verify database,
   WAL, backup and restore behavior rather than infer secure erasure.
 - Access withdrawal removes old content, prevents stale replay and holds

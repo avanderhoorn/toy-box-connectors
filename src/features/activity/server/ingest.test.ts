@@ -1,32 +1,30 @@
 import { expect, test } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import { startClaim } from "@links/server/claims";
 import { changeChannelId } from "@links/server/lifecycle";
 import { createStoredLink } from "@links/server/testFixtures";
 import { moveRequestChannel } from "@requests/server/database";
 import type { SlackMessage, SlackMessageEvent } from "@slackapi/model/messages";
 import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
-import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { ingestMessageEvent, type IngestContext, type Ingested } from "./ingest";
 import { moveLedgerChannel } from "./ledger";
 
 const context: IngestContext = {
   botUserId: "U-bot",
-  ownerUserId: "U-owner",
   late: false,
   now: 1_700_001_000_000,
 };
 
 const ask = askMessage();
 
-/** A linked channel that allows U-allowed, as `createStoredLink` stores it. */
+/** A linked channel that allows U-owner and U-allowed, as `createStoredLink` stores it. */
 async function openIngest(): Promise<BridgeDatabase> {
   const database = await openTestDatabase();
   await createStoredLink(database);
   await database.write(
     (transaction) => transaction`
-      INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-allowed', 0)
+      INSERT INTO allowlist (link_id, user_id, added_at)
+      VALUES ('link', 'U-owner', 0), ('link', 'U-allowed', 0)
     `,
   );
   return database;
@@ -71,54 +69,6 @@ function readThreads(database: BridgeDatabase) {
     (sql) => sql`SELECT thread_ts, tracked_reason, latest_reply_ts FROM threads ORDER BY thread_ts`,
   );
 }
-
-test("a claim is consumed before anything is stored, wherever it's posted", async () => {
-  const database = await openIngest();
-  // Claims only read Slack's own user ID shape.
-  const bot = { botUserId: "U0BOT" };
-  const claim = askMessage(ask.ts, { text: "<@U0BOT> claim 4F7Q-2KD9" });
-
-  expect(await ingest(database, posted(claim), bot)).toEqual({ kind: "claim", changed: false });
-  expect(await ingest(database, posted({ ...claim, channelId: "C-elsewhere" }), bot)).toEqual({
-    kind: "claim",
-    changed: false,
-  });
-  const edit = editMessage(ask, "1700000150.000100", "<@U0BOT> claim it, please");
-  expect(await ingest(database, posted(edit, true), bot)).toEqual({
-    kind: "claim",
-    changed: false,
-  });
-  expect(await readMessages(database)).toEqual([]);
-  expect(await readRequests(database)).toEqual([]);
-});
-
-test("a claim posted live is tried against the open claim, by the person an alias names", async () => {
-  const database = await openIngest();
-  await createStoredInstallation(database, { bot_user_id: "U0BOT", owner_user_id: null });
-  const started = await database.write((transaction) => startClaim(transaction, context.now));
-  if (started.kind !== "started") throw new Error("The claim didn't start.");
-  await database.write(
-    (transaction) => transaction`
-      INSERT INTO user_aliases (alias_id, user_id) VALUES ('W-alias', 'U-allowed')
-    `,
-  );
-  const claim = askMessage(ask.ts, { userId: "W-alias", text: `<@U0BOT> claim ${started.code}` });
-  const bot = { botUserId: "U0BOT" };
-
-  expect(await ingest(database, posted(claim), { ...bot, late: true })).toEqual({
-    kind: "claim",
-    changed: false,
-  });
-  expect(await ingest(database, posted(claim, true), bot)).toEqual({
-    kind: "claim",
-    changed: false,
-  });
-  expect(await ingest(database, posted(claim), bot)).toEqual({ kind: "claim", changed: true });
-  expect(await database.read((sql) => sql`SELECT state, posted_by, posted_at FROM claims`)).toEqual(
-    [{ state: "posted", posted_by: "U-allowed", posted_at: context.now }],
-  );
-  expect(await readMessages(database)).toEqual([]);
-});
 
 test("nothing from a channel no link watches is stored", async () => {
   const database = await openIngest();
@@ -206,13 +156,13 @@ test("someone off the allowlist asks nothing, and is kept as observed only in re
     { id: 1, source_ts: ask.ts, requester_user_id: "U-owner", late: 0 },
   ]);
   expect(await readMessages(database)).toEqual([
-    { ts: ask.ts, author_role: "owner", text: ask.text },
+    { ts: ask.ts, author_role: "allowed", text: ask.text },
     { ts: inThread.ts, author_role: "observed", text: outsider.text },
     { ts: atRoot.ts, author_role: "observed", text: null },
   ]);
 });
 
-test("the stored link and the installation decide whose text is kept", async () => {
+test("the stored link decides whose text is kept", async () => {
   const database = await openIngest();
   const said = { text: "the deploy is red", mentions: [], mentionsBot: false };
   await ingest(database, posted(askMessage("1700000100.000100", said)));
@@ -228,7 +178,7 @@ test("the stored link and the installation decide whose text is kept", async () 
   );
 
   expect(await readMessages(database)).toEqual([
-    { ts: "1700000100.000100", author_role: "owner", text: said.text },
+    { ts: "1700000100.000100", author_role: "allowed", text: said.text },
     { ts: "1700000200.000100", author_role: "allowed", text: said.text },
     { ts: "1700000300.000100", author_role: "observed", text: null },
     { ts: "1700000500.000100", author_role: "observed", text: said.text },
@@ -243,7 +193,7 @@ test("a person asks by their ID, whatever workspace the message names", async ()
   expect(await ingest(database, posted(sibling))).toEqual(stored(true));
   expect(await ingest(database, posted(unnamed))).toEqual(stored(true));
   expect(await readAuthors(database)).toEqual([
-    { ts: sibling.ts, user_id: "U-owner", team_id: "T-sibling", author_role: "owner" },
+    { ts: sibling.ts, user_id: "U-owner", team_id: "T-sibling", author_role: "allowed" },
     { ts: unnamed.ts, user_id: "U-allowed", team_id: null, author_role: "allowed" },
   ]);
   expect(await readRequests(database)).toEqual([
@@ -270,8 +220,8 @@ test("an alias is stored, asks and joins as the person it names", async () => {
   }
   expect(await ingest(database, posted(stranger))).toEqual(stored(false));
   expect(await readAuthors(database)).toEqual([
-    { ts: asked.ts, user_id: "U-owner", team_id: "T-home", author_role: "owner" },
-    { ts: more.ts, user_id: "U-owner", team_id: "T-home", author_role: "owner" },
+    { ts: asked.ts, user_id: "U-owner", team_id: "T-home", author_role: "allowed" },
+    { ts: more.ts, user_id: "U-owner", team_id: "T-home", author_role: "allowed" },
     { ts: allowed.ts, user_id: "U-allowed", team_id: "T-home", author_role: "allowed" },
     { ts: stranger.ts, user_id: "W-stranger", team_id: "T-home", author_role: "observed" },
   ]);

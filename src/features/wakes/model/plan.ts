@@ -1,16 +1,14 @@
 // Planning a pass over every wake the bridge owes.
 //
-// A pass decides each link's wake, then the catch-ups a link without one owes, then the setup
-// wakes for proposals that never became a link. A Toy Box channel runs at most one routine per
-// pass, and none while a run is in flight or just landed, because the turn a run starts shows in
-// presence only after Toy Box answers the run. While the bridge can't use Slack, every wake waits
-// for it instead, because a lead woken then couldn't act.
+// A pass decides each link's wake, then the catch-ups a link without one owes. A Toy Box channel
+// runs at most one routine per pass, and none while a run is in flight or just landed, because the
+// turn a run starts shows in presence only after Toy Box answers the run. While the bridge can't
+// use Slack, every wake waits for it instead, because a lead woken then couldn't act.
 
 import type { RoutineState } from "@toybox/model";
 import { wakeBudget, type RanWake } from "./budget";
 import {
   decideCatchUp,
-  decideProposalWake,
   decideWake,
   defaultWakeTimings,
   dueReminders,
@@ -36,18 +34,9 @@ export type ScheduledLink = LinkWakeState & {
   catchUps: readonly OwedCatchUp[];
 };
 
-/** A decided proposal for a channel without a link, whose lead hasn't heard the outcome. */
-export type ProposalDebt = {
-  approvalId: string;
-  channelId: string;
-  routineId: string;
-  failures: { count: number; lastAt: number | null };
-};
-
-/** What a pass decides from. `proposals` is oldest first. */
+/** What a pass decides from. */
 export type WakePass = {
   links: readonly ScheduledLink[];
-  proposals: readonly ProposalDebt[];
   /** The runs that landed within the budget's window. */
   ran: readonly RanWake[];
 };
@@ -57,8 +46,7 @@ export type Wake = {
   kind: WakeKind;
   channelId: string;
   routineId: string;
-  linkId: string | null;
-  approvalId: string | null;
+  linkId: string;
   catchUp: { series: string; key: string } | null;
   /** The requests whose reminder this run delivers. */
   reminded: readonly number[];
@@ -122,7 +110,6 @@ export function planWakes(
         channelId: link.channelId,
         routineId: link.routineId,
         linkId: link.id,
-        approvalId: decision.reason === "setup" ? link.setup[0]!.approvalId : null,
         catchUp: null,
         reminded: view.leadWorking ? [] : dueReminders(now, link.requests, timings).map(byId),
       });
@@ -135,31 +122,11 @@ export function planWakes(
         channelId: link.channelId,
         routineId: owed.routineId,
         linkId: link.id,
-        approvalId: null,
         catchUp: { series: owed.series, key: owed.key },
         reminded: [],
       });
       break;
     }
-  }
-
-  // A channel's proposals run oldest first, one at a time.
-  const oldest = new Map<string, ProposalDebt>();
-  for (const proposal of pass.proposals) {
-    if (!oldest.has(proposal.channelId)) oldest.set(proposal.channelId, proposal);
-  }
-  for (const proposal of oldest.values()) {
-    if (!free(proposal.channelId)) continue;
-    if (!wakeNow(decideProposalWake(now, proposal.failures, wakeBudget(ran), timings))) continue;
-    start({
-      kind: "setup",
-      channelId: proposal.channelId,
-      routineId: proposal.routineId,
-      linkId: null,
-      approvalId: proposal.approvalId,
-      catchUp: null,
-      reminded: [],
-    });
   }
 
   return { wakes, decisions, decideAt };

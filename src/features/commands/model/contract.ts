@@ -25,8 +25,8 @@ export type CommandContract<
    */
   withoutSlack?: boolean;
   /**
-   * Whether it's a step of another command, such as claim's wait, which the CLI runs for that
-   * command. The bridge serves it like any command, but the CLI never offers it on its own.
+   * Whether it's a step of another command, which the CLI runs for that command. The bridge serves
+   * it like any command, but the CLI never offers it on its own.
    */
   step?: true;
   /** A strict object. The CLI offers each field as an option named for it in kebab case. */

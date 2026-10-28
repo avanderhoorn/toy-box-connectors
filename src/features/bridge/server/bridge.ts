@@ -2,13 +2,11 @@
 //
 // The bridge prepares its data folder, reads its settings, takes the
 // single-bridge lock, and only then opens `bridge.db`, so a second bridge stops
-// before it opens anything. Before anything can fetch a file, it removes every
-// local copy no row names.
+// before it opens anything.
 // Then it starts its work: following each linked Toy Box channel, connecting to
-// Slack and applying what owners approve there once both tokens are set, waking
-// leads while it can use Slack, and answering commands on its socket. It lets go
-// of everything in the reverse order, so it stops taking commands before anything
-// they use stops.
+// Slack once both tokens are set, waking leads while it can use Slack, and
+// answering commands on its socket. It lets go of everything in the reverse
+// order, so it stops taking commands before anything they use stops.
 //
 // A part that fails in a way retrying can't fix, such as a storage error,
 // reports it through one fatal path, and the bridge exits so launchd restarts
@@ -24,9 +22,6 @@ import { inboxCommand } from "@commands/server/inbox";
 import { routinesCommand } from "@commands/server/routines";
 import { serveCommands } from "@commands/server/serve";
 import { statusCommand } from "@commands/server/status";
-import { startApplier, type Applier } from "@links/server/apply";
-import { createFactsReader } from "@links/server/facts";
-import { sweepFiles } from "@links/server/purge";
 import { createBotClient } from "@slackapi/server/botClient";
 import { startToyBoxClient, type ToyBoxClient } from "@toybox/server";
 import { startWakeScheduler, type WakeScheduler } from "@wakes/server";
@@ -79,7 +74,6 @@ export async function startBridge(
   let database: BridgeDatabase | undefined;
   let toyBox: ToyBoxClient | undefined;
   let scheduler: WakeScheduler | undefined;
-  let applier: Applier | undefined;
   let slack: SlackSupervisor | undefined;
   let socket: CommandSocket | undefined;
 
@@ -87,7 +81,6 @@ export async function startBridge(
     try {
       await socket?.stop();
       await scheduler?.stop();
-      await applier?.stop();
       await slack?.stop();
       await toyBox?.stop();
       await database?.close();
@@ -99,7 +92,6 @@ export async function startBridge(
   try {
     database = await openBridgeDatabase(join(dataFolder, "bridge.db"));
     const filesFolder = join(dataFolder, "files");
-    await sweepFiles(database, filesFolder);
     toyBox = startToyBoxClient(database, {
       origin: settings.toyBoxOrigin,
       onChange: () => scheduler?.reconsider(),
@@ -119,20 +111,9 @@ export async function startBridge(
         tokens: { botToken, appToken },
         filesFolder,
         slackApiUrl,
-        onChange: () => {
-          applier?.reconsider();
-          scheduler?.reconsider();
-        },
+        onChange: () => scheduler?.reconsider(),
         onError: failure.resolve,
         timings: settings.wakeTimings,
-      });
-      applier = startApplier(database, createFactsReader(bot, settings.toyBoxOrigin), {
-        slackUsable,
-        onChange: () => {
-          scheduler?.reconsider();
-          toyBox?.followLinks().catch(failure.resolve);
-        },
-        onError: failure.resolve,
       });
     }
     scheduler = startWakeScheduler(database, toyBox, {

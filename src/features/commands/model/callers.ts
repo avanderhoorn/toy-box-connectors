@@ -4,7 +4,7 @@
 // Toy Box's catalog. Copilot sets COPILOT_AGENT_SESSION_ID to the Toy Box session, which for a
 // lead is its channel's ID, and Toy Box gives every agent it runs NITRO_PORT. A caller without a
 // session is the operator at a terminal. Any local process can set or unset those variables, so
-// roles stop mistakes rather than attacks, and no role can do what needs the owner's click.
+// roles stop mistakes rather than attacks.
 //
 // Refusals say who may run a command and never how to become someone else, because an agent
 // told which variable to unset would unset it.

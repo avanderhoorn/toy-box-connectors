@@ -26,21 +26,17 @@ A held channel refresh starts no post. A held reconciliation page spends no pass
 deadline and partial cursor for when the worker is reconsidered. The supervisor uses the raw
 client so its own identity checks can restore usability.
 
-`server/posts.ts` posts finals, follow-ups, publications and new approval cards, and updates cards
-through the shared bot client, never from inside a write. It refreshes missing or stale channel facts before checking
-all authority again, commits sending, then builds metadata from the committed snapshot. Receipt
+`server/posts.ts` posts finals, follow-ups and publications through the shared bot client,
+never from inside a write. It refreshes missing or stale channel facts before checking all
+authority again, commits sending, then builds metadata from the committed snapshot. Receipt
 proof and request settlement share a transaction. A misplaced receipt stores stray and queues its
-withdrawal together. Cards bypass a link's audience gate so a suspended link can receive its resume
-card, but still require an active installation and the approval's current target.
-An update snapshots only its actual arguments, including the proved card ts, and keeps parse none
-without post-only flags or actions blocks. It follows a decision, never a pending card, so a timed-out older update
-can show an older outcome but cannot restore buttons. An edit receipt must match its known target;
-Slack need not repeat ts inside message. Withdrawn snapshots never prove a receipt or a read,
-even when they retain our identity and metadata.
+withdrawal together. An edit receipt must match its known target; Slack need not repeat ts
+inside message. Withdrawn snapshots never prove a receipt or a read, even when they retain our
+identity and metadata.
 
 `server/reconcile.ts` reads unknown messages through single-page history helpers and the shared
 client. It scans the whole intended thread, then roots since the attempt for a misplaced reply,
-or roots since the attempt for a publication or initial card. Those root bounds subtract the
+or roots since the attempt for a publication. Those root bounds subtract the
 shared five-minute gap overlap to absorb ordinary skew between the Mac and Slack's clock.
 An edit reads its already proved target, even when that message predates the attempt.
 Only exact own-bot/app metadata proves it.
@@ -55,13 +51,12 @@ These failures back off from 5 to 120 seconds per attempt and pass without reset
 restart. Slack's Retry-After wins even when longer. The scheduled deadline survives a restart,
 while the in-memory failure streak starts again. A channel refusal suspends its links and clears
 the read deadline. The due reader selects it again only once its link is active, and reconciliation
-releases that hold conditionally before reading. A refused linkless card needs manual resolution.
+releases that hold conditionally before reading.
 `slackapi/model/history.ts` keeps raw messages intact for their owning decoder and distinguishes
 an empty page from an exhausted cursor.
 `forgetLinkOutbox` decides in unlink's transaction what stays of the link's items. Sending,
 unknown and stray items stay, and so do queued eyes removals, status clears and withdrawals of
-a sent or stray target, with each withdrawal's target. Cards stay for links to retire. The rest
-goes. A kept reply, progress note or publication loses its text, and a stray one is withdrawn.
+a sent or stray target, with each withdrawal's target. The rest goes. A kept reply, progress note or publication loses its text, and a stray one is withdrawn.
 After unlink, redacted sending or unknown posts still settle against their original hash.
 An edit retains its frozen ts beside the redaction marker. Valid late deliveries are purged,
 not withdrawn. A misplaced one still gets withdrawn first. Channel-refused and exhausted
@@ -69,18 +64,15 @@ orphans are purged, including a hold or final pass that predates unlink. The due
 these stopped orphans eligible for local disposal without another Slack call.
 
 `server/delivery.ts` commits both response and read proof through the same settlement path:
-the initial card ts, misplaced cleanup and request settlement cannot be lost between them.
+misplaced cleanup and request settlement cannot be lost between them.
 A thread refusal (thread_not_found, restricted_action_thread_locked, cannot_reply_to_message
 or restricted_action_non_threadable_channel), or a reply proved outside its thread, cancels
 its active request as thread_gone immediately and queues removal of its eyes reaction.
 It never waits for withdrawal, which may fail. Thread-only and non-threadable channel
 restrictions remain item-local, since they do not prevent every kind of post.
-A card update with no proved ts waits only while an initial post is queued, sending or unknown.
-Without such a post it is dropped explicitly. The queue runner must revisit these waits when a
-post settles, including a manual resolution.
 
-`server/retract.ts` deletes only the proved message of a reply, progress note or publication,
-or a misplaced initial card. Its operation must match the target's link, channel, request and
+`server/retract.ts` deletes only the proved message of a reply, progress note or publication.
+Its operation must match the target's link, channel, request and
 thread. Cleanup bypasses a suspended link's posting gate but never an inactive installation.
 `queueRetraction` shares an outstanding operation for the same target and scope. The snapshot
 retains that local target ID alongside the frozen Slack ts; only channel and ts go on the wire.
@@ -91,25 +83,13 @@ misplaced post becomes failed, never retracted. Its request was already cancelle
 The operation, target and request commit together. Failed withdrawal leaves the target stray
 with Slack's exact error, and an explicit new retraction can try again.
 A retained unlink target needs no message body. Once confirmed absent, a target whose non-null
-link ID no longer exists is purged with its operation. A card is orphaned when its approval is
-gone, not merely when its original link ID is null. A permanent orphan withdrawal failure writes
-abandon_post with only the post's channel and ts, then purges the target and operation in that
-transaction. The same applies to a locally refused withdrawal that still identifies its proved,
+link ID no longer exists is purged with its operation. A permanent orphan withdrawal failure
+purges the target and operation in one transaction. The same applies to a locally refused withdrawal that still identifies its proved,
 matching target. A changed target is never abandoned on the authority of an older operation.
 A corrupted interrupted withdrawal with no frozen ts is still refused before Slack. Its proved,
-matching orphan is audited and retired locally, never sent using a guessed timestamp.
+matching orphan is retired locally, never sent using a guessed timestamp.
 Cleanup settles a final's request only if its link, channel and thread
 still match, and a local cleanup refusal never settles a reply merely by its numeric request ID.
-`forgetUnlinkedApprovals` in links owns card retirement and runs after delivery, stopped reads
-and withdrawals. The approval's link owns its card even when a new link proposal's original
-outbox row still has no link ID. Due reads and released channel holds use that current ownership.
-An unlinked card's approval and rows remain while an initial post is sending or unknown, or an
-update or withdrawal is queued, sending or unknown. An older update cannot retire them while
-another operation waits, even when the older attempt becomes superseded. A card that never
-started is dropped without posting a new stale card. Once nothing remains pending, the approval
-and rows go, except misplaced initial posts. Those stay redacted with their original hashes and
-one fresh withdrawal. A permanent failure of that final orphan withdrawal is audited and purged
-as above.
 
 `server/reactions.ts` adds and removes only message reactions through the shared client.
 New eyes require a read, active request and an active link. A confirmed answer's checkmark
@@ -149,9 +129,7 @@ misplaced post is failure, never a successful delivery.
 exact send-time payload before the call. An unknown post can never be requeued automatically.
 Idempotent updates, deletions and feedback may retry without posting another message.
 After a rejected attempt, a reply, progress note or publication uses the stored method and payload
-unchanged. A card keeps its method but renders the approval afresh for every attempt. Only one
-attempt per approval can be sending. Wait reasons distinguish that card mutex from the shared
-channel post slot and an item's retry deadline. Newer updates supersede queued or unknown older updates,
+unchanged. Wait reasons distinguish the shared channel post slot from an item's retry deadline. Newer updates supersede queued or unknown older updates,
 including an older sending update that becomes retryable after its replacement was queued, or
 is recovered at startup. Slack metadata
 is never stored inside that snapshot: the call adds it from the committed ID and payload hash.
@@ -159,7 +137,7 @@ Reconciliation counts only fully read passes, scheduled
 from that immutable attempt time at 10, 60 and 120 seconds. Unsuccessful reads never turn an
 unknown into a send candidate. Conditional settlements keep late responses from overwriting
 manual resolutions or newer attempts. `outbox_channels` shares a durable one-second post
-slot across links and cards. Channel ID changes carry the later slot forward, unlink leaves
+slot across links. Channel ID changes carry the later slot forward, unlink leaves
 it alone, uninstall removes it, and maintenance expires slots whose deadline has passed.
 
 ## Text
@@ -186,7 +164,7 @@ classification.
 
 `model/payload.ts` checks a stored lead-authored snapshot at the send boundary without rendering
 it again. It requires the renderer's blocks and disabled parsing/unfurls, enforces both size
-limits, and rechecks secrets and clickable targets. Approval cards have their own trusted renderer.
+limits, and rechecks secrets and clickable targets.
 
 ## Boundaries and invariants
 

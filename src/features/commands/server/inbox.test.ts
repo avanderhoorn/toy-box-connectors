@@ -6,9 +6,7 @@ import { openTestDatabase } from "@bridge/server/testFixtures";
 import type { ChannelCaller } from "@commands/model/callers";
 import { inboxContract } from "@commands/model/inbox";
 import { notLinked } from "@commands/model/unlinked";
-import type { Approval } from "@links/model/approvals";
-import { pendingApproval } from "@links/model/testFixtures";
-import { createStoredApproval, createStoredLink } from "@links/server/testFixtures";
+import { createStoredLink } from "@links/server/testFixtures";
 import {
   beginAnswer,
   cancelRequest,
@@ -41,8 +39,8 @@ const ask = askMessage();
 const owner = { userId: "U-owner", name: "Alice Chen" };
 
 /**
- * The link `createStoredLink` stores, which allows U-allowed, in an installation U-owner owns, with
- * the names of everyone the tests mention and of the linked channel.
+ * The link `createStoredLink` stores, which allows U-owner and U-allowed, with the names of
+ * everyone the tests mention and of the linked channel.
  */
 async function openInbox(): Promise<BridgeDatabase> {
   const database = await openTestDatabase();
@@ -50,7 +48,8 @@ async function openInbox(): Promise<BridgeDatabase> {
   await createStoredLink(database);
   await database.write(async (transaction) => {
     await transaction`
-      INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-allowed', 0)
+      INSERT INTO allowlist (link_id, user_id, added_at)
+      VALUES ('link', 'U-owner', 0), ('link', 'U-allowed', 0)
     `;
     const people = [
       slackPerson({ id: "U-owner", realName: "Alice Chen" }),
@@ -68,7 +67,6 @@ function ingest(database: BridgeDatabase, event: SlackMessageEvent, now = NOW) {
   return database.write((transaction) =>
     ingestMessageEvent(transaction, event, {
       botUserId: "U-bot",
-      ownerUserId: "U-owner",
       late: false,
       now,
     }),
@@ -132,13 +130,11 @@ describe("reading requests", () => {
 
     expect(await inbox.read()).toEqual({
       linked: true,
-      linkProposal: null,
-      settings: [],
       requests: [
         {
           id: 1,
           revision: 2,
-          requester: { ...owner, role: "owner" },
+          requester: { ...owner, role: "allowed" },
           askedAt: 1_700_000_100_000,
           attention: null,
           unverified: false,
@@ -184,7 +180,7 @@ describe("reading requests", () => {
       {
         id: 1,
         revision: 2,
-        requester: { ...owner, role: "owner" },
+        requester: { ...owner, role: "allowed" },
         state: "seen",
         askedAt: 1_700_000_100_000,
         heldAt: null,
@@ -308,13 +304,13 @@ describe("reading requests", () => {
     expect(request?.permalink).toBe("https://acme.slack.com/archives/C-link/p1700000100000100");
   });
 
-  test("shows the owner's request as no longer allowed once they hand ownership on", async () => {
+  test("shows a request as no longer allowed once its requester leaves the allowlist", async () => {
     const database = await openInbox();
     await ingest(database, posted(ask));
     const inbox = inboxFor(database);
     await inbox.read();
     await database.write(
-      (transaction) => transaction`UPDATE installation SET owner_user_id = 'U-carol'`,
+      (transaction) => transaction`DELETE FROM allowlist WHERE user_id = 'U-owner'`,
     );
 
     const [waiting] = (await inbox.read(lead, AT + MINUTE)).waiting;
@@ -369,11 +365,6 @@ describe("reading requests", () => {
     await change(database, 2, (request) =>
       cancelRequest(serveRequest(request, NOW), "requester_denied"),
     );
-    await createStoredApproval(database, {
-      state: "rejected",
-      decidedBy: "U-owner",
-      decidedAt: NOW,
-    });
     await database.write(
       (transaction) => transaction`
         UPDATE messages SET files = '[{"id":"F1","name":"x","mimetype":null,"size":-1}]'
@@ -388,15 +379,32 @@ describe("reading requests", () => {
 
     await expect(inbox.read()).rejects.toThrow();
     expect(await database.read((sql) => readRequest(sql, 1))).toMatchObject({ state: "open" });
-    expect(await database.read((sql) => sql`SELECT reported_at FROM approvals`)).toEqual([
-      { reported_at: null },
-    ]);
     expect(await database.read((sql) => sql`SELECT closed_reported_at FROM requests`)).toEqual([
       { closed_reported_at: null },
       { closed_reported_at: null },
     ]);
     expect(await readWakeState(database)).toEqual([]);
     expect(inbox.reconsidered()).toBe(0);
+  });
+
+  test("an unlinked channel learns nothing but that it isn't linked", async () => {
+    const database = await openInbox();
+    const inbox = inboxFor(database);
+    const caller: ChannelCaller = { ...lead, channelId: "toybox-new" };
+
+    const result = await inbox.read(caller);
+    expect(result).toEqual({
+      linked: false,
+      requests: [],
+      more: 0,
+      waiting: [],
+      moreWaiting: 0,
+      ended: [],
+      moreEnded: 0,
+    });
+    expect(inboxContract.present(result, { at: AT })).toBe(notLinked("lead"));
+    expect(await readWakeState(database)).toEqual([]);
+    expect(inbox.reconsidered()).toBe(1);
   });
 });
 
@@ -438,6 +446,11 @@ describe("reporting requests that ended", () => {
   test("says nothing of one the lead never read or dismissed, or of another channel's", async () => {
     const database = await openInbox();
     await createStoredLink(database, "other");
+    await database.write(
+      (transaction) => transaction`
+        INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('other', 'U-owner', 0)
+      `,
+    );
     const others = askMessage("1700000200.000100", { channelId: "C-other" });
     const unread = askMessage("1700000300.000100");
     await ingest(database, posted(ask));
@@ -478,211 +491,5 @@ describe("reporting requests that ended", () => {
     const second = await inbox.read(lead, AT + 2 * MINUTE, 2);
     expect(second.ended.map(({ id }) => id)).toEqual([3]);
     expect(second.moreEnded).toBe(0);
-  });
-});
-
-describe("reporting settings", () => {
-  test("reports each proposal that ended once, oldest first, and only to its own channel", async () => {
-    const database = await openInbox();
-    await createStoredApproval(database, {
-      id: "approval-1",
-      number: 1,
-      state: "applied",
-      appliedAt: NOW,
-      decidedBy: "U-owner",
-      decidedAt: NOW,
-    });
-    await createStoredApproval(database, { id: "approval-2", number: 2 });
-    await createStoredApproval(database, {
-      id: "approval-3",
-      number: 3,
-      action: "set",
-      patch: [
-        { field: "request_mode", after: "all" },
-        { field: "observe", after: "channel" },
-        { field: "publish_channel_id", after: "C-news" },
-      ],
-      state: "expired",
-    });
-    await createStoredApproval(database, {
-      id: "approval-4",
-      number: 4,
-      action: "owner",
-      patch: [{ field: "owner_user_id", after: "U-carol" }],
-      state: "stale",
-      staleReason: "reversed",
-      decidedBy: "U-owner",
-      decidedAt: NOW,
-    });
-    await createStoredApproval(database, {
-      id: "approval-6",
-      number: 6,
-      action: "resume",
-      patch: [{ field: "status", after: "active" }],
-      state: "rejected",
-      decidedBy: "U-owner",
-      decidedAt: NOW,
-    });
-    await createStoredLink(database, "other");
-    await createStoredApproval(database, {
-      id: "approval-5",
-      number: 5,
-      toyboxChannelId: "toybox-other",
-      linkId: "other",
-      state: "rejected",
-      decidedBy: "U-owner",
-      decidedAt: NOW,
-    });
-    const inbox = inboxFor(database);
-
-    const { settings } = await inbox.read();
-    expect(settings).toEqual([
-      {
-        approval: 1,
-        action: "allow",
-        state: "applied",
-        owner,
-        decidedBy: owner,
-        staleReason: null,
-        changes: [{ kind: "allow", person: { userId: "U-carol", name: "Carol Chen" } }],
-      },
-      {
-        approval: 3,
-        action: "set",
-        state: "expired",
-        owner,
-        decidedBy: null,
-        staleReason: null,
-        changes: [
-          { kind: "requests", mode: "all" },
-          { kind: "observe", mode: "channel" },
-          // The bridge hasn't read the channel, so it has no name to show.
-          { kind: "publish", channel: { id: "C-news", name: null } },
-        ],
-      },
-      {
-        approval: 4,
-        action: "owner",
-        state: "stale",
-        owner,
-        decidedBy: owner,
-        staleReason: "reversed",
-        changes: [{ kind: "owner", person: { userId: "U-carol", name: "Carol Chen" } }],
-      },
-      {
-        approval: 6,
-        action: "resume",
-        state: "rejected",
-        owner,
-        decidedBy: owner,
-        staleReason: null,
-        changes: [{ kind: "resume" }],
-      },
-    ]);
-    expect(
-      await database.read((sql) => sql`SELECT number, reported_at FROM approvals ORDER BY number`),
-    ).toEqual([
-      { number: 1, reported_at: AT },
-      { number: 2, reported_at: null },
-      { number: 3, reported_at: AT },
-      { number: 4, reported_at: AT },
-      { number: 5, reported_at: null },
-      { number: 6, reported_at: AT },
-    ]);
-    expect((await inbox.read(lead, AT + MINUTE)).settings).toEqual([]);
-  });
-
-  test("an unlinked channel learns how its proposals ended, and nothing else", async () => {
-    const database = await openInbox();
-    await createStoredApproval(database, {
-      toyboxChannelId: "toybox-new",
-      linkId: null,
-      action: "link",
-      readSet: { ...pendingApproval().readSet, link: "none", before: {} },
-      patch: [
-        { field: "slack_channel_id", after: "C-link" },
-        { field: "publish_channel_id", after: "C-link" },
-        { field: "request_mode", after: "mention" },
-        { field: "observe", after: "requesters" },
-        { field: "requests_routine_id", after: "routine-new" },
-        { field: "allowlist.U-carol", after: { label: null } },
-      ],
-      state: "rejected",
-      decidedBy: "U-owner",
-      decidedAt: NOW,
-    });
-    const inbox = inboxFor(database);
-    const caller: ChannelCaller = { ...lead, channelId: "toybox-new" };
-
-    const result = await inbox.read(caller);
-    expect(result).toEqual({
-      linked: false,
-      linkProposal: null,
-      settings: [
-        {
-          approval: 1,
-          action: "link",
-          state: "rejected",
-          owner,
-          decidedBy: owner,
-          staleReason: null,
-          changes: [
-            { kind: "watch", channel: { id: "C-link", name: "toy-box-private" } },
-            { kind: "publish", channel: { id: "C-link", name: "toy-box-private" } },
-            { kind: "requests", mode: "mention" },
-            { kind: "observe", mode: "requesters" },
-            { kind: "allow", person: { userId: "U-carol", name: "Carol Chen" } },
-          ],
-        },
-      ],
-      requests: [],
-      more: 0,
-      waiting: [],
-      moreWaiting: 0,
-      ended: [],
-      moreEnded: 0,
-    });
-    expect(inboxContract.present(result, { at: AT })).toBe(
-      [
-        "## Settings",
-        "- a1 rejected by Alice Chen: link #toy-box-private, and let Carol Chen ask for help",
-        "",
-        notLinked("lead"),
-      ].join("\n"),
-    );
-    expect(await readWakeState(database)).toEqual([]);
-    expect(inbox.reconsidered()).toBe(1);
-  });
-
-  test("an unlinked channel names the newest open proposal to link it", async () => {
-    const database = await openInbox();
-    const proposal = (number: number, changes: Partial<Approval> = {}) =>
-      createStoredApproval(database, {
-        id: `approval-${number}`,
-        number,
-        toyboxChannelId: "toybox-new",
-        linkId: null,
-        action: "link",
-        readSet: { ...pendingApproval().readSet, link: "none", before: {} },
-        patch: [{ field: "slack_channel_id", after: "C-link" }],
-        ...changes,
-      });
-    await proposal(1);
-    await proposal(2, { state: "approved", decidedBy: "U-owner", decidedAt: NOW });
-    await proposal(3, { state: "rejected", decidedBy: "U-owner", decidedAt: NOW });
-    await proposal(4, { toyboxChannelId: "toybox-other" });
-    await proposal(5, { action: "allow", patch: pendingApproval().patch });
-    const inbox = inboxFor(database);
-
-    const result = await inbox.read({ ...lead, channelId: "toybox-new" });
-    expect(result).toMatchObject({ linked: false, linkProposal: 2 });
-    expect(inboxContract.present(result, { at: AT })).toBe(
-      [
-        "## Settings",
-        "- a3 rejected by Alice Chen: link #toy-box-private",
-        "",
-        "This Toy Box channel isn't linked to Slack until a2 applies, so keep the routines here that run toy-box-slack.",
-      ].join("\n"),
-    );
   });
 });

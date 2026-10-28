@@ -116,8 +116,8 @@ function nextStep({ template, registered }: Routine, linked: boolean): string {
     return `The link uses routine ${registered.routineId}${drift}. To update it in place, pass routineId ${registered.routineId} to set_routine with this prompt, keeping its title and schedule. To replace it, register this one, then run ${tell} ${returned}.`;
   }
   if (requests) {
-    return "Then propose the link with `toy-box-slack link --slack-channel <id> --routine <routineId>`, passing the Slack channel's ID and the routineId set_routine returned.";
+    return "Then have the owner link the channel with `toy-box-slack link --slack-channel <id> --routine <routineId>`, passing the Slack channel's ID and the routineId set_routine returned.";
   }
   const daily = `For daily notes, schedule it \`${releaseNotesSchedules.day}\` and pass \`--period day\`.`;
-  return `${linked ? "Then" : "Once the link is approved,"} run ${tell} ${returned}. ${daily}`;
+  return `${linked ? "Then" : "Once the channel is linked,"} run ${tell} ${returned}. ${daily}`;
 }

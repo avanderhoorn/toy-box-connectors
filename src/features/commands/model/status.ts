@@ -18,7 +18,7 @@ const wakeSchema = z
     z
       .object({
         kind: z.literal("wake"),
-        reason: z.enum(["requests", "reminder", "setup", "catch_up"]),
+        reason: z.enum(["requests", "reminder", "catch_up"]),
       })
       .strict(),
     z
@@ -156,7 +156,7 @@ function presentLinkState({ status, statusReason }: LinkStatus): string {
     case "active":
       return "active.";
     case "paused":
-      return "paused, so nothing new opens and posts wait. Run `toy-box-slack resume` to ask the owner to resume it.";
+      return "paused, so nothing new opens and posts wait. Have the owner run `toy-box-slack resume`.";
     case "suspended": {
       const { because, fix } = describeSuspension(statusReason);
       return `suspended ${because}, so nothing new opens and posts wait. ${fix}`;

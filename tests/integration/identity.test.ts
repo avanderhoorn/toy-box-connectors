@@ -62,7 +62,6 @@ const fakeInstallation: Installation = {
   appId: "AFAKE",
   botId: "BFAKE",
   botUserId: "UFAKEBOT",
-  ownerUserId: null,
   status: "active",
 };
 
@@ -103,11 +102,8 @@ describe("confirming the tokens", () => {
     const slack = fakeSlack({ enterpriseId: "EFAKE" });
     const database = await openTestDatabase();
     await confirm(database, slack);
-    await database.write(
-      (transaction) => transaction`UPDATE installation SET owner_user_id = 'U-owner'`,
-    );
 
-    const installation = { ...fakeInstallation, enterpriseId: "EFAKE", ownerUserId: "U-owner" };
+    const installation = { ...fakeInstallation, enterpriseId: "EFAKE" };
     expect(await confirm(database, slack)).toMatchObject({ kind: "confirmed", installation });
     expect(await database.read(readInstallation)).toEqual(installation);
   });

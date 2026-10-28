@@ -29,7 +29,6 @@ export function receiptKey(delivery: SlackDelivery): string | null {
       return delivery.callback.eventId;
     case "rate_limited":
       return `app_rate_limited:${delivery.appId}:${delivery.teamId}:${delivery.minute}`;
-    case "interactive":
     case "other":
     case "malformed":
       return delivery.envelopeId;
@@ -43,8 +42,6 @@ export function receiptType(delivery: SlackDelivery): string {
       return delivery.callback.event.type;
     case "rate_limited":
       return "app_rate_limited";
-    case "interactive":
-      return "interactive";
     case "other":
       return delivery.type;
     case "malformed":
@@ -61,7 +58,9 @@ export function acksInTime(arrivedAt: number, committedAt: number): boolean {
 export type LifecycleAction =
   /** The channel changed, so its stored facts wait for a fresh read. */
   | { kind: "invalidate"; channelId: string }
-  /** Using the channel is unsafe until the owner approves resume. Its facts wait for a fresh read. */
+  /**
+   * Using the channel is unsafe until the owner resumes the link. Its facts wait for a fresh read.
+   */
   | { kind: "suspend"; channelId: string; reason: ChannelSuspendReason }
   /** Slack gave the channel a new ID. */
   | { kind: "move"; oldChannelId: string; newChannelId: string }

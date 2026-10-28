@@ -80,7 +80,6 @@ export type FakeSlack = FakeSlackReads & {
   readonly deliveries: readonly FakeSlackDelivery[];
   readonly activeConnections: number;
   sendEvent(event: Record<string, unknown>, options?: FakeEventOptions): FakeSlackDelivery;
-  sendInteraction(payload: unknown, envelopeId?: string): FakeSlackDelivery;
   /** Also allows deliberately malformed/new payloads for receiver robustness tests. */
   sendFrame(frame: Record<string, unknown>, connectionId?: number): FakeSlackDelivery;
   /** Retries an unacked delivery, keeping its ID unless a new envelope ID is requested. */
@@ -305,14 +304,6 @@ export function startFakeSlack(
     },
     sendFrame,
     sendEvent,
-    sendInteraction(payload, envelopeId = crypto.randomUUID()) {
-      return sendFrame({
-        type: "interactive",
-        envelope_id: envelopeId,
-        accepts_response_payload: true,
-        payload: structuredClone(payload),
-      });
-    },
     redeliver(envelopeId, newEnvelopeId = envelopeId) {
       const previous = deliveries.findLast((delivery) => delivery.envelopeId === envelopeId);
       if (!previous) throw new Error(`Unknown envelope ${envelopeId}.`);

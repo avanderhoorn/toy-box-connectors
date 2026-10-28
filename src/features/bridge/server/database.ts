@@ -8,7 +8,7 @@
 
 import { pathToFileURL } from "node:url";
 import { initializeActivitySchema, numberGapsOnce } from "@activity/server/schema";
-import { initializeLinkSchema, nameMadeLinksOnce, numberApprovalsOnce } from "@links/server/schema";
+import { initializeLinkSchema } from "@links/server/schema";
 import {
   addOutboxDeliverySchema,
   initializeOutboxSchema,
@@ -44,11 +44,9 @@ export const bridgeMigrations: readonly Migration[] = [
   addOutboxDeliverySchema,
   async (transaction) => {
     await numberOutboxItemsOnce(transaction);
-    await numberApprovalsOnce(transaction);
     await numberGapsOnce(transaction);
   },
   rebuildRequestSchema,
-  nameMadeLinksOnce,
 ];
 
 /** The settings that keep an acked event on disk through a power loss and keep references whole. */

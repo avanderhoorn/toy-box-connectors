@@ -2,7 +2,6 @@ import { describe, expect, onTestFinished, test } from "bun:test";
 import { join } from "node:path";
 import { bridgeMigrations, openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
 import { createTestFolder, openTestDatabase } from "@bridge/server/testFixtures";
-import { purgeForUninstall } from "@links/server/purge";
 import { createStoredLink } from "@links/server/testFixtures";
 import { readRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
@@ -11,7 +10,6 @@ import {
   advanceReconciliation,
   expirePostSlots,
   moveOutboxChannel,
-  queueCard,
   queueItem,
   readDueReconciliations,
   readOutboxItem,
@@ -191,7 +189,6 @@ describe("durable attempts", () => {
       number: 1,
       linkId: "link",
       requestId: null,
-      approvalId: null,
       requestRev: null,
       kind: "publication",
       phase: null,
@@ -218,14 +215,9 @@ describe("durable attempts", () => {
     expect(await database.read((sql) => readOutboxItem(sql, 999))).toBeNull();
   });
 
-  test("commits the exact send-time card snapshot and its hash with sending", async () => {
+  test("commits the exact send-time snapshot and its hash with sending", async () => {
     const database = await openTestDatabase();
-    const queued = await queue(database, {
-      kind: "card",
-      phase: "post",
-      approvalId: "approval",
-      payload: {},
-    });
+    const queued = await queue(database);
     const message = { text: "Approved now", blocks: [], parse: "none" };
 
     const sending = await start(database, queued, 1_000, message);
@@ -538,7 +530,7 @@ describe("durable attempts", () => {
   });
 
   test.each([
-    { method: "chat.update", kind: "card", phase: "update" },
+    { method: "chat.update", kind: "progress", phase: null },
     { method: "chat.delete", kind: "retract", phase: null },
     { method: "reactions.add", kind: "reaction", phase: null },
     { method: "reactions.remove", kind: "reaction", phase: null },
@@ -571,11 +563,10 @@ describe("durable attempts", () => {
     },
   );
 
-  test("ready answers and retractions precede cards, progress and feedback", async () => {
+  test("ready answers and retractions precede progress and feedback", async () => {
     const database = await openTestDatabase();
     const reaction = await queue(database, { kind: "reaction" });
     const progress = await queue(database);
-    const card = await queue(database, { kind: "card", phase: "post" });
     const reply = await queue(database, {
       kind: "reply",
       phase: "final",
@@ -591,221 +582,7 @@ describe("durable attempts", () => {
 
     expect(
       (await database.read((sql) => readReadyOutbox(sql, 0))).map((entry) => entry.id),
-    ).toEqual([retract, reply, publication, card, progress, reaction].map((entry) => entry.id));
-  });
-});
-
-describe("current card state", () => {
-  const card = { approvalId: "approval", linkId: null, channelId: "C-one" };
-
-  test.each(["post", "update"] as const)(
-    "a rejected card %s can snapshot its approval's current render",
-    async (phase) => {
-      const database = await openTestDatabase();
-      const method = phase === "post" ? "chat.postMessage" : "chat.update";
-      const sending = await start(
-        database,
-        await queue(database, { kind: "card", phase, approvalId: card.approvalId }),
-        1_000,
-        { text: "Pending" },
-        method,
-      );
-      const retry = await database.write((tx) =>
-        settleOutboxAttempt(
-          tx,
-          sending,
-          { state: "queued", error: "rate_limited", nextAttemptAt: 2_000 },
-          1_100,
-        ),
-      );
-      const updated = await start(database, retry!, 2_000, { text: "Approved" }, method);
-
-      expect(updated.payload).toEqual({ text: "Approved" });
-      expect(updated.payloadHash).not.toBe(sending.payloadHash);
-      expect(updated.attempts).toBe(2);
-      expect(updated.attemptMethod).toBe(method);
-    },
-  );
-
-  test("even a card retry cannot change its stored method", async () => {
-    const database = await openTestDatabase();
-    const sending = await start(
-      database,
-      await queue(database, { kind: "card", phase: "post", approvalId: card.approvalId }),
-    );
-    const retry = await database.write((tx) =>
-      settleOutboxAttempt(
-        tx,
-        sending,
-        { state: "queued", error: "rate_limited", nextAttemptAt: 2_000 },
-        1_100,
-      ),
-    );
-
-    await expect(
-      database.write((tx) => startOutboxAttempt(tx, retry!, retry!.payload, "chat.update", 2_000)),
-    ).rejects.toThrow("stored method and payload snapshot");
-  });
-
-  test("a card update waits for the same card's in-flight post, not another card", async () => {
-    const database = await openTestDatabase();
-    const post = await start(
-      database,
-      await queue(database, { kind: "card", phase: "post", approvalId: card.approvalId }),
-    );
-    const update = await queue(database, {
-      kind: "card",
-      phase: "update",
-      approvalId: card.approvalId,
-    });
-    const other = await queue(database, { kind: "card", phase: "update", approvalId: "other" });
-
-    expect(
-      await database.write((tx) =>
-        startOutboxAttempt(tx, update, update.payload, "chat.update", 2_000),
-      ),
-    ).toEqual({ kind: "waiting", reason: "card_in_flight", until: 3_000 });
-    expect(await start(database, other, 2_000, other.payload, "chat.update")).toMatchObject({
-      state: "sending",
-    });
-    await database.write((tx) =>
-      settleOutboxAttempt(
-        tx,
-        post,
-        { state: "sent", slackTs: "1.1", evidence: "response", metadataOk: true },
-        2_100,
-      ),
-    );
-    expect(await start(database, update, 2_100, update.payload, "chat.update")).toMatchObject({
-      state: "sending",
-    });
-  });
-
-  test("a newer update supersedes an older unknown without changing the card post", async () => {
-    const database = await openTestDatabase();
-    const post = await queue(database, {
-      kind: "card",
-      phase: "post",
-      approvalId: card.approvalId,
-    });
-
-    const sending = await start(
-      database,
-      await queue(database, { kind: "card", phase: "update", approvalId: card.approvalId }),
-      1_000,
-      { text: "Pending" },
-      "chat.update",
-    );
-    await unknown(database, sending);
-
-    await database.write((tx) => queueCard(tx, { ...card, phase: "update" }, 12_000));
-
-    expect(await item(database, sending.id)).toMatchObject({
-      state: "superseded",
-      nextAttemptAt: null,
-    });
-    expect(await item(database, post.id)).toEqual(post);
-    expect(await database.read((sql) => readDueReconciliations(sql, 120_000))).toEqual([]);
-    const superseded = await item(database, sending.id);
-    expect(
-      await database.write((tx) =>
-        startOutboxAttempt(tx, superseded, sending.payload, "chat.update", 12_000),
-      ),
-    ).toEqual({ kind: "changed" });
-  });
-
-  test("startup never supersedes a queued update belonging to another approval", async () => {
-    const database = await openTestDatabase();
-    const older = await queue(database, {
-      kind: "card",
-      phase: "update",
-      approvalId: "approval-one",
-    });
-    const newer = await queue(database, {
-      kind: "card",
-      phase: "update",
-      approvalId: "approval-two",
-    });
-    await database.write((tx) => recoverOutboxAttempts(tx, 12_000));
-    expect(await item(database, older.id)).toEqual(older);
-    expect(await item(database, newer.id)).toEqual(newer);
-  });
-
-  test.each(["queued", "delivery_unknown"] as const)(
-    "an in-flight older update cannot become a %s retry after a newer update",
-    async (state) => {
-      const database = await openTestDatabase();
-      const sending = await start(
-        database,
-        await queue(database, { kind: "card", phase: "update", approvalId: card.approvalId }),
-        1_000,
-        { text: "Pending" },
-        "chat.update",
-      );
-      await database.write((tx) => queueCard(tx, { ...card, phase: "update" }, 2_000));
-      const replacement = (await database.read((sql) => readReadyOutbox(sql, 2_000)))[0]!;
-      expect(
-        await database.write((tx) =>
-          startOutboxAttempt(tx, replacement, { text: "Approved" }, "chat.update", 2_000),
-        ),
-      ).toEqual({ kind: "waiting", reason: "card_in_flight", until: 3_000 });
-      const settled = await database.write((tx) =>
-        settleOutboxAttempt(
-          tx,
-          sending,
-          { state, error: "response_lost_or_rejected", nextAttemptAt: 11_000 },
-          2_100,
-        ),
-      );
-      expect(settled).toMatchObject({ state: "superseded", nextAttemptAt: null });
-      const latest = await start(database, replacement, 2_100, { text: "Approved" }, "chat.update");
-      await database.write((tx) =>
-        settleOutboxAttempt(
-          tx,
-          latest,
-          { state: "sent", slackTs: "1.1", evidence: "response", metadataOk: true },
-          2_200,
-        ),
-      );
-
-      expect(await database.read((sql) => readDueReconciliations(sql, 120_000))).toEqual([]);
-      expect(await database.read((sql) => readReadyOutbox(sql, 120_000))).toEqual([]);
-      expect(
-        await database.write((tx) =>
-          settleOutboxAttempt(
-            tx,
-            sending,
-            { state: "sent", slackTs: "1.1", evidence: "response", metadataOk: true },
-            2_300,
-          ),
-        ),
-      ).toBeNull();
-      expect(await item(database, sending.id)).toMatchObject({ state: "superseded" });
-      expect(await item(database, latest.id)).toMatchObject({
-        state: "sent",
-        payload: { text: "Approved" },
-      });
-    },
-  );
-
-  test("startup supersedes an interrupted older card update before any retry", async () => {
-    const database = await openTestDatabase();
-    const sending = await start(
-      database,
-      await queue(database, { kind: "card", phase: "update", approvalId: card.approvalId }),
-      1_000,
-      { text: "Pending" },
-      "chat.update",
-    );
-    await database.write((tx) => queueCard(tx, { ...card, phase: "update" }, 2_000));
-
-    expect(await database.write((tx) => recoverOutboxAttempts(tx, 3_000))).toEqual([sending.id]);
-    expect(await item(database, sending.id)).toMatchObject({
-      state: "superseded",
-      nextAttemptAt: null,
-    });
-    expect(await database.read((sql) => readDueReconciliations(sql, 120_000))).toEqual([]);
-    expect(await database.read((sql) => readReadyOutbox(sql, 3_000))).toHaveLength(1);
+    ).toEqual([retract, reply, publication, progress, reaction].map((entry) => entry.id));
   });
 });
 
@@ -905,39 +682,41 @@ describe("bounded reconciliation", () => {
 });
 
 describe("shared channel post slots", () => {
-  test("two links and a card share one second, but another channel does not wait", async () => {
+  test("two links share one second, but another channel does not wait", async () => {
     const database = await openTestDatabase();
     const publication = await queue(database, {
       kind: "publication",
       linkId: "one",
       publicationKey: "notes",
     });
-    const card = await queue(database, { kind: "card", phase: "post", linkId: "two" });
+    const progress = await queue(database, { linkId: "two" });
     const other = await queue(database, { channelId: "C-other" });
 
     const [posted, held] = await Promise.all([
       database.write((tx) =>
         startOutboxAttempt(tx, publication, publication.payload, "chat.postMessage", 1_000),
       ),
-      database.write((tx) => startOutboxAttempt(tx, card, card.payload, "chat.postMessage", 1_000)),
+      database.write((tx) =>
+        startOutboxAttempt(tx, progress, progress.payload, "chat.postMessage", 1_000),
+      ),
     ]);
 
     expect(posted.kind).toBe("started");
     expect(held).toEqual({ kind: "waiting", reason: "post_slot", until: 2_000 });
-    expect(await item(database, card.id)).toEqual(card);
+    expect(await item(database, progress.id)).toEqual(progress);
     expect(await start(database, other)).toMatchObject({ state: "sending" });
     expect(
       await database.write((tx) =>
-        startOutboxAttempt(tx, card, card.payload, "chat.postMessage", 1_999),
+        startOutboxAttempt(tx, progress, progress.payload, "chat.postMessage", 1_999),
       ),
     ).toEqual({ kind: "waiting", reason: "post_slot", until: 2_000 });
-    expect(await start(database, card, 2_000)).toMatchObject({ state: "sending" });
+    expect(await start(database, progress, 2_000)).toMatchObject({ state: "sending" });
   });
 
   test("updates and feedback neither wait for nor extend a channel's post slot", async () => {
     const database = await openTestDatabase();
     await start(database, await queue(database));
-    const update = await queue(database, { kind: "card", phase: "update" });
+    const update = await queue(database);
     const feedback = await queue(database, { kind: "reaction" });
 
     await start(database, update, 1_001, update.payload, "chat.update");
@@ -967,7 +746,7 @@ describe("shared channel post slots", () => {
     },
   );
 
-  test("maintenance removes only expired slots, and uninstall removes the remaining slots", async () => {
+  test("maintenance removes only expired slots", async () => {
     const database = await openTestDatabase();
     await database.write(async (tx) => {
       await tx`INSERT INTO outbox_channels VALUES ('C-old', 999), ('C-due', 1000), ('C-new', 1001)`;
@@ -976,10 +755,6 @@ describe("shared channel post slots", () => {
     expect(await database.read((sql) => sql`SELECT * FROM outbox_channels`)).toEqual([
       { channel_id: "C-new", next_post_at: 1_001 },
     ]);
-
-    await database.write((tx) => purgeForUninstall(tx, 1_001));
-
-    expect(await database.read((sql) => sql`SELECT * FROM outbox_channels`)).toEqual([]);
   });
 });
 

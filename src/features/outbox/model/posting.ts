@@ -41,7 +41,7 @@ export type PostingPermission =
   | { kind: "held"; reason: "workspaces_unknown" }
   | { kind: "suspended"; reason: ChannelSuspendReason };
 
-/** Send-time authority for lead-authored posts. Cards, cleanup and feedback have separate gates. */
+/** Send-time authority for lead-authored posts. Cleanup and feedback have separate gates. */
 export function postingPermission(
   post: PostIntent,
   installation: Installation | null,
@@ -50,7 +50,7 @@ export function postingPermission(
   channel: ChannelInfo | null,
   now: number,
 ): PostingPermission {
-  if (!installation || installation.status !== "active" || installation.ownerUserId === null) {
+  if (!installation || installation.status !== "active") {
     return { kind: "waiting", reason: "installation_inactive" };
   }
   if (!link || link.id !== post.linkId) return { kind: "failed", error: "link_removed" };
@@ -74,10 +74,7 @@ export function postingPermission(
     if (post.requestRev !== request.inputRev) {
       return { kind: "superseded", revision: request.inputRev };
     }
-    if (
-      request.requesterUserId !== installation.ownerUserId &&
-      !link.allowlist.has(request.requesterUserId)
-    ) {
+    if (!link.allowlist.has(request.requesterUserId)) {
       return { kind: "failed", error: "requester_denied" };
     }
     if (request.state === "cancelled") return { kind: "failed", error: "request_closed" };

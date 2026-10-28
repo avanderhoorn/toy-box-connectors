@@ -137,16 +137,12 @@ test("pairs each phase with the kind of item it belongs to", async () => {
   const valid = [
     { kind: "reply", phase: "final" },
     { kind: "reply", phase: "follow_up" },
-    { kind: "card", phase: "post" },
-    { kind: "card", phase: "update" },
     { kind: "progress", phase: null },
     { kind: "reaction", phase: null },
   ];
   const invalid = [
     { kind: "reply", phase: null },
     { kind: "reply", phase: "post" },
-    { kind: "card", phase: null },
-    { kind: "card", phase: "final" },
     { kind: "status", phase: "final" },
   ];
 
@@ -168,7 +164,6 @@ describe("version 2 upgrades", () => {
           number,
           link_id: "link",
           request_id: 14 + number,
-          approval_id: "approval",
           request_rev: 2,
           kind: "reply",
           phase: "final",

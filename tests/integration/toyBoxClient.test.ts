@@ -318,12 +318,6 @@ test("a deleted channel suspends its link, cancels its requests and is never fol
       status_reason: "toybox_channel_deleted",
     }),
   );
-  const audit = await database.read(
-    (sql) => sql`SELECT actor, action, link_id, subject FROM audit WHERE action = 'suspend'`,
-  );
-  expect(audit).toEqual([
-    { actor: "bridge", action: "suspend", link_id: "link", subject: "toybox_channel_deleted" },
-  ]);
   expect(
     await database.read((sql) => sql`SELECT id, state, closed_reason FROM requests ORDER BY id`),
   ).toEqual([
@@ -365,8 +359,6 @@ test("a bridge that starts after its channel was deleted suspends the link once"
     "deleted",
   ]);
   expect(await readLink(database)).toMatchObject({ status: "suspended", updated_at: NOW + 1 });
-  const audit = await database.read((sql) => sql`SELECT at FROM audit WHERE action = 'suspend'`);
-  expect(audit).toEqual([{ at: NOW + 1 }]);
 });
 
 test("the waiting status a lead showed survives the turn a scheduled run starts", async () => {

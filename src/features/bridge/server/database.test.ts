@@ -58,17 +58,14 @@ describe("openBridgeDatabase", () => {
 
     const { version, objects } = await database.read(readSchema);
 
-    expect(version).toBe(5);
+    expect(version).toBe(4);
     expect(
       objects.filter((object) => object.type === "table").map((object) => object.name),
     ).toEqual([
       "allowlist",
-      "approvals",
-      "audit",
       "changes",
       "channel_aliases",
       "channel_info",
-      "claims",
       "coverage",
       "cursors",
       "files",
@@ -92,7 +89,6 @@ describe("openBridgeDatabase", () => {
     expect(
       objects.filter((object) => object.type === "index").map((object) => object.name),
     ).toEqual([
-      "claims_one_open",
       "files_message",
       "outbox_one_final",
       "outbox_one_publication",
@@ -171,7 +167,7 @@ describe("openBridgeDatabase", () => {
 
     const database = await open(join(folder, "bridge.db"));
 
-    expect(await database.read(readSchema)).toMatchObject({ version: 5 });
+    expect(await database.read(readSchema)).toMatchObject({ version: 4 });
     expect(readdirSync(folder)).toContain("bridge.db");
     expect(existsSync(join(folder, "..", "a"))).toBe(false);
   });

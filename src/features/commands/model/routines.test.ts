@@ -39,7 +39,7 @@ describe("presenting routines", () => {
         "Every link needs it. The bridge runs it whenever requests need you, so its schedule is only a safety net.",
         "Title `Slack requests`, schedule `0 9 * * 1-5`, prompt:",
         `\`\`\`\n${requests.prompt}\n\`\`\``,
-        "Then propose the link with `toy-box-slack link --slack-channel <id> --routine <routineId>`, passing the Slack channel's ID and the routineId set_routine returned.",
+        "Then have the owner link the channel with `toy-box-slack link --slack-channel <id> --routine <routineId>`, passing the Slack channel's ID and the routineId set_routine returned.",
       ].join("\n\n"),
     );
   });
@@ -64,10 +64,10 @@ describe("presenting routines", () => {
     expect(nextStep(digest, false)).toBe("The bridge doesn't need its ID.");
   });
 
-  test("release notes go to the link once it's approved, weekly unless the owner wants them daily", () => {
+  test("release notes go to the link once there is one, weekly unless the owner wants them daily", () => {
     const daily = "For daily notes, schedule it `0 16 * * 1-5` and pass `--period day`.";
     expect(nextStep(releaseNotes, false)).toBe(
-      `Once the link is approved, run \`toy-box-slack routine --publish <routineId> --series release-notes --period week\` with the routineId set_routine returned. ${daily}`,
+      `Once the channel is linked, run \`toy-box-slack routine --publish <routineId> --series release-notes --period week\` with the routineId set_routine returned. ${daily}`,
     );
     expect(nextStep(releaseNotes)).toBe(
       `Then run \`toy-box-slack routine --publish <routineId> --series release-notes --period week\` with the routineId set_routine returned. ${daily}`,

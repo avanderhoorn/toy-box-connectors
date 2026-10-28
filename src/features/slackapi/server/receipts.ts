@@ -7,8 +7,6 @@
 export type ReceiptDisposition =
   /** It changed the ledger, a link or a file. */
   | "applied"
-  /** It read as a claim, which was consumed. */
-  | "claim"
   /** No link watches its channel. */
   | "unlinked"
   /** Nothing the bridge handles, or nothing it may take while Slack rejects the bot token. */
@@ -18,13 +16,11 @@ export type ReceiptDisposition =
   /** It couldn't be read, so repair reads what it was about. */
   | "malformed"
   /** Slack held events back for a minute, so repair reads that minute. */
-  | "rate_limited"
-  /** A click, which approvals decided. */
-  | "interactive";
+  | "rate_limited";
 
 export type Receipt = {
   key: string;
-  /** The event or frame type, such as message or interactive. */
+  /** The event or frame type, such as message or app_rate_limited. */
   type: string;
   /** When the delivery arrived, the last moment the bridge knows it was receiving. */
   receivedAt: number;

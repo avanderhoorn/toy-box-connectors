@@ -9,14 +9,13 @@ type InstallationRow = {
   bot_id: string;
   bot_user_id: string;
   enterprise_id: string | null;
-  owner_user_id: string | null;
   status: InstallationStatus;
 };
 
 /** The installation, or null before the bridge has first confirmed its tokens with Slack. */
 export async function readInstallation(sql: Bun.SQL): Promise<Installation | null> {
   const [row] = await sql<InstallationRow[]>`
-    SELECT team_id, app_id, bot_id, bot_user_id, enterprise_id, owner_user_id, status
+    SELECT team_id, app_id, bot_id, bot_user_id, enterprise_id, status
     FROM installation
   `;
   if (!row) return null;
@@ -26,12 +25,11 @@ export async function readInstallation(sql: Bun.SQL): Promise<Installation | nul
     botId: row.bot_id,
     botUserId: row.bot_user_id,
     enterpriseId: row.enterprise_id,
-    ownerUserId: row.owner_user_id,
     status: row.status,
   };
 }
 
-/** Records the installation Slack first confirmed the tokens for, active and with no owner yet. */
+/** Records the installation Slack first confirmed the tokens for, as active. */
 export async function recordInstallation(
   transaction: Bun.SQL,
   identity: SlackIdentity,

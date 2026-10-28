@@ -1,6 +1,4 @@
 import type { BridgeDatabase } from "@bridge/server/database";
-import { forgetUnlinkedApprovals, readApproval } from "@links/server/approvals";
-import { audit } from "@links/server/audit";
 import { suspendChannelLinks } from "@links/server/lifecycle";
 import { readRequest } from "@requests/server/database";
 import { slackTsSchema, type SlackTs } from "@slackapi/model/ts";
@@ -173,7 +171,7 @@ export function createRetraction(
             await settleRequestAnswer(tx, target.requestId, at);
           }
         }
-        if (changed.length > 0 && (await orphanedTarget(tx, target))) {
+        if (changed.length > 0 && (await linkWasRemoved(tx, target.linkId))) {
           await tx`DELETE FROM outbox WHERE id IN (${item.id}, ${target.id})`;
         }
       } else if (settled.state === "failed") {
@@ -186,12 +184,11 @@ export function createRetraction(
               AND attempts = ${target.attempts} AND payload_hash = ${target.payloadHash}
           `;
         }
-        await abandonOrphan(tx, item, target, at);
-        if (await orphanedTarget(tx, target)) {
+        await abandonOrphan(tx, item, target);
+        if (await linkWasRemoved(tx, target.linkId)) {
           await tx`DELETE FROM outbox WHERE id = ${item.id}`;
         }
       }
-      await forgetUnlinkedApprovals(tx, at);
       return { kind: "settled", item: settled };
     });
   }
@@ -219,11 +216,10 @@ async function refuse(
       sameTarget(item, target, parsed.data.ts) &&
       canRetract(target)
     ) {
-      await abandonOrphan(tx, item, target, now);
+      await abandonOrphan(tx, item, target);
     } else if (await linkWasRemoved(tx, item.linkId)) {
       await tx`DELETE FROM outbox WHERE id = ${item.id}`;
     }
-    await forgetUnlinkedApprovals(tx, now);
   }
   return settled ? { kind: "settled", item: settled } : { kind: "changed" };
 }
@@ -240,26 +236,14 @@ function sameTarget(item: OutboxItem, target: OutboxItem, ts?: SlackTs): boolean
 
 function canRetract(target: OutboxItem): boolean {
   return (
-    ["reply", "progress", "publication", "card"].includes(target.kind) &&
+    ["reply", "progress", "publication"].includes(target.kind) &&
     ["sent", "stray"].includes(target.state) &&
     target.slackTs !== null &&
-    target.evidence !== null &&
-    (target.kind !== "card" || (target.state === "stray" && target.phase === "post"))
+    target.evidence !== null
   );
 }
 
-async function orphanedTarget(tx: Bun.SQL, target: OutboxItem): Promise<boolean> {
-  return target.kind === "card"
-    ? target.approvalId === null || (await readApproval(tx, target.approvalId)) === null
-    : linkWasRemoved(tx, target.linkId);
-}
-
-async function abandonOrphan(
-  tx: Bun.SQL,
-  item: OutboxItem,
-  target: OutboxItem,
-  now: number,
-): Promise<void> {
+async function abandonOrphan(tx: Bun.SQL, item: OutboxItem, target: OutboxItem): Promise<void> {
   const current = await readOutboxItem(tx, target.id);
   if (
     !current ||
@@ -269,20 +253,9 @@ async function abandonOrphan(
     current.payloadHash !== target.payloadHash ||
     !sameTarget(item, current) ||
     !canRetract(current) ||
-    !(await orphanedTarget(tx, current))
+    !(await linkWasRemoved(tx, current.linkId))
   ) {
     return;
   }
-  await audit(
-    tx,
-    {
-      actor: "bridge",
-      action: "abandon_post",
-      linkId: target.linkId,
-      approvalId: target.approvalId,
-      subject: `${target.channelId}/${target.slackTs}`,
-    },
-    now,
-  );
   await tx`DELETE FROM outbox WHERE id IN (${item.id}, ${target.id})`;
 }

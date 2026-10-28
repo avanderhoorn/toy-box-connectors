@@ -28,7 +28,7 @@ function insertMessage(database: BridgeDatabase, message: Record<string, unknown
     user_id: "U-owner",
     team_id: "T0123",
     eligible: 1,
-    author_role: "owner",
+    author_role: "allowed",
     text: "Can you look at the deploy?",
     files: "[]",
     content_hash: "hash",
@@ -56,7 +56,7 @@ function insertFile(database: BridgeDatabase, file: Record<string, unknown>) {
 test("a message is eligible to start a request exactly when a person wrote it", async () => {
   const database = await openTestDatabase();
   const eligibility =
-    "CHECK constraint failed: eligible = (author_role IN ('owner', 'allowed', 'observed'))";
+    "CHECK constraint failed: eligible = (author_role IN ('allowed', 'observed'))";
 
   await insertMessage(database, { ts: "1700000100.000100", author_role: "observed" });
   await insertMessage(database, { ts: "1700000100.000200", author_role: "self", eligible: 0 });

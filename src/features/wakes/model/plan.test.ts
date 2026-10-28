@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { WAKES_PER_HOUR, type RanWake } from "./budget";
 import type { ToyBoxView, WakeRequest } from ".";
-import { planWakes, type OwedCatchUp, type ProposalDebt, type ScheduledLink } from "./plan";
+import { planWakes, type OwedCatchUp, type ScheduledLink } from "./plan";
 
 const now = Date.parse("2026-10-27T16:00:00.000Z");
 const seconds = (count: number) => now + count * 1_000;
@@ -35,7 +35,6 @@ function scheduled(changes: Partial<ScheduledLink> = {}): ScheduledLink {
     routineState: "present",
     blockedReason: null,
     requests: [],
-    setup: [],
     lastWakeAt: null,
     lastInboxAt: null,
     wakesSinceInbox: 0,
@@ -56,17 +55,7 @@ function catchUp(changes: Partial<OwedCatchUp> = {}): OwedCatchUp {
   };
 }
 
-function proposal(changes: Partial<ProposalDebt> = {}): ProposalDebt {
-  return {
-    approvalId: "approval-1",
-    channelId: "channel-9",
-    routineId: "routine-proposed",
-    failures: { count: 0, lastAt: null },
-    ...changes,
-  };
-}
-
-type Pass = { links?: ScheduledLink[]; proposals?: ProposalDebt[]; ran?: RanWake[] };
+type Pass = { links?: ScheduledLink[]; ran?: RanWake[] };
 
 function planPass(
   pass: Pass,
@@ -76,7 +65,7 @@ function planPass(
 ) {
   return planWakes(
     now,
-    { links: pass.links ?? [], proposals: pass.proposals ?? [], ran: pass.ran ?? [] },
+    { links: pass.links ?? [], ran: pass.ran ?? [] },
     slackUsable,
     toyBox,
     busyUntil,
@@ -105,7 +94,6 @@ describe("planning a pass", () => {
           channelId: "channel-1",
           routineId: "routine-requests",
           linkId: "link-1",
-          approvalId: null,
           catchUp: null,
           reminded: [2],
         },
@@ -124,19 +112,6 @@ describe("planning a pass", () => {
     const { wakes } = plan({ links: [link] }, () => workingLead);
     expect(wakes.map(({ kind, reminded }) => ({ kind, reminded }))).toEqual([
       { kind: "requests", reminded: [] },
-    ]);
-  });
-
-  test("names the oldest proposal a setup run tells the lead about", () => {
-    const link = scheduled({
-      setup: [
-        { approvalId: "approval-1", decidedAt: seconds(-20) },
-        { approvalId: "approval-2", decidedAt: seconds(-10) },
-      ],
-    });
-    const { wakes } = plan({ links: [link] });
-    expect(wakes.map(({ kind, approvalId }) => ({ kind, approvalId }))).toEqual([
-      { kind: "setup", approvalId: "approval-1" },
     ]);
   });
 
@@ -206,8 +181,8 @@ describe("planning a pass", () => {
     test("so each wake waits for Slack instead", () => {
       const due = scheduled({ requests: [request()] });
       const owed = scheduled({ id: "link-2", channelId: "channel-2", catchUps: [catchUp()] });
-      const pass = { links: [due, owed], proposals: [proposal()] };
-      expect(plan(pass).wakes.map(({ kind }) => kind)).toEqual(["requests", "catch_up", "setup"]);
+      const pass = { links: [due, owed] };
+      expect(plan(pass).wakes.map(({ kind }) => kind)).toEqual(["requests", "catch_up"]);
 
       const { wakes, decisions, decideAt } = planPass(pass, idle, notBusy, false);
       expect({ wakes, decideAt }).toEqual({ wakes: [], decideAt: null });
@@ -271,7 +246,6 @@ describe("planning a pass", () => {
           channelId: "channel-1",
           routineId: "routine-standup",
           linkId: "link-1",
-          approvalId: null,
           catchUp: { series: "standup", key: "standup/2026-10-27" },
           reminded: [],
         },
@@ -291,39 +265,6 @@ describe("planning a pass", () => {
         { series: "notes", key: "notes/2026-10-26" },
       ]);
     });
-
-    test("and a channel's proposals run oldest first", () => {
-      const proposals = [
-        proposal({ approvalId: "approval-1" }),
-        proposal({ approvalId: "approval-2" }),
-        proposal({ approvalId: "approval-3", channelId: "channel-8", routineId: "routine-other" }),
-      ];
-      expect(plan({ proposals }).wakes).toEqual([
-        {
-          kind: "setup",
-          channelId: "channel-9",
-          routineId: "routine-proposed",
-          linkId: null,
-          approvalId: "approval-1",
-          catchUp: null,
-          reminded: [],
-        },
-        {
-          kind: "setup",
-          channelId: "channel-8",
-          routineId: "routine-other",
-          linkId: null,
-          approvalId: "approval-3",
-          catchUp: null,
-          reminded: [],
-        },
-      ]);
-    });
-  });
-
-  test("retries a proposal's failed run on the backoff", () => {
-    const failed = proposal({ failures: { count: 2, lastAt: seconds(-10) } });
-    expect(plan({ proposals: [failed] })).toEqual({ wakes: [], decideAt: seconds(20) });
   });
 
   test("counts the runs it starts against the budget", () => {
@@ -333,7 +274,7 @@ describe("planning a pass", () => {
     }));
     const first = scheduled({ requests: [request()] });
     const second = scheduled({ id: "link-2", channelId: "channel-2", requests: [request()] });
-    expect(plan({ links: [first, second], proposals: [proposal()], ran })).toEqual({
+    expect(plan({ links: [first, second], ran })).toEqual({
       wakes: [expect.objectContaining({ linkId: "link-1" })],
       decideAt: minutes(10),
     });

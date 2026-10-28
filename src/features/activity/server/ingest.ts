@@ -1,5 +1,3 @@
-import { readClaim } from "@links/model/claim";
-import { takeClaim } from "@links/server/claims";
 import { readChannelLink, type ChannelLink } from "@links/server/database";
 import { takeDelete, takeMessage, takeWithdrawal } from "@requests/server/intake";
 import type { SlackMessage, SlackMessageEvent } from "@slackapi/model/messages";
@@ -17,24 +15,20 @@ import {
 // Ingest.
 //
 // Every message event enters the ledger here, whether Socket Mode delivered it or gap repair found
-// it, in the transaction that records where it came from. A claim is consumed before anything
-// else: it's tried against the open claim and never stored. Nothing from a channel no link watches
-// is stored. An author claims, is stored and asks under the ID the bridge knows them by, even when
-// Slack names them by an alias, and a channel is stored under the ID it has now, even when a late
-// event names the one Slack moved it from. Request policy then runs over what the ledger stored.
+// it, in the transaction that records where it came from. Nothing from a channel no link watches
+// is stored. An author is stored and asks under the ID the bridge knows them by, even when Slack
+// names them by an alias, and a channel is stored under the ID it has now, even when a late event
+// names the one Slack moved it from. Request policy then runs over what the ledger stored.
 
 /** Who the bridge is in Slack, and how a message reached it. */
 export type IngestContext = {
   botUserId: string;
-  ownerUserId: string | null;
   /** Whether gap repair found the message after Socket Mode missed it. */
   late: boolean;
   now: number;
 };
 
 export type Ingested =
-  /** The message reads as a claim, so it's consumed and never stored. `changed` says whether it changed the open claim. */
-  | { kind: "claim"; changed: boolean }
   /** No link watches the channel, so nothing is stored. */
   | { kind: "unlinked" }
   /**
@@ -49,14 +43,6 @@ export async function ingestMessageEvent(
   context: IngestContext,
 ): Promise<Ingested> {
   const event = await inCurrentChannel(transaction, delivered);
-  if (event.kind === "message") {
-    const claim = readClaim(event.message.text, context.botUserId);
-    if (claim !== null) {
-      const message = await withKnownAuthor(transaction, event.message);
-      const posted = { claim, message, edit: event.edit, late: context.late };
-      return { kind: "claim", changed: await takeClaim(transaction, posted, context.now) };
-    }
-  }
   const channelId = event.kind === "message" ? event.message.channelId : event.channelId;
   const link = await readChannelLink(transaction, channelId);
   if (link === null) return { kind: "unlinked" };
@@ -64,7 +50,7 @@ export async function ingestMessageEvent(
   switch (event.kind) {
     case "message": {
       const message = await withKnownAuthor(transaction, event.message);
-      const stored = await storeMessage(transaction, ledgerLink(link, context), message);
+      const stored = await storeMessage(transaction, ledgerLink(link), message);
       const intake = await takeMessage(transaction, link, message, stored, context);
       if (intake.opened) await trackRequestThread(transaction, link.id, message, context.now);
       return {
@@ -118,13 +104,6 @@ async function withKnownAuthor(transaction: Bun.SQL, message: SlackMessage): Pro
   return { ...message, userId: await canonicalUserId(transaction, message.userId) };
 }
 
-function ledgerLink(link: ChannelLink, context: IngestContext): LedgerLink {
-  return {
-    id: link.id,
-    audience: {
-      ownerUserId: context.ownerUserId,
-      allowlist: link.allowlist,
-      observe: link.observe,
-    },
-  };
+function ledgerLink(link: ChannelLink): LedgerLink {
+  return { id: link.id, audience: { allowlist: link.allowlist, observe: link.observe } };
 }

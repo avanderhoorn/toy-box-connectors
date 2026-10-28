@@ -1,19 +1,12 @@
 import { createStoredMessage } from "@activity/server/testFixtures";
 import type { BridgeDatabase } from "@bridge/server/database";
-import type { Approval } from "@links/model/approvals";
 import type { ApprovedAudience } from "@links/model/audience";
-import { pendingApproval, privateAudience } from "@links/model/testFixtures";
+import { privateAudience } from "@links/model/testFixtures";
 import { createStoredOutboxItem } from "@outbox/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
-import type { ChannelFacts } from "@slackapi/model/channels";
 import { askMessage, channelFacts } from "@slackapi/model/testFixtures";
-import type { SlackPerson } from "@slackapi/model/users";
 import { writeChannelInfo } from "@slackapi/server/channels";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
-import type { ToyBoxChannelView } from "@toybox/model/stream";
-import { approvalColumns } from "./approvals";
-import { audit } from "./audit";
-import type { FactsReader, Unverified } from "./facts";
 
 /**
  * Persist an active Link fixture so rows that belong to a Link can be stored. It watches and
@@ -60,94 +53,15 @@ export function createStoredLink(
   return database.write((transaction) => transaction`INSERT INTO links ${transaction(link)}`);
 }
 
-/**
- * Persist a pending proposal to allow U-carol on `link`, asked of U-owner, whose card is posted in
- * C-link at 1000.000100. `changes` replace its fields.
- */
-export async function createStoredApproval(
-  database: BridgeDatabase,
-  changes: Partial<Approval> = {},
-): Promise<Approval> {
-  const approval = pendingApproval(changes);
-  const row = { ...approvalColumns(approval), number: approval.number };
-  await database.write((transaction) => transaction`INSERT INTO approvals ${transaction(row)}`);
-  return approval;
-}
-
-/** What Slack and Toy Box say to a fake FactsReader. A test changes it to change what the next read finds. */
-export type FactsWorld = {
-  toyBox: ToyBoxChannelView | null | Unverified;
-  /** Set when Slack can't be read. */
-  slack: Unverified | null;
-  channels: Record<string, ChannelFacts>;
-  members: Record<string, readonly string[]>;
-  people: Record<string, SlackPerson>;
-};
-
-/** A requests routine `id` that runs inbox, as Toy Box lists it. */
-export function requestsRoutine(id: string) {
-  return {
-    id,
-    title: "Slack requests",
-    schedule: "*/5 * * * *",
-    prompt: "Run toy-box-slack inbox.",
-  };
-}
-
-/**
- * A reader that answers from `world` as it is when asked, and lists what it was asked.
- * `whileSlackReads` runs while Slack is asked, as anything else that writes to the bridge could.
- * A read whose signal has aborted by the time it would answer proves nothing, as a real one doesn't.
- */
-export function fakeFactsReader(
-  world: FactsWorld,
-  whileSlackReads?: (read: number, signal: AbortSignal) => Promise<unknown>,
-) {
-  const reads: string[] = [];
-  let slackReads = 0;
-  const reader: FactsReader = {
-    async readToyBox(toyboxChannelId, signal) {
-      reads.push(`toybox ${toyboxChannelId}`);
-      if (signal.aborted) return timedOut;
-      const { toyBox } = world;
-      return toyBox && "kind" in toyBox ? toyBox : { kind: "read", facts: toyBox };
-    },
-    async readSlack(needed, ownerIds, signal) {
-      const { monitored, publish, owner, people } = needed;
-      reads.push(`slack ${monitored} ${publish} ${owner} [${people.join(" ")}]`);
-      await whileSlackReads?.(++slackReads, signal);
-      if (signal.aborted) return timedOut;
-      if (world.slack) return world.slack;
-      const ownerIn = (channelId: string) =>
-        ownerIds.some((id) => world.members[channelId]?.includes(id));
-      return {
-        kind: "read",
-        facts: {
-          monitored: world.channels[monitored] ?? null,
-          publish: world.channels[publish] ?? null,
-          ownerInMonitored: ownerIn(monitored),
-          ownerInPublish: ownerIn(publish),
-          people: people.map((userId) => ({ userId, person: world.people[userId] ?? null })),
-        },
-      };
-    },
-  };
-  return { reader, reads };
-}
-
-const timedOut: Unverified = { kind: "unverified", detail: "the read timed out", retryAt: null };
-
-/** Stores a row in every table, so a purge can be checked against the whole schema. */
+/** Stores a row in every table, so deleting everything can be checked against the whole schema. */
 export async function fillEveryTable(database: BridgeDatabase): Promise<void> {
   await createStoredInstallation(database);
   await createStoredLink(database);
-  await createStoredApproval(database);
   await createStoredMessage(database, askMessage());
   await createStoredRequest(database);
   await createStoredOutboxItem(database, 1);
   await database.write(async (transaction) => {
     await writeChannelInfo(transaction, channelFacts(), 1_000);
-    await audit(transaction, { actor: "owner", action: "approve", subject: "U-owner" }, 1_000);
     await transaction`
       INSERT INTO receipts (key, type, received_at, disposition)
       VALUES ('Ev-1', 'events_api', 0, 'applied')
@@ -157,11 +71,6 @@ export async function fillEveryTable(database: BridgeDatabase): Promise<void> {
     await transaction`INSERT INTO channel_aliases VALUES ('C-old', 'C-link', 0)`;
     await transaction`INSERT INTO users (user_id) VALUES ('U-carol')`;
     await transaction`INSERT INTO user_aliases VALUES ('W-carol', 'U-carol')`;
-    await transaction`
-      INSERT INTO claims (code_hash, state, created_at, expires_at, posted_by, posted_channel_id,
-        posted_ts, posted_at, decided_at)
-      VALUES ('hash', 'confirmed', 0, 600_000, 'U-owner', 'D-owner', '1000.000200', 0, 0)
-    `;
     await transaction`
       INSERT INTO link_routines VALUES ('link', 'release-notes', 'routine-notes', 'present', 'week',
         '0 9 * * 1', 0)

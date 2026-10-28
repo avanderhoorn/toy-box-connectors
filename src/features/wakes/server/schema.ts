@@ -12,19 +12,15 @@ export async function initializeWakeSchema(db: Bun.SQL): Promise<void> {
       blocked_reason    TEXT CHECK (blocked_reason IS NULL OR blocked_reason = 'refused')
     );
 
-    -- Every run the bridge attempted. A setup run names the oldest proposal it tells the lead about,
-    -- which may never have become a link, and a catch-up run names the period it ran for.
+    -- Every run the bridge attempted. A catch-up run names the period it ran for.
     CREATE TABLE wakes (
       id              INTEGER PRIMARY KEY,
-      link_id         TEXT,
-      approval_id     TEXT,
+      link_id         TEXT NOT NULL,
       at              INTEGER NOT NULL,
-      kind            TEXT NOT NULL CHECK (kind IN ('requests', 'reminder', 'setup', 'catch_up')),
+      kind            TEXT NOT NULL CHECK (kind IN ('requests', 'reminder', 'catch_up')),
       publication_key TEXT,
       outcome         TEXT NOT NULL CHECK (outcome IN ('ran', 'missing', 'failed', 'refused')),
-      CHECK ((approval_id IS NOT NULL) = (kind = 'setup')),
-      CHECK ((publication_key IS NOT NULL) = (kind = 'catch_up')),
-      CHECK (link_id IS NOT NULL OR kind = 'setup')
+      CHECK ((publication_key IS NOT NULL) = (kind = 'catch_up'))
     );
   `);
 }

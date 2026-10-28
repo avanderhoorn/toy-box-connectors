@@ -2,7 +2,7 @@ toy-box-slack is a local bridge built on the Bun runtime that lets a Toy Box cha
 
 ## Architecture
 
-The central unit is a link: one Toy Box channel bound to one Slack channel, with an owner, an allowlist of Slack people, request and observation modes, and the routines its lead registered. Everything the bridge stores or does on Slack's behalf belongs to a link, and unlinking purges what the link owned.
+The central unit is a link: one Toy Box channel bound to one Slack channel, with an allowlist of Slack people, request and observation modes, and the routines its lead registered. Everything the bridge stores or does on Slack's behalf belongs to a link, and unlinking deletes what the link owned.
 
 The bridge is one long-running process per data folder and the only thing that talks to Slack. `src/features/bridge` composes every subsystem into that process and owns startup, the database connection, the single-bridge lock, and the socket server. Each feature declares its tables in `server/schema.ts`, and the bridge installs them through numbered migrations that never change once released. The bridge receives events over Socket Mode and commits each one to SQLite before acking it, so an acked event survives a crash or power loss. The ledger keeps one row per channel and `ts` and appends a change for every new, edited, or deleted message. Request classification runs in the same transaction, so a stored message and the request it opened or joined never disagree. After a disconnect or a rate limit, gap repair reads history across the gap with overlap and merges what it finds exactly like live events.
 
@@ -25,7 +25,7 @@ flowchart LR
     Lead --> Channel[Toy Box channel]
 ```
 
-toy-box-slack assumes one owner on one Mac, like Toy Box itself. Only people on a link's allowlist, identified by their exact Slack user ID and never by the workspace a message names, can make the lead act, and bridge code enforces that before the lead sees anything. Slack text is data: it reaches the lead fenced and labeled with its author, and settings change only through audited setup commands. The data folder is 0700 and the socket 0600, tokens live only in the bridge, and the bridge talks only to a Toy Box on loopback and opens no listening port. Any process running as the owner is inside that boundary, and the design doesn't pretend otherwise. `bridge.db` survives restarts; the Socket Mode connection, the socket, and posts in flight do not, and startup recovers each of them before taking work.
+toy-box-slack assumes one owner on one Mac, like Toy Box itself. Only people on a link's allowlist, identified by their exact Slack user ID and never by the workspace a message names, can make the lead act, and bridge code enforces that before the lead sees anything. Slack text is data: it reaches the lead fenced and labeled with its author, and only the owner widens access, with a passphrase the bridge checks. The data folder is 0700 and the socket 0600, tokens live only in the bridge, and the bridge talks only to a Toy Box on loopback and opens no listening port. Any process running as the owner is inside that boundary, and the design doesn't pretend otherwise. `bridge.db` survives restarts; the Socket Mode connection, the socket, and posts in flight do not, and startup recovers each of them before taking work.
 
 ### Subsystem guides
 
@@ -34,7 +34,7 @@ Each guide explains one capability end to end. Read them in order for a first ar
 - [`src/features/activity/AGENTS.md`](src/features/activity/AGENTS.md): Socket Mode events committed into the message ledger, tracked threads, coverage, and gap repair
 - [`src/features/requests/AGENTS.md`](src/features/requests/AGENTS.md): the request loop, from classification and the request lifecycle to waking the lead and the CLI contract it answers through
 - [`src/features/outbox/AGENTS.md`](src/features/outbox/AGENTS.md): every write to Slack, checked at send time, posted once, and reconciled when its outcome is unknown
-- [`src/features/links/AGENTS.md`](src/features/links/AGENTS.md): link settings, the allowlist, link routines, owner confirmation, and the audit log
+- [`src/features/links/AGENTS.md`](src/features/links/AGENTS.md): link settings, the allowlist, link routines, the owner's passphrase, and suspensions
 - [`src/features/toybox/AGENTS.md`](src/features/toybox/AGENTS.md): the Toy Box catalog, channel streams, presence, and routine runs
 - [`tests/AGENTS.md`](tests/AGENTS.md): the unit, integration, end-to-end, and live layers and the protocol fakes they share
 

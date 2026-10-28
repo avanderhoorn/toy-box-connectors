@@ -45,14 +45,14 @@ async function until(condition: () => boolean) {
   }
 }
 
-function nextDelivery(client: SocketModeClient, type = "slack_event") {
+function nextDelivery(client: SocketModeClient) {
   return new Promise<{
     body: Record<string, unknown>;
     envelope_id: string;
     retry_num?: number;
     retry_reason?: string;
     ack(): Promise<void>;
-  }>((resolve) => client.once(type, resolve));
+  }>((resolve) => client.once("slack_event", resolve));
 }
 
 function nextConnection(client: SocketModeClient) {
@@ -123,26 +123,6 @@ test("unacked redelivery retains the event ID, exposes retries, and allows a dis
   await event.ack();
   await until(() => fake.acks.length === 1);
   expect(() => fake.redeliver("retry-envelope")).toThrow("already acked");
-});
-
-test("button clicks retain their raw payload and get an envelope-specific ack", async () => {
-  const fake = fakeSlack();
-  const client = await socketClient(fake);
-  const click = {
-    type: "block_actions",
-    api_app_id: fake.identity.appId,
-    team: { id: fake.identity.teamId },
-    user: { id: "WOWNER", team_id: "TSIBLING" },
-    container: { type: "message", channel_id: "C1", message_ts: "1.000001" },
-    actions: [{ action_id: "approval.approve", value: "proposal" }],
-  };
-  const incoming = nextDelivery(client, "interactive");
-  fake.sendInteraction(click, "click-envelope");
-  const event = await incoming;
-  expect(event.body).toEqual(click);
-  await event.ack();
-  await until(() => fake.acks.length === 1);
-  expect(fake.acks[0].envelopeId).toBe("click-envelope");
 });
 
 test("authorization variants survive the real SDK without fake-side repair", async () => {

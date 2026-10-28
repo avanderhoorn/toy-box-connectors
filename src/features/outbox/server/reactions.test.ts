@@ -269,20 +269,6 @@ test("a checkmark cannot claim an unconfirmed answer", async () => {
   expect(slack.calls).toEqual([]);
 });
 
-test("a linkless owner-claim checkmark is not mistaken for an orphan", async () => {
-  const { delivery, queue, payload, read } = await setup();
-  const item = await queue({
-    linkId: null,
-    requestId: null,
-    payload: { ...payload, name: "white_check_mark" },
-  });
-  expect(await delivery.react(item.id)).toMatchObject({
-    kind: "settled",
-    item: { state: "sent" },
-  });
-  expect(await read(item.id)).not.toBeNull();
-});
-
 test.each(["eyes", "white_check_mark"])(
   "unlink drops queued %s locally even while the installation is inactive",
   async (name) => {

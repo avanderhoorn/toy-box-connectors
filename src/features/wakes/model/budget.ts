@@ -1,13 +1,13 @@
 // The wake budget.
 //
 // Runs that landed in the last hour decide how soon the next may start: 12 for one link and 30
-// across all of them, counting setup runs for proposals that never became a link.
+// across all of them.
 
-/** A routine run that landed. A run for a proposal that never became a link has no link. */
-export type RanWake = { linkId: string | null; at: number };
+/** A routine run that landed. */
+export type RanWake = { linkId: string; at: number };
 
-/** When the budget next allows a run for a link, or for no link. */
-export type WakeBudget = { nextSlot(linkId: string | null, now: number): number };
+/** When the budget next allows a run for a link. */
+export type WakeBudget = { nextSlot(linkId: string, now: number): number };
 
 export const LINK_WAKES_PER_HOUR = 12;
 export const WAKES_PER_HOUR = 30;
@@ -19,7 +19,7 @@ export function wakeBudget(ran: readonly RanWake[]): WakeBudget {
   return {
     nextSlot(linkId, now) {
       const recent = ran.filter(({ at }) => at > now - WAKE_BUDGET_WINDOW);
-      const own = recent.filter((wake) => linkId !== null && wake.linkId === linkId);
+      const own = recent.filter((wake) => wake.linkId === linkId);
       return Math.max(
         now,
         slotAfter(recent, WAKES_PER_HOUR, now),

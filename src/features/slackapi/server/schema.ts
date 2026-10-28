@@ -9,7 +9,6 @@ export async function initializeSlackApiSchema(db: Bun.SQL): Promise<void> {
       bot_user_id     TEXT NOT NULL,
       -- The Enterprise org auth.test names, NULL for a standalone workspace.
       enterprise_id   TEXT,
-      owner_user_id   TEXT,
       status          TEXT NOT NULL CHECK (status IN ('active', 'auth_failed', 'uninstalled')),
       auth_failed_at  INTEGER,
       -- When Slack last said hello. Everything before it was received or lies in a recorded gap.
@@ -26,7 +25,7 @@ export async function initializeSlackApiSchema(db: Bun.SQL): Promise<void> {
       type        TEXT NOT NULL,
       received_at INTEGER NOT NULL,
       disposition TEXT NOT NULL CHECK (disposition IN (
-        'applied', 'claim', 'unlinked', 'ignored', 'foreign', 'malformed', 'rate_limited', 'interactive'
+        'applied', 'unlinked', 'ignored', 'foreign', 'malformed', 'rate_limited'
       ))
     );
 

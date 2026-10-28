@@ -41,7 +41,7 @@ export type TokenOwner = {
 
 /** Why the bridge won't use Slack with these tokens until the operator acts. */
 export type IdentityRefusal =
-  /** Slack said the app was uninstalled or our bot's token revoked, and the bridge purged. */
+  /** Slack said the app was uninstalled or our bot's token revoked, and the bridge deleted its data. */
   | { reason: "uninstalled" }
   | { reason: "rotating"; tokens: readonly TokenName[] }
   /** The bot token comes from an install across an Enterprise org. */
@@ -180,7 +180,8 @@ export function helloRefusal(appId: string, helloAppId: string | null): Identity
   return helloAppId === appId ? null : { reason: "other_app", stored: appId, found: helloAppId };
 }
 
-const resetStep = "stop the bridge and run `toy-box-slack reset --yes`";
+const resetStep =
+  "stop the bridge and delete `bridge.db`, with any `-wal` and `-shm` files beside it, from the data folder";
 
 /** Where each token comes from, as an instruction to put it in credentials.env names it. */
 const tokenSources: Record<TokenName, string> = {

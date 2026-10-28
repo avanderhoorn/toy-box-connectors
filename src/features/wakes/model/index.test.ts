@@ -3,7 +3,6 @@ import { wakeBudget, type WakeBudget } from "./budget";
 import {
   catchUpPeriod,
   decideCatchUp,
-  decideProposalWake,
   decideWake,
   dueReminders,
   retryDelay,
@@ -42,7 +41,6 @@ function link(changes: Partial<LinkWakeState> = {}): LinkWakeState {
     routineState: "present",
     blockedReason: null,
     requests: [],
-    setup: [],
     lastWakeAt: null,
     lastInboxAt: null,
     wakesSinceInbox: 0,
@@ -333,64 +331,6 @@ describe("deciding whether to wake a link's lead", () => {
       ).toEqual({ kind: "stalled" });
     });
   });
-
-  describe("setup", () => {
-    const debt = { approvalId: "approval-1", decidedAt: seconds(-20) };
-
-    test("an idle lead learns a decision's outcome at once", () => {
-      expect(decideWake(now, link({ setup: [debt] }), idleLead, open)).toEqual({
-        kind: "wake",
-        reason: "setup",
-      });
-    });
-
-    test("skips the debounce, the backoff and the stall", () => {
-      const burst = link({ setup: [debt], requests: [request({ changedAt: seconds(-1) })] });
-      expect(decideWake(now, burst, idleLead, open)).toEqual({ kind: "wake", reason: "setup" });
-      const stalled = link({
-        setup: [debt],
-        requests: [request({ changedAt: minutes(-60) })],
-        lastWakeAt: seconds(-2),
-        wakesSinceInbox: 4,
-      });
-      expect(decideWake(now, stalled, idleLead, open)).toEqual({ kind: "wake", reason: "setup" });
-      expect(decideWake(now, { ...stalled, setup: [] }, idleLead, open)).toEqual({
-        kind: "stalled",
-      });
-    });
-
-    test("steers into a working lead's turn 2 minutes after the decision or the last wake", () => {
-      expect(decideWake(now, link({ setup: [debt] }), workingLead, open)).toEqual({
-        kind: "wait",
-        until: seconds(100),
-      });
-      expect(
-        decideWake(now, link({ setup: [debt], lastWakeAt: seconds(-5) }), workingLead, open),
-      ).toEqual({ kind: "wait", until: seconds(115) });
-      expect(decideWake(seconds(100), link({ setup: [debt] }), workingLead, open)).toEqual({
-        kind: "wake",
-        reason: "setup",
-      });
-    });
-
-    test("takes over a wake that's due for requests, so one run settles both", () => {
-      const both = link({
-        setup: [{ approvalId: "approval-1", decidedAt: now }],
-        requests: [request({ changedAt: minutes(-5) })],
-      });
-      expect(decideWake(now, both, workingLead, open)).toEqual({ kind: "wake", reason: "setup" });
-    });
-
-    test("is held back by the budget and a failed run's retry", () => {
-      expect(decideWake(now, link({ setup: [debt] }), idleLead, slotAt(minutes(3)))).toEqual({
-        kind: "wait",
-        until: minutes(3),
-      });
-      expect(
-        decideWake(now, link({ setup: [debt], retryAt: seconds(15) }), idleLead, open),
-      ).toEqual({ kind: "wait", until: seconds(15) });
-    });
-  });
 });
 
 describe("blocking wakes", () => {
@@ -465,30 +405,6 @@ describe("catching up a publication", () => {
     expect(decideCatchUp(now, owed, linked, idleLead, slotAt(minutes(4)))).toEqual({
       kind: "wait",
       until: minutes(4),
-    });
-  });
-});
-
-describe("waking for a proposal that never became a link", () => {
-  test("runs at once, and after a failure on the retry backoff", () => {
-    expect(decideProposalWake(now, { count: 0, lastAt: null }, open)).toEqual({
-      kind: "wake",
-      reason: "setup",
-    });
-    expect(decideProposalWake(now, { count: 2, lastAt: seconds(-10) }, open)).toEqual({
-      kind: "wait",
-      until: seconds(20),
-    });
-    expect(decideProposalWake(seconds(20), { count: 2, lastAt: seconds(-10) }, open)).toEqual({
-      kind: "wake",
-      reason: "setup",
-    });
-  });
-
-  test("waits for the overall budget", () => {
-    expect(decideProposalWake(now, { count: 0, lastAt: null }, slotAt(minutes(2)))).toEqual({
-      kind: "wait",
-      until: minutes(2),
     });
   });
 });
