@@ -4,7 +4,9 @@ import { afterAll, beforeAll, expect } from "bun:test";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { FakeSlack } from "../fakes/slack";
 import { ALICE, BOT, MALLORY, said, timestamps } from "../integration/connectedBridge";
+import { waitFor } from "../integration/waitFor";
 import { linkSlack, REQUESTS_ROUTINE, type SlackLink } from "./slackLink";
 import { describeEndToEnd } from "./suite";
 import { CREATE_CHANNEL_TIMEOUT, createTestChannel, type TestChannel } from "./testChannel";
@@ -23,7 +25,7 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
   afterAll(() => link?.stop());
 
   suite.scenario(
-    "an allowed person's mention wakes the lead, which queues one answer in its thread, and a stranger's gets nothing",
+    "an allowed person's mention wakes the lead, which answers once in their thread, and a stranger's gets nothing",
     async () => {
       const [strangerTs, askedTs] = timestamps(2);
       const ask = `<@${BOT}> what's going out in tonight's release?`;
@@ -34,23 +36,31 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
         await link.post(said(ALICE, askedTs, ask));
       });
 
-      // Only the lead's own session can queue the link's reply, and only after inbox showed it.
-      expect(
-        link.query(
-          "SELECT requester_user_id, state FROM requests WHERE root_ts IN (?, ?)",
-          strangerTs,
-          askedTs,
-        ),
-      ).toEqual([{ requester_user_id: ALICE, state: "answering" }]);
+      // Only the lead's own session can answer for the link, and only after inbox showed it. The
+      // bridge posts the answer once the lead queues it, so the lead's turn can end first.
+      await waitFor(() =>
+        expect(
+          link.query(
+            "SELECT requester_user_id, state FROM requests WHERE root_ts IN (?, ?)",
+            strangerTs,
+            askedTs,
+          ),
+        ).toEqual([{ requester_user_id: ALICE, state: "answered" }]),
+      );
       expect(
         link.query(
           "SELECT kind, channel_id, thread_ts, state FROM outbox WHERE created_at >= ?",
           since,
         ),
-      ).toEqual([{ kind: "reply", channel_id: "C-link", thread_ts: askedTs, state: "queued" }]);
+      ).toEqual([{ kind: "reply", channel_id: "C-link", thread_ts: askedTs, state: "sent" }]);
       expect(link.query("SELECT outcome FROM wakes WHERE at >= ?", since)).toEqual([
         { outcome: "ran" },
       ]);
+      expect(seenInSlack(link.slack, askedTs)).toEqual({
+        reactions: [{ name: "eyes", count: 1, users: [BOT] }],
+        replies: 1,
+      });
+      expect(seenInSlack(link.slack, strangerTs)).toEqual({ reactions: undefined, replies: 0 });
     },
     { turns: 1 },
   );
@@ -73,3 +83,12 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
     { turns: 0 },
   );
 });
+
+/** What people in C-link see of the message at `ts`: its reactions and the bot's replies to it. */
+function seenInSlack(slack: FakeSlack, ts: string) {
+  const messages = slack.getMessages("C-link");
+  return {
+    reactions: messages.find((message) => message.ts === ts)?.reactions,
+    replies: messages.filter((message) => message.thread_ts === ts && message.user === BOT).length,
+  };
+}
