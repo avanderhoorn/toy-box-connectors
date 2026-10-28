@@ -49,18 +49,17 @@ export function resolveBridgeSettings(
 ): BridgeSettings {
   const setting = (name: keyof Credentials) => env[name] || credentials[name] || null;
   const toyBoxUrl = setting("TOY_BOX_URL") ?? DEFAULT_TOY_BOX_URL;
-  const slackApiUrl = env.SLACK_API_URL || undefined;
-  if (slackApiUrl !== undefined) {
-    loopbackUrl(slackApiUrl, "SLACK_API_URL is only for tests and must be an http URL on this Mac");
+  const toyBoxOrigin = parseLoopbackUrl(toyBoxUrl);
+  if (!toyBoxOrigin) {
+    throw new BridgeRefusedError(
+      `TOY_BOX_URL must be an http URL on this Mac, such as ${DEFAULT_TOY_BOX_URL}, but it's "${toyBoxUrl}".`,
+    );
   }
   return {
-    toyBoxOrigin: loopbackUrl(
-      toyBoxUrl,
-      `TOY_BOX_URL must be an http URL on this Mac, such as ${DEFAULT_TOY_BOX_URL}`,
-    ),
+    toyBoxOrigin,
     botToken: setting("SLACK_BOT_TOKEN"),
     appToken: setting("SLACK_APP_TOKEN"),
-    slackApiUrl,
+    slackApiUrl: env.SLACK_API_URL || undefined,
     wakeTimings: resolveWakeTimings(env.TOY_BOX_SLACK_WAKE_TIMINGS),
   };
 }
@@ -91,13 +90,6 @@ export function readCredentialsFile(dataFolder: string): Credentials {
     );
   }
   return credentials.data;
-}
-
-/** `value` as a URL, or a refusal saying it `must` be an http URL on this Mac. */
-function loopbackUrl(value: string, must: string): URL {
-  const url = parseLoopbackUrl(value);
-  if (!url) throw new BridgeRefusedError(`${must}, but it's "${value}".`);
-  return url;
 }
 
 /** The wake timings, with any that `TOY_BOX_SLACK_WAKE_TIMINGS` sets as a JSON object. */

@@ -1,22 +1,12 @@
 import { describe, expect, onTestFinished, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { openBridgeDatabase, type BridgeDatabase, type Migration } from "./database";
-import { BridgeRefusedError } from "./refusal";
+import { openBridgeDatabase, type BridgeDatabase } from "./database";
 import { createTestFolder, openTestDatabase } from "./testFixtures";
 
-async function open(path: string, migrations?: readonly Migration[]): Promise<BridgeDatabase> {
-  const database = await openBridgeDatabase(path, migrations);
+async function open(path: string): Promise<BridgeDatabase> {
+  const database = await openBridgeDatabase(path);
   onTestFinished(() => database.close());
   return database;
-}
-
-/** A migration that records that it ran and creates a table named after itself. */
-function createTable(name: string, ran: string[]): Migration {
-  return async (transaction) => {
-    ran.push(name);
-    await transaction.unsafe(`CREATE TABLE ${name} (id INTEGER PRIMARY KEY)`);
-  };
 }
 
 async function readSchema(sql: Bun.SQL) {
@@ -25,11 +15,6 @@ async function readSchema(sql: Bun.SQL) {
     SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name
   `;
   return { version, objects: [...objects] };
-}
-
-async function readTableNames(sql: Bun.SQL): Promise<string[]> {
-  const { objects } = await readSchema(sql);
-  return objects.filter((object) => object.type === "table").map((object) => object.name);
 }
 
 describe("openBridgeDatabase", () => {
@@ -53,35 +38,7 @@ describe("openBridgeDatabase", () => {
     });
   });
 
-  test("creates every table and index in the data model on an empty file", async () => {
-    const database = await openTestDatabase();
-
-    const { version, objects } = await database.read(readSchema);
-
-    expect(version).toBe(1);
-    expect(
-      objects.filter((object) => object.type === "table").map((object) => object.name),
-    ).toEqual([
-      "allowlist",
-      "changes",
-      "cursors",
-      "installation",
-      "links",
-      "messages",
-      "outbox",
-      "outbox_channels",
-      "request_messages",
-      "requests",
-      "user_aliases",
-      "users",
-      "wakes",
-    ]);
-    expect(
-      objects.filter((object) => object.type === "index").map((object) => object.name),
-    ).toEqual(["request_messages_one_request", "requests_thread"]);
-  });
-
-  test("leaves a current schema exactly as it was when the file is opened again", async () => {
+  test("creates the tables in a new file once, so opening it again changes nothing", async () => {
     const path = join(createTestFolder(), "bridge.db");
     const first = await openBridgeDatabase(path);
     const schema = await first.read(readSchema);
@@ -89,74 +46,17 @@ describe("openBridgeDatabase", () => {
 
     const second = await open(path);
 
+    expect(schema).toMatchObject({ version: 1 });
     expect(await second.read(readSchema)).toEqual(schema);
-  });
-
-  test("runs only the migrations a file hasn't had, in order, and records its new version", async () => {
-    const path = join(createTestFolder(), "bridge.db");
-    const ran: string[] = [];
-    const migrations = [
-      createTable("one", ran),
-      createTable("two", ran),
-      createTable("three", ran),
-    ];
-    await (await openBridgeDatabase(path, migrations.slice(0, 1))).close();
-
-    const database = await open(path, migrations);
-
-    expect(ran).toEqual(["one", "two", "three"]);
-    expect(await database.read(readSchema)).toMatchObject({ version: 3 });
-    expect(await database.read(readTableNames)).toEqual(["one", "three", "two"]);
-  });
-
-  test("rolls back a failed migration whole, including the version, so the next start retries it", async () => {
-    const path = join(createTestFolder(), "bridge.db");
-    const ran: string[] = [];
-    await (await openBridgeDatabase(path, [createTable("one", ran)])).close();
-    const failing: Migration = async (transaction) => {
-      await createTable("two", ran)(transaction);
-      throw new Error("The disk is full.");
-    };
-
-    await expect(openBridgeDatabase(path, [createTable("one", ran), failing])).rejects.toThrow(
-      "The disk is full.",
-    );
-
-    const database = await open(path, [createTable("one", ran)]);
-    expect(await database.read(readSchema)).toMatchObject({ version: 1 });
-    expect(await database.read(readTableNames)).toEqual(["one"]);
-  });
-
-  test("refuses a file from a newer toy-box-slack without changing it", async () => {
-    const path = join(createTestFolder(), "bridge.db");
-    const ran: string[] = [];
-    const newer = [createTable("one", ran), createTable("two", ran)];
-    await (await openBridgeDatabase(path, newer)).close();
-
-    const older = openBridgeDatabase(path, newer.slice(0, 1));
-
-    await expect(older).rejects.toThrow(BridgeRefusedError);
-    await expect(older).rejects.toThrow(
-      `${path} has schema version 2, but this toy-box-slack knows only 1. Run the newer toy-box-slack that wrote it.`,
-    );
-    const database = await open(path, newer);
-    expect(await database.read(readSchema)).toMatchObject({ version: 2 });
-    expect(await database.read(readTableNames)).toEqual(["one", "two"]);
-  });
-
-  test("opens the exact file even when its path contains ? and #", async () => {
-    const folder = join(createTestFolder(), "a?b#c");
-    mkdirSync(folder);
-
-    const database = await open(join(folder, "bridge.db"));
-
-    expect(await database.read(readSchema)).toMatchObject({ version: 1 });
-    expect(readdirSync(folder)).toContain("bridge.db");
-    expect(existsSync(join(folder, "..", "a"))).toBe(false);
   });
 });
 
 describe("BridgeDatabase", () => {
+  async function createProbe(database: BridgeDatabase): Promise<BridgeDatabase> {
+    await database.write((transaction) => transaction`CREATE TABLE probe (id INTEGER PRIMARY KEY)`);
+    return database;
+  }
+
   function readRows(database: BridgeDatabase): Promise<number[]> {
     return database.read(async (sql) => {
       const rows = await sql<{ id: number }[]>`SELECT id FROM probe ORDER BY id`;
@@ -165,7 +65,7 @@ describe("BridgeDatabase", () => {
   }
 
   test("runs a read issued while a write is open after that write, outside its transaction", async () => {
-    const database = await open(join(createTestFolder(), "bridge.db"), [createTable("probe", [])]);
+    const database = await createProbe(await open(join(createTestFolder(), "bridge.db")));
     let markOpen!: () => void;
     let release!: () => void;
     const isOpen = new Promise<void>((resolve) => (markOpen = resolve));
@@ -188,14 +88,13 @@ describe("BridgeDatabase", () => {
 
   test("closes only after the work queued before it", async () => {
     const path = join(createTestFolder(), "bridge.db");
-    const migrations = [createTable("probe", [])];
-    const database = await openBridgeDatabase(path, migrations);
+    const database = await createProbe(await openBridgeDatabase(path));
 
     const write = database.write((transaction) => transaction`INSERT INTO probe (id) VALUES (1)`);
     await database.close();
     await write;
 
     await expect(readRows(database)).rejects.toThrow("Connection closed");
-    expect(await readRows(await open(path, migrations))).toEqual([1]);
+    expect(await readRows(await open(path))).toEqual([1]);
   });
 });

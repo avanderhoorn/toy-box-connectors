@@ -6,7 +6,6 @@
 // statement, reads included, goes through one serial queue, and every write
 // runs in its own `BEGIN IMMEDIATE` transaction.
 
-import { pathToFileURL } from "node:url";
 import { initializeActivitySchema } from "@activity/server/schema";
 import { initializeLinkSchema } from "@links/server/schema";
 import { initializeOutboxSchema } from "@outbox/server/schema";
@@ -14,28 +13,6 @@ import { initializeRequestSchema } from "@requests/server/schema";
 import { initializeSlackApiSchema } from "@slackapi/server/schema";
 import { initializeWakeSchema } from "@wakes/server/schema";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
-import { BridgeRefusedError } from "./refusal";
-
-/** One schema change, run inside the migration transaction. */
-export type Migration = (transaction: Bun.SQL) => Promise<void>;
-
-/**
- * Every schema version of `bridge.db`, oldest first. Feature schemas are
- * composed here so one connection owns ordering and transactions without
- * owning each feature's persistence model. Once released, a migration never
- * changes, including the feature schemas it installs, so later changes append
- * a new one.
- */
-export const bridgeMigrations: readonly Migration[] = [
-  async (transaction) => {
-    await initializeSlackApiSchema(transaction);
-    await initializeLinkSchema(transaction);
-    await initializeActivitySchema(transaction);
-    await initializeRequestSchema(transaction);
-    await initializeWakeSchema(transaction);
-    await initializeOutboxSchema(transaction);
-  },
-];
 
 export class BridgeDatabase {
   private readonly queue = new SerialTaskQueue();
@@ -64,17 +41,13 @@ export class BridgeDatabase {
 
 /**
  * Opens `bridge.db` at `path` with the settings that keep an acked event on
- * disk through a power loss, and brings its schema up to date.
+ * disk through a power loss, and creates its tables when it's new.
  */
-export async function openBridgeDatabase(
-  path: string,
-  migrations: readonly Migration[] = bridgeMigrations,
-): Promise<BridgeDatabase> {
-  // A plain filename ends at its first `?`, so a URL keeps every path exact.
-  const sql = new Bun.SQL({ adapter: "sqlite", filename: pathToFileURL(path), strict: true });
+export async function openBridgeDatabase(path: string): Promise<BridgeDatabase> {
+  const sql = new Bun.SQL({ adapter: "sqlite", filename: path, strict: true });
   try {
     await configure(sql);
-    await migrate(sql, path, migrations);
+    await initializeSchema(sql);
   } catch (error) {
     await sql.close();
     throw error;
@@ -92,19 +65,21 @@ async function configure(sql: Bun.SQL): Promise<void> {
   await sql`PRAGMA busy_timeout = 5000`;
 }
 
-async function migrate(sql: Bun.SQL, path: string, migrations: readonly Migration[]) {
+// Feature schemas are composed here so one connection owns ordering and transactions without
+// owning each feature's persistence model. Nothing has shipped, so a schema change needs a new
+// `bridge.db`. Once something has, a change must migrate files from version 1.
+async function initializeSchema(sql: Bun.SQL): Promise<void> {
   await sql.begin("IMMEDIATE", async (transaction) => {
     const [{ user_version: version }] = await transaction<{ user_version: number }[]>`
       PRAGMA user_version
     `;
-    if (version > migrations.length) {
-      throw new BridgeRefusedError(
-        `${path} has schema version ${version}, but this toy-box-slack knows only ${migrations.length}. Run the newer toy-box-slack that wrote it.`,
-      );
-    }
-    if (version === migrations.length) return;
-
-    for (const migration of migrations.slice(version)) await migration(transaction);
-    await transaction.unsafe(`PRAGMA user_version = ${migrations.length}`);
+    if (version > 0) return;
+    await initializeSlackApiSchema(transaction);
+    await initializeLinkSchema(transaction);
+    await initializeActivitySchema(transaction);
+    await initializeRequestSchema(transaction);
+    await initializeWakeSchema(transaction);
+    await initializeOutboxSchema(transaction);
+    await transaction`PRAGMA user_version = 1`;
   });
 }

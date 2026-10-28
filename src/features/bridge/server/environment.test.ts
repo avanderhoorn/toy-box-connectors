@@ -36,12 +36,14 @@ describe("the bridge's settings", () => {
       SLACK_BOT_TOKEN: "xoxb-env",
       SLACK_APP_TOKEN: "",
       TOY_BOX_URL: "http://[::1]:3000",
+      SLACK_API_URL: "http://127.0.0.1:4100/api/",
       TOY_BOX_SLACK_WAKE_TIMINGS: '{"debounce":100,"backoff":[1,2,3]}',
     };
-    expect(resolveBridgeSettings(env, file)).toMatchObject({
+    expect(resolveBridgeSettings(env, file)).toEqual({
       toyBoxOrigin: new URL("http://[::1]:3000"),
       botToken: "xoxb-env",
       appToken: "xapp-file",
+      slackApiUrl: "http://127.0.0.1:4100/api/",
       wakeTimings: { ...defaultWakeTimings, debounce: 100, backoff: [1, 2, 3] },
     });
     expect(resolveBridgeSettings({ TOY_BOX_URL: "" }, { SLACK_BOT_TOKEN: "" })).toMatchObject({
@@ -51,20 +53,12 @@ describe("the bridge's settings", () => {
     });
   });
 
-  test("refuse a Toy Box or a fake Slack anywhere but this Mac", () => {
+  test("refuse a Toy Box anywhere but this Mac", () => {
     for (const url of ["https://127.0.0.1:3000", "http://10.0.0.2:3000", "toy-box"]) {
       expect(refusalOf(() => resolveBridgeSettings({}, { TOY_BOX_URL: url }))).toBe(
         `TOY_BOX_URL must be an http URL on this Mac, such as http://127.0.0.1:3000, but it's "${url}".`,
       );
     }
-
-    const fake = "http://127.0.0.1:4100/api/";
-    expect(resolveBridgeSettings({ SLACK_API_URL: fake }, {}).slackApiUrl).toBe(fake);
-    expect(
-      refusalOf(() => resolveBridgeSettings({ SLACK_API_URL: "https://slack.com/api/" }, {})),
-    ).toBe(
-      `SLACK_API_URL is only for tests and must be an http URL on this Mac, but it's "https://slack.com/api/".`,
-    );
   });
 });
 

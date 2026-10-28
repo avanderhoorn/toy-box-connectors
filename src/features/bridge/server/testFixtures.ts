@@ -10,7 +10,7 @@ export function createTestFolder(): string {
   return path;
 }
 
-/** Open a migrated `bridge.db` in a folder of its own, closed after the test. */
+/** Open a new `bridge.db` in a folder of its own, closed after the test. */
 export async function openTestDatabase(): Promise<BridgeDatabase> {
   const database = await openBridgeDatabase(join(createTestFolder(), "bridge.db"));
   onTestFinished(() => database.close());

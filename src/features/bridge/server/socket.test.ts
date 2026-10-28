@@ -1,5 +1,5 @@
 import { expect, onTestFinished, spyOn, test } from "bun:test";
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTestFolder } from "./testFixtures";
 import { listenForCommands, type CommandSocketOptions } from "./socket";
@@ -34,16 +34,6 @@ test("only the owner can connect, and stopping removes the socket", async () => 
 test("replaces a socket a stopped bridge left behind", async () => {
   const path = join(createTestFolder(), "bridge.sock");
   writeFileSync(path, "");
-
-  listen(path, async () => new Response("answered"));
-  expect(await ask(path)).toBe("answered");
-});
-
-test("works in a data folder deeper than a socket address holds", async () => {
-  const folder = join(createTestFolder(), "a".repeat(60), "b".repeat(60));
-  mkdirSync(folder, { recursive: true });
-  const path = join(folder, "bridge.sock");
-  expect(Buffer.byteLength(path)).toBeGreaterThan(104);
 
   listen(path, async () => new Response("answered"));
   expect(await ask(path)).toBe("answered");

@@ -11,7 +11,6 @@
 // to avoid that, so nothing else may open `bridge.lock`.
 
 import { dirname } from "node:path";
-import { pathToFileURL } from "node:url";
 import { BridgeRefusedError } from "./refusal";
 
 export interface BridgeLock {
@@ -20,8 +19,7 @@ export interface BridgeLock {
 
 /** Takes the lock at `path`, or refuses when another bridge holds it. */
 export async function acquireBridgeLock(path: string): Promise<BridgeLock> {
-  // A plain filename ends at its first `?`, so a URL keeps every path exact.
-  const connection = new Bun.SQL({ adapter: "sqlite", filename: pathToFileURL(path) });
+  const connection = new Bun.SQL({ adapter: "sqlite", filename: path });
   try {
     await connection`PRAGMA locking_mode = EXCLUSIVE`;
     // In exclusive locking mode, the connection keeps the lock after this commits.

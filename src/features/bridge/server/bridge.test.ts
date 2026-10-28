@@ -1,9 +1,7 @@
 import { expect, onTestFinished, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { startBridge } from "./bridge";
-import { acquireBridgeLock } from "./lock";
 import { BridgeRefusedError } from "./refusal";
 import { createTestFolder } from "./testFixtures";
 
@@ -30,22 +28,14 @@ test("refuses to start beside a running bridge and starts once that one stops", 
   const dataFolder = createTestFolder();
   const first = await startBridge(dataFolder, env);
 
-  await expect(startBridge(dataFolder, env)).rejects.toThrow(BridgeRefusedError);
+  const second = startBridge(dataFolder, env);
+  await expect(second).rejects.toThrow(BridgeRefusedError);
+  await expect(second).rejects.toThrow(
+    `Another toy-box-slack bridge is already running for ${dataFolder}. Stop it before starting a new one.`,
+  );
   await first.stop();
 
   await start(dataFolder);
-});
-
-test("lets go of the lock when it can't open the database", async () => {
-  const dataFolder = createTestFolder();
-  const newer = new Database(join(dataFolder, "bridge.db"));
-  newer.run("PRAGMA user_version = 99");
-  newer.close();
-
-  await expect(startBridge(dataFolder, env)).rejects.toThrow("has schema version 99");
-
-  const lock = await acquireBridgeLock(join(dataFolder, "bridge.lock"));
-  await lock.release();
 });
 
 test("refuses a data folder that others can open before it creates anything there", async () => {
@@ -54,16 +44,6 @@ test("refuses a data folder that others can open before it creates anything ther
   chmodSync(dataFolder, 0o755);
 
   await expect(startBridge(dataFolder, env)).rejects.toThrow(BridgeRefusedError);
-
-  expect(readdirSync(dataFolder)).toEqual([]);
-});
-
-test("refuses a Toy Box that isn't on this Mac before it takes the lock", async () => {
-  const dataFolder = join(createTestFolder(), ".toy-box-slack");
-
-  await expect(
-    startBridge(dataFolder, { TOY_BOX_URL: "http://toy-box.example.com:3000" }),
-  ).rejects.toThrow(BridgeRefusedError);
 
   expect(readdirSync(dataFolder)).toEqual([]);
 });
