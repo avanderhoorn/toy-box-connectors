@@ -315,3 +315,38 @@ describe("version 2 upgrades", () => {
     ).toEqual([{ number: 3 }]);
   });
 });
+
+describe("version 4 upgrades", () => {
+  test("name the link each applied new link's approval made, and change nothing else", async () => {
+    const path = join(createTestFolder(), "bridge.db");
+    const old = await openBridgeDatabase(path, bridgeMigrations.slice(0, 4));
+    await createStoredLink(old, "made");
+    await createStoredLink(old, "other");
+    const link = { action: "link", link_id: null, toybox_channel_id: "toybox-made" };
+    await insertApproval(old, { id: "applied", ...link, ...approvalIn("applied") });
+    await insertApproval(old, { id: "rejected", ...link, ...approvalIn("rejected") });
+    await insertApproval(old, {
+      id: "unmade",
+      ...link,
+      toybox_channel_id: "toybox-gone",
+      ...approvalIn("applied"),
+    });
+    await insertApproval(old, {
+      id: "allow",
+      link_id: "other",
+      toybox_channel_id: "toybox-other",
+      ...approvalIn("applied"),
+    });
+    const before = await old.read((sql) => sql`SELECT * FROM approvals ORDER BY number`);
+    await old.close();
+
+    const database = await openBridgeDatabase(path);
+    onTestFinished(() => database.close());
+
+    expect(await database.read((sql) => sql`SELECT * FROM approvals ORDER BY number`)).toEqual(
+      before.map((row: { id: string }) =>
+        row.id === "applied" ? { ...row, link_id: "made" } : row,
+      ),
+    );
+  });
+});

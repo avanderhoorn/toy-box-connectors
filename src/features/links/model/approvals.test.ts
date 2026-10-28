@@ -56,8 +56,26 @@ describe("approval states", () => {
 
   test("only an approved approval applies", () => {
     const approved = pendingApproval({ state: "approved", decidedBy: "U-owner", decidedAt: 5 });
-    expect(applyApproval(approved, 9)).toEqual({ ...approved, state: "applied", appliedAt: 9 });
-    expect(() => applyApproval(pendingApproval(), 9)).toThrow(ApprovalStateError);
+    expect(applyApproval(approved, "link", 9)).toEqual({
+      ...approved,
+      state: "applied",
+      appliedAt: 9,
+    });
+    expect(() => applyApproval(pendingApproval(), "link", 9)).toThrow(ApprovalStateError);
+  });
+
+  test("an applied new link's approval names the link it made", () => {
+    const approved = pendingApproval({
+      action: "link",
+      linkId: null,
+      state: "approved",
+      decidedBy: "U-owner",
+      decidedAt: 5,
+    });
+    expect(applyApproval(approved, "link-made", 9)).toMatchObject({
+      state: "applied",
+      linkId: "link-made",
+    });
   });
 
   test("a closed approval can't change again", () => {

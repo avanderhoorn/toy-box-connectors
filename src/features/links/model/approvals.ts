@@ -129,7 +129,7 @@ export type Approval = {
   /** Shown as a4. */
   number: number;
   toyboxChannelId: string;
-  /** Null for a new link. */
+  /** Null for a new link until it applies, and then the link it made. */
   linkId: string | null;
   action: ApprovalAction;
   /** Only the fields this approval changes. */
@@ -315,9 +315,12 @@ export function staleApproval(approval: Approval, reason: StaleReason): Approval
   return move(approval, "stale", { staleReason: reason });
 }
 
-/** Marks an approved approval applied, once its patch is in. */
-export function applyApproval(approval: Approval, now: number): Approval {
-  return move(approval, "applied", { appliedAt: now });
+/**
+ * Marks an approved approval applied once its patch is in, naming `linkId`, the link it changed or
+ * made, so a new link's approval can be found once that link is gone.
+ */
+export function applyApproval(approval: Approval, linkId: string, now: number): Approval {
+  return move(approval, "applied", { appliedAt: now, linkId });
 }
 
 // Apply.

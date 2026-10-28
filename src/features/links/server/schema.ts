@@ -162,3 +162,18 @@ export async function numberApprovalsOnce(db: Bun.SQL): Promise<void> {
     ALTER TABLE numbered_approvals RENAME TO approvals;
   `);
 }
+
+/**
+ * Version 5: an applied new link's approval names the link it made, as apply records from now on,
+ * so it's forgotten with the rest of the link's approvals once that link is unlinked. Until now a
+ * link went only with every approval, in a purge, and a Toy Box channel has one link at most, so
+ * the channel's link is the one its approval made.
+ */
+export async function nameMadeLinksOnce(db: Bun.SQL): Promise<void> {
+  await db`
+    UPDATE approvals SET link_id = (
+      SELECT id FROM links WHERE links.toybox_channel_id = approvals.toybox_channel_id
+    )
+    WHERE action = 'link' AND state = 'applied' AND link_id IS NULL
+  `;
+}

@@ -408,6 +408,74 @@ export async function queueRetraction(
   );
 }
 
+/**
+ * Lets go of the card of an approval whose link is gone once nothing more can happen to it, and
+ * returns whether it did, after which the approval can go too. `posted` says the card reached
+ * Slack. A queued post goes at once, so no card reaches Slack for a link that's gone, and so do
+ * the updates of a card no post can still bring there. While any other row of the card, or a
+ * withdrawal of one, is queued or unsettled, everything stays, so delivery can still render and
+ * settle it. Then it all goes, but for a post that reached the wrong place, which stays redacted
+ * with one more withdrawal queued.
+ */
+export async function forgetCard(
+  transaction: Bun.SQL,
+  approvalId: string,
+  posted: boolean,
+  now: number,
+): Promise<boolean> {
+  await transaction`
+    DELETE FROM outbox
+    WHERE kind = 'card' AND phase = 'post' AND approval_id = ${approvalId} AND state = 'queued'
+  `;
+  if (!posted) {
+    await transaction`
+      DELETE FROM outbox
+      WHERE kind = 'card' AND phase = 'update' AND approval_id = ${approvalId} AND state = 'queued'
+        AND NOT EXISTS (
+          SELECT 1 FROM outbox AS post WHERE post.kind = 'card' AND post.phase = 'post'
+            AND post.approval_id = ${approvalId} AND post.state IN ('sending', 'delivery_unknown')
+        )
+    `;
+  }
+  const [unsettled] = await transaction`
+    SELECT id FROM outbox
+    WHERE state IN ('queued', 'sending', 'delivery_unknown') AND (
+      (kind = 'card' AND approval_id = ${approvalId})
+      OR (kind = 'retract' AND json_extract(payload, '$.target') IN (
+        SELECT id FROM outbox WHERE kind = 'card' AND approval_id = ${approvalId}
+      ))
+    )
+    LIMIT 1
+  `;
+  if (unsettled) return false;
+  const strays = await transaction<OutboxRow[]>`
+    SELECT * FROM outbox
+    WHERE kind = 'card' AND phase = 'post' AND approval_id = ${approvalId} AND state = 'stray'
+    ORDER BY number
+  `;
+  await transaction`
+    DELETE FROM outbox WHERE kind = 'retract' AND json_extract(payload, '$.target') IN (
+      SELECT id FROM outbox WHERE kind = 'card' AND approval_id = ${approvalId}
+    )
+  `;
+  await transaction`
+    DELETE FROM outbox WHERE kind = 'card' AND approval_id = ${approvalId}
+      AND NOT (phase = 'post' AND state = 'stray')
+  `;
+  for (const stray of strays.map(outboxItem)) {
+    await redact(transaction, stray);
+    await queueRetraction(transaction, stray, now);
+  }
+  return true;
+}
+
+/** Forgets what a kept item says once what it was about is gone. Its hash still names its attempt. */
+async function redact(transaction: Bun.SQL, item: OutboxItem): Promise<void> {
+  await transaction`UPDATE outbox SET payload = ${REDACTED} WHERE id = ${item.id}`;
+}
+
+const REDACTED = JSON.stringify({ redacted: "unlink" });
+
 async function supersedeCardUpdates(
   transaction: Bun.SQL,
   approvalId: string | null,

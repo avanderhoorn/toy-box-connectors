@@ -3,6 +3,7 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { APPROVAL_LIFETIME_MS, APPROVE_ACTION_ID, REJECT_ACTION_ID } from "@links/model/approvals";
 import { pendingApproval } from "@links/model/testFixtures";
+import { createStoredOutboxItem } from "@outbox/server/testFixtures";
 import { slackPerson } from "@slackapi/model/testFixtures";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { writeSlackPerson } from "@slackapi/server/users";
@@ -10,13 +11,14 @@ import {
   countProposalsSince,
   createApproval,
   expireApprovals,
+  forgetUnlinkedApprovals,
   type IgnoredInteraction,
   readAllOpenApprovals,
   readApproval,
   recordCardPosted,
   takeClick,
 } from "./approvals";
-import { createStoredApproval } from "./testFixtures";
+import { createStoredApproval, createStoredLink } from "./testFixtures";
 
 /** U-owner's click on `actionId` on approval-1's card, as Slack sends it. `changes` replace its fields. */
 function click(changes: Record<string, unknown> = {}, actionId = APPROVE_ACTION_ID) {
@@ -497,5 +499,266 @@ describe("expiring proposals", () => {
         subject: null,
       },
     ]);
+  });
+});
+
+describe("forgetting unlinked approvals", () => {
+  /** approval-1, voided when its link was unlinked, with its card posted unless `changes` say otherwise. */
+  async function unlinked(changes: Parameters<typeof pendingApproval>[0] = {}) {
+    const database = await openTestDatabase();
+    await createStoredApproval(database, { state: "stale", staleReason: "reversed", ...changes });
+    return database;
+  }
+
+  /** Persists outbox item `number` as approval-1's card post, sent where it belongs unless `columns` say otherwise. */
+  function storeCardItem(
+    database: BridgeDatabase,
+    number: number,
+    columns: Record<string, string | number | null> = {},
+  ) {
+    return createStoredOutboxItem(database, number, {
+      kind: "card",
+      phase: "post",
+      approval_id: "approval-1",
+      request_id: null,
+      request_rev: null,
+      thread_ts: null,
+      state: "sent",
+      slack_ts: "1000.000100",
+      evidence: "response",
+      ...columns,
+    });
+  }
+
+  /** Persists outbox item `number` as the withdrawal of item `target`, in `state`. */
+  function storeWithdrawal(
+    database: BridgeDatabase,
+    number: number,
+    target: number,
+    state: string,
+  ) {
+    return createStoredOutboxItem(database, number, {
+      kind: "retract",
+      phase: null,
+      request_id: null,
+      request_rev: null,
+      thread_ts: null,
+      payload: JSON.stringify({ target: `item-${target}` }),
+      state,
+    });
+  }
+
+  function forget(database: BridgeDatabase) {
+    return database.write((transaction) => forgetUnlinkedApprovals(transaction, 60_000));
+  }
+
+  async function readApprovalIds(database: BridgeDatabase) {
+    const rows = await database.read((sql) => sql`SELECT id FROM approvals ORDER BY number`);
+    return rows.map((row: { id: string }) => row.id);
+  }
+
+  async function readItems(database: BridgeDatabase) {
+    return [
+      ...(await database.read(
+        (sql) => sql`
+          SELECT number, kind, phase, state, link_id, channel_id, payload, payload_hash, slack_ts,
+            created_at
+          FROM outbox ORDER BY number
+        `,
+      )),
+    ].map((item) => ({ ...item, payload: JSON.parse(item.payload) }));
+  }
+
+  async function readNumbers(database: BridgeDatabase) {
+    return (await readItems(database)).map((item) => item.number);
+  }
+
+  test("an approval goes with its settled card once its link is gone, and nothing else does", async () => {
+    const database = await unlinked();
+    await storeCardItem(database, 1);
+    await storeCardItem(database, 2, { phase: "update" });
+    await createStoredLink(database, "kept");
+    await createStoredApproval(database, {
+      id: "approval-2",
+      number: 2,
+      linkId: "kept",
+      toyboxChannelId: "toybox-kept",
+      state: "stale",
+      staleReason: "reversed",
+    });
+    await storeCardItem(database, 3, { approval_id: "approval-2", link_id: "kept" });
+    await createStoredOutboxItem(database, 4, { state: "sent" });
+
+    await forget(database);
+
+    expect(await readApprovalIds(database)).toEqual(["approval-2"]);
+    expect(await readNumbers(database)).toEqual([3, 4]);
+  });
+
+  test("a new link's proposal names no link until it applies, so it stays whatever its card", async () => {
+    const proposal = { action: "link" as const, linkId: null, toyboxChannelId: "toybox-new" };
+    const database = await unlinked(proposal);
+    await storeCardItem(database, 1, { link_id: null });
+    await storeCardItem(database, 2, { phase: "update", link_id: null });
+    await createStoredApproval(database, {
+      ...proposal,
+      id: "approval-2",
+      number: 2,
+      card: { channelId: "C-link", ts: null },
+    });
+    await storeCardItem(database, 3, {
+      approval_id: "approval-2",
+      link_id: null,
+      state: "queued",
+      slack_ts: null,
+      evidence: null,
+    });
+    const before = await readItems(database);
+
+    await forget(database);
+
+    expect(await readApprovalIds(database)).toEqual(["approval-1", "approval-2"]);
+    expect(await readItems(database)).toEqual(before);
+  });
+
+  test("a queued post goes at once, and so does an update of a card that never reached Slack", async () => {
+    const database = await unlinked({ card: { channelId: "C-link", ts: null } });
+    await storeCardItem(database, 1, { state: "queued", slack_ts: null, evidence: null });
+    await storeCardItem(database, 2, { phase: "update", state: "queued", slack_ts: null });
+
+    await forget(database);
+
+    expect(await readApprovalIds(database)).toEqual([]);
+    expect(await readItems(database)).toEqual([]);
+  });
+
+  test.each(["sending", "delivery_unknown"])(
+    "while a post is %s its update waits for it, and the approval stays until both settle",
+    async (state) => {
+      const database = await unlinked({ card: { channelId: "C-link", ts: null } });
+      await storeCardItem(database, 1, { state, slack_ts: null, evidence: null });
+      await storeCardItem(database, 2, { phase: "update", state: "queued", slack_ts: null });
+
+      await forget(database);
+      expect(await readApprovalIds(database)).toEqual(["approval-1"]);
+      expect(await readNumbers(database)).toEqual([1, 2]);
+
+      await database.write(async (transaction) => {
+        await transaction`UPDATE outbox SET state = 'sent', slack_ts = '1000.000100' WHERE number = 1`;
+        await transaction`UPDATE approvals SET card_ts = '1000.000100'`;
+      });
+      await forget(database);
+      expect(await readApprovalIds(database)).toEqual(["approval-1"]);
+      expect(await readNumbers(database)).toEqual([1, 2]);
+
+      await database.write(
+        (transaction) => transaction`UPDATE outbox SET state = 'sent' WHERE number = 2`,
+      );
+      await forget(database);
+      expect(await readApprovalIds(database)).toEqual([]);
+      expect(await readItems(database)).toEqual([]);
+    },
+  );
+
+  test.each(["queued", "sending", "delivery_unknown"])(
+    "a posted card keeps its approval while the update that shows it stale is %s",
+    async (state) => {
+      const database = await unlinked();
+      await storeCardItem(database, 1);
+      await storeCardItem(database, 2, { phase: "update", state, slack_ts: null });
+
+      await forget(database);
+      expect(await readApprovalIds(database)).toEqual(["approval-1"]);
+      expect(await readNumbers(database)).toEqual([1, 2]);
+
+      await database.write(
+        (transaction) => transaction`UPDATE outbox SET state = 'failed' WHERE number = 2`,
+      );
+      await forget(database);
+      expect(await readApprovalIds(database)).toEqual([]);
+      expect(await readItems(database)).toEqual([]);
+    },
+  );
+
+  test("a card posted in the wrong place stays, redacted, with one more withdrawal once its last one failed", async () => {
+    const database = await unlinked({ card: { channelId: "C-link", ts: null } });
+    await storeCardItem(database, 1, {
+      state: "stray",
+      payload: JSON.stringify({ text: "Allow Carol?" }),
+      error: "cant_delete_message",
+    });
+    await storeWithdrawal(database, 2, 1, "failed");
+    await storeCardItem(database, 3, { phase: "update", state: "dropped", slack_ts: null });
+
+    await forget(database);
+    await forget(database);
+
+    expect(await readApprovalIds(database)).toEqual([]);
+    expect(await readItems(database)).toEqual([
+      {
+        number: 1,
+        kind: "card",
+        phase: "post",
+        state: "stray",
+        link_id: "link",
+        channel_id: "C-link",
+        payload: { redacted: "unlink" },
+        payload_hash: "hash",
+        slack_ts: "1000.000100",
+        created_at: 0,
+      },
+      {
+        number: 4,
+        kind: "retract",
+        phase: null,
+        state: "queued",
+        link_id: "link",
+        channel_id: "C-link",
+        payload: { target: "item-1" },
+        payload_hash: expect.any(String),
+        slack_ts: null,
+        created_at: 60_000,
+      },
+    ]);
+  });
+
+  test.each(["queued", "sending", "delivery_unknown"])(
+    "a withdrawal that's %s keeps the card it withdraws and its approval as they are",
+    async (state) => {
+      const database = await unlinked({ card: { channelId: "C-link", ts: null } });
+      await storeCardItem(database, 1, {
+        state: "stray",
+        payload: JSON.stringify({ text: "Allow Carol?" }),
+      });
+      await storeWithdrawal(database, 2, 1, state);
+      const before = await readItems(database);
+
+      await forget(database);
+
+      expect(await readApprovalIds(database)).toEqual(["approval-1"]);
+      expect(await readItems(database)).toEqual(before);
+    },
+  );
+
+  test("a withdrawn card goes with its withdrawal and its approval", async () => {
+    const database = await unlinked({ card: { channelId: "C-link", ts: null } });
+    await storeCardItem(database, 1, { state: "failed", error: "misplaced_reply_withdrawn" });
+    await storeWithdrawal(database, 2, 1, "sent");
+
+    await forget(database);
+
+    expect(await readApprovalIds(database)).toEqual([]);
+    expect(await readItems(database)).toEqual([]);
+  });
+
+  test("an update in the wrong place goes with its approval, since only a post can be withdrawn", async () => {
+    const database = await unlinked();
+    await storeCardItem(database, 1);
+    await storeCardItem(database, 2, { phase: "update", state: "stray" });
+
+    await forget(database);
+
+    expect(await readApprovalIds(database)).toEqual([]);
+    expect(await readItems(database)).toEqual([]);
   });
 });

@@ -158,8 +158,9 @@ function attempt(
   return verifyAndApply(database, reader, approval.id, { now: () => at, signal });
 }
 
-function applied(approval: Approval, at = NOW): ApplyAttempt {
-  return { kind: "settled", approval: { ...approval, state: "applied", appliedAt: at } };
+/** What applying `approval` at `at` settles, naming `linkId`, the link it changed or made. */
+function applied(approval: Approval, at = NOW, linkId = approval.linkId): ApplyAttempt {
+  return { kind: "settled", approval: { ...approval, state: "applied", appliedAt: at, linkId } };
 }
 
 function staled(approval: Approval, reason: StaleReason): ApplyAttempt {
@@ -284,11 +285,13 @@ describe("applying an approved change", () => {
     const request: SetupRequest = { ...linkNew, requestMode: "all", observe: "channel" };
     const approval = await approve(database, facts, request, newChannel);
 
-    expect(await attempt(database, fakeFactsReader(facts).reader, approval)).toEqual(
-      applied(approval),
-    );
+    const attempted = await attempt(database, fakeFactsReader(facts).reader, approval);
 
     const link = await readLink(database, "toybox-new");
+    expect(attempted).toEqual(applied(approval, NOW, link!.id));
+    expect(await database.read((sql) => readApproval(sql, approval.id))).toMatchObject({
+      linkId: link!.id,
+    });
     expect(link).toEqual({
       id: expect.stringMatching(/^[0-9a-f-]{36}$/),
       toybox_channel_id: "toybox-new",
@@ -337,10 +340,11 @@ describe("applying an approved change", () => {
     facts.toyBox = toyBoxView({ routines: [routine] });
     const approval = await approve(database, facts, linkNew, newChannel);
 
-    expect(await attempt(database, fakeFactsReader(facts).reader, approval)).toEqual(
-      applied(approval),
-    );
-    expect(await readLink(database, "toybox-new")).toMatchObject({ routine_state: "drifted" });
+    const attempted = await attempt(database, fakeFactsReader(facts).reader, approval);
+
+    const link = await readLink(database, "toybox-new");
+    expect(attempted).toEqual(applied(approval, NOW, link!.id));
+    expect(link).toMatchObject({ routine_state: "drifted" });
   });
 
   test("moving where the link publishes approves that channel's audience, and keeps the other", async () => {

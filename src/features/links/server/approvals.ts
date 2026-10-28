@@ -18,7 +18,7 @@ import {
   type ReadSet,
   type StaleReason,
 } from "@links/model/approvals";
-import { queueCard } from "@outbox/server/database";
+import { forgetCard, queueCard } from "@outbox/server/database";
 import { readInteraction } from "@slackapi/model/interactions";
 import type { SlackTs } from "@slackapi/model/ts";
 import { readInstallation } from "@slackapi/server/installation";
@@ -234,7 +234,7 @@ export async function recordApplied(
   linkId: string,
   now: number,
 ): Promise<Approval> {
-  const applied = applyApproval(approval, now);
+  const applied = applyApproval(approval, linkId, now);
   await saveApproval(transaction, applied);
   await queueUpdate(transaction, applied, now);
   await auditPatch(
@@ -244,6 +244,25 @@ export async function recordApplied(
     now,
   );
   return applied;
+}
+
+/**
+ * Forgets each approval whose link is gone once its card lets go of it, which unlink and the outbox
+ * call whenever that may have changed. A new link's approval names no link until it applies, so it
+ * stays until then.
+ */
+export async function forgetUnlinkedApprovals(transaction: Bun.SQL, now: number): Promise<void> {
+  const unlinked = await transaction<{ id: string; card_ts: SlackTs | null }[]>`
+    SELECT id, card_ts FROM approvals
+    WHERE link_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM links WHERE links.id = approvals.link_id)
+    ORDER BY number
+  `;
+  for (const approval of unlinked) {
+    if (await forgetCard(transaction, approval.id, approval.card_ts !== null, now)) {
+      await transaction`DELETE FROM approvals WHERE id = ${approval.id}`;
+    }
+  }
 }
 
 /** Stores a changed approval. */
