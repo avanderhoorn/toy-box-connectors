@@ -67,6 +67,7 @@ describe("rendering Slack text", () => {
 
   test("unescapes Slack's entities exactly once", () => {
     expect(renderSlackText("a &lt;b&gt; &amp;lt; c &amp; d", names)).toBe("a <b> &lt; c & d");
+    expect(renderSlackText("a &lt; b <@U0ALICE> &amp; c", names)).toBe("a < b {Alice Chen} & c");
     expect(renderSlackText("<https://x.dev/?a=1&amp;b=2|x &amp; y>", names)).toBe(
       "x & y (https://x.dev/?a=1&b=2)",
     );
