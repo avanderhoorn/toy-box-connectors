@@ -88,7 +88,18 @@ describe("presenting status", () => {
       "- Wakes: waiting for the lead's turn to end.",
     );
     expect(wake({ kind: "stalled" })).toStartWith("- Wakes: stalled. The lead was woken");
-    expect(wake({ kind: "blocked", reason: "provider" })).toStartWith("- Wakes: blocked for good");
+    expect(wake({ kind: "blocked", reason: "link_inactive" })).toBe(
+      "- Wakes: off while the link isn't active.",
+    );
+    expect(wake({ kind: "blocked", reason: "routine_missing" })).toBe(
+      "- Wakes: blocked, because the requests routine is gone. Register a new one with `toy-box-slack routine --requests <id>`.",
+    );
+    expect(wake({ kind: "blocked", reason: "provider" })).toBe(
+      "- Wakes: blocked for good, because the channel's lead doesn't run on Copilot. Create a Copilot channel and link that instead.",
+    );
+    expect(wake({ kind: "blocked", reason: "refused" })).toBe(
+      "- Wakes: blocked, because Toy Box refused to run the requests routine. Register a new one with `toy-box-slack routine --requests <id>`.",
+    );
   });
 
   test("a deleted Toy Box channel's link can only be removed", () => {

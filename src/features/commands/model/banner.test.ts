@@ -19,6 +19,18 @@ describe("presenting the banner", () => {
     );
   });
 
+  test.each([
+    ["connecting", "connecting"],
+    ["reconnecting", "reconnecting"],
+    ["unconfigured", "not set up"],
+    ["auth_failed", "tokens rejected"],
+    ["refused", "off"],
+  ] as const)("says Slack is %s, and points to status", (slack, phrase) => {
+    expect(presentBanner(banner({ slack }))).toBe(
+      `> Slack: ${phrase} · coverage complete, see \`toy-box-slack status\``,
+    );
+  });
+
   test("leaves coverage out when no linked channel is in view", () => {
     expect(presentBanner(banner({ coverage: null }))).toBe("> Slack: connected");
     expect(presentBanner(banner({ slack: "unconfigured", coverage: null }))).toBe(
