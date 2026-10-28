@@ -3,7 +3,8 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
   await db.unsafe(`
     -- A kept message has text, files and a content hash, and a content-free marker or a tombstone
     -- has none of them, nor any trace that it mentioned the bot. eligible marks a person's
-    -- message, the only kind that can start a request.
+    -- message, the only kind that can start a request. withdrawn marks the tombstone of content Slack
+    -- withheld, not content its author deleted.
     CREATE TABLE messages (
       channel_id   TEXT NOT NULL,
       ts           TEXT NOT NULL,
@@ -20,6 +21,7 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       mentions_bot INTEGER NOT NULL DEFAULT 0 CHECK (mentions_bot IN (0, 1)),
       edited_ts    TEXT,
       deleted      INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+      withdrawn    INTEGER NOT NULL DEFAULT 0 CHECK (withdrawn IN (0, 1)),
       version      TEXT NOT NULL,
       updated_seq  INTEGER NOT NULL CHECK (typeof(updated_seq) = 'integer' AND updated_seq > 0),
       PRIMARY KEY (channel_id, ts),
@@ -27,7 +29,8 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       CHECK ((content_hash IS NULL) = (text IS NULL)),
       CHECK ((files IS NULL) = (text IS NULL)),
       CHECK (text IS NOT NULL OR mentions_bot = 0),
-      CHECK (text IS NULL OR (deleted = 0 AND author_role <> 'other'))
+      CHECK (text IS NULL OR (deleted = 0 AND author_role <> 'other')),
+      CHECK (withdrawn = 0 OR deleted = 1)
     );
 
     CREATE TABLE changes (
@@ -35,7 +38,7 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       link_id    TEXT NOT NULL,
       channel_id TEXT NOT NULL,
       ts         TEXT NOT NULL,
-      kind       TEXT NOT NULL CHECK (kind IN ('new', 'edited', 'deleted'))
+      kind       TEXT NOT NULL CHECK (kind IN ('new', 'edited', 'deleted', 'withdrawn'))
     );
 
     CREATE TABLE threads (

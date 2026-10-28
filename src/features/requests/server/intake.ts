@@ -11,7 +11,7 @@ import {
   readActiveRequest,
   readMessageRequest,
 } from "./database";
-import { cancelStoredRequest, reviseStoredRequest } from "./lifecycle";
+import { cancelStoredRequest, reviseStoredRequest, withdrawStoredSource } from "./lifecycle";
 
 // Request intake.
 //
@@ -19,7 +19,8 @@ import { cancelStoredRequest, reviseStoredRequest } from "./lifecycle";
 // A new message is classified. An edit revises the active request its message belongs to, or
 // cancels the request whose mention it removed, and asks again only when it adds a mention to a
 // message no active request has. Deleting a request's source cancels the request, and deleting
-// one of its other messages revises it.
+// one of its other messages revises it. Slack withdrawing a source isn't its requester deleting
+// it, so the request stays, revised, and holds its replies until repair re-reads the source.
 
 /** The link settings intake reads. */
 export type IntakeLink = ClassifyLink & { id: string };
@@ -114,5 +115,20 @@ export async function takeDelete(
     await cancelStoredRequest(transaction, request, "source_deleted", now);
     return true;
   }
+  return reviseStoredRequest(transaction, request, now);
+}
+
+/**
+ * Applies request policy to a withdrawal the ledger just stored. Returns whether a request changed.
+ */
+export async function takeWithdrawal(
+  transaction: Bun.SQL,
+  channelId: string,
+  ts: SlackTs,
+  now: number,
+): Promise<boolean> {
+  const request = await readMessageRequest(transaction, channelId, ts);
+  if (request === null || !isActive(request.state)) return false;
+  if (request.sourceTs === ts) return withdrawStoredSource(transaction, request, now);
   return reviseStoredRequest(transaction, request, now);
 }

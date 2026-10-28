@@ -10,6 +10,7 @@ import {
   isActive,
   isDueToExpire,
   holdRequest,
+  markSourceUnverified,
   openRequest,
   releaseHold,
   requestLifetimeMs,
@@ -329,6 +330,24 @@ describe("holds", () => {
   test("releasing a hold clears it", () => {
     const held = holdRequest(inState("in_progress"), "asking", later);
     expect(releaseHold(held)).toEqual({ ...held, heldAt: null, holdReason: null });
+  });
+});
+
+describe("unverified sources", () => {
+  test("marking a source unverified holds an active request's replies from the first time", () => {
+    for (const state of ["open", "seen", "in_progress", "answering"] as const) {
+      const marked = markSourceUnverified(inState(state), later);
+      expect(marked).toEqual({ ...inState(state), sourceUnverifiedAt: later });
+      expect(markSourceUnverified(marked, later + 1)).toBe(marked);
+    }
+  });
+
+  test("a closed request has no replies to hold", () => {
+    for (const state of ["answered", "dismissed", "cancelled", "expired"] as const) {
+      expect(() => markSourceUnverified(inState(state), later)).toThrow(
+        "A request that's " + state + " can't hold its replies.",
+      );
+    }
   });
 });
 

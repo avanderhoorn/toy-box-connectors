@@ -6,6 +6,7 @@ import {
   keepsText,
   mergeDelete,
   mergeSnapshot,
+  mergeWithdrawal,
   type LinkAudience,
   type StoredMessage,
 } from "./ledger";
@@ -124,12 +125,14 @@ describe("merging", () => {
   const stored: StoredMessage = {
     version: "1700000000.000100",
     deleted: false,
+    withdrawn: false,
     contentHash: "hash-1",
   };
   const same = { version: stored.version, contentHash: "hash-1" };
   const newer = "1700000050.000000";
   const marker: StoredMessage = { ...stored, contentHash: null };
   const tombstone: StoredMessage = { ...stored, deleted: true, contentHash: null };
+  const withdrawn: StoredMessage = { ...tombstone, withdrawn: true };
 
   test("a message the ledger hasn't seen is inserted as new", () => {
     expect(mergeSnapshot(null, same)).toEqual({ kind: "insert", change: "new" });
@@ -201,6 +204,29 @@ describe("merging", () => {
       kind: "ignore",
       reason: "tombstoned",
     });
+  });
+
+  test("a withdrawal empties a message without a newer edit, and no version brings it back", () => {
+    expect(mergeWithdrawal(stored)).toEqual({ kind: "update", change: "withdrawn" });
+    expect(mergeWithdrawal(marker)).toEqual({ kind: "update", change: "withdrawn" });
+    expect(mergeSnapshot(withdrawn, same)).toEqual({ kind: "ignore", reason: "tombstoned" });
+    expect(mergeSnapshot(withdrawn, { version: newer, contentHash: "hash-2" })).toEqual({
+      kind: "ignore",
+      reason: "tombstoned",
+    });
+  });
+
+  test("a withdrawal that arrives before its message leaves a tombstone the message can't fill in", () => {
+    expect(mergeWithdrawal(null)).toEqual({ kind: "insert", change: "withdrawn" });
+  });
+
+  test("a withdrawal is taken once, and leaves a deleted message deleted", () => {
+    expect(mergeWithdrawal(withdrawn)).toEqual({ kind: "ignore", reason: "duplicate" });
+    expect(mergeWithdrawal(tombstone)).toEqual({ kind: "ignore", reason: "tombstoned" });
+  });
+
+  test("a delete turns a withdrawn message into a deleted one", () => {
+    expect(mergeDelete(withdrawn)).toEqual({ kind: "update", change: "deleted" });
   });
 
   test("versions compare as decimals, not as text", () => {

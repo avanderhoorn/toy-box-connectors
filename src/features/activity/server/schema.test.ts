@@ -113,6 +113,16 @@ test("a deleted message, and one that no person or the bridge wrote, keeps no co
   ).rejects.toThrow(contentFree);
 });
 
+test("only a deleted message can be withdrawn", async () => {
+  const database = await openTestDatabase();
+  const marker = { text: null, files: null, content_hash: null };
+
+  await insertMessage(database, { ts: "1700000100.000100", deleted: 1, withdrawn: 1, ...marker });
+  await expect(
+    insertMessage(database, { ts: "1700000100.000200", withdrawn: 1, ...marker }),
+  ).rejects.toThrow("CHECK constraint failed: withdrawn = 0 OR deleted = 1");
+});
+
 test("a file has a local copy and a fetch time exactly when it was fetched", async () => {
   const database = await openTestDatabase();
   const fetched = { state: "fetched", local_path: "F0123.png", fetched_at: 1 };

@@ -4,10 +4,12 @@ import { openTestDatabase } from "@bridge/server/testFixtures";
 import { startClaim } from "@links/server/claims";
 import { changeChannelId } from "@links/server/lifecycle";
 import { createStoredLink } from "@links/server/testFixtures";
+import { moveRequestChannel } from "@requests/server/database";
 import type { SlackMessage, SlackMessageEvent } from "@slackapi/model/messages";
 import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { ingestMessageEvent, type IngestContext, type Ingested } from "./ingest";
+import { moveLedgerChannel } from "./ledger";
 
 const context: IngestContext = {
   botUserId: "U-bot",
@@ -332,6 +334,38 @@ test("an event naming the ID Slack moved a channel from is stored under its curr
   ).toEqual([
     { channel_id: "C-new", ts: ask.ts, deleted: 0 },
     { channel_id: "C-new", ts: reply.ts, deleted: 1 },
+  ]);
+});
+
+test("a withdrawal holds the request its source opened and hands back local copies to remove", async () => {
+  const database = await openIngest();
+  await ingest(database, posted(askMessage(ask.ts, { files: [file("F1")] })));
+  await database.write(
+    (transaction) => transaction`
+      UPDATE files SET state = 'fetched', local_path = file_id || '.png', fetched_at = 1
+    `,
+  );
+  // Moving the channel suspends its link, which still forgets what Slack withdraws.
+  await database.write(async (transaction) => {
+    await changeChannelId(transaction, "C-link", "C-new", 1);
+    await moveLedgerChannel(transaction, "C-link", "C-new");
+    await moveRequestChannel(transaction, "C-link", "C-new");
+  });
+
+  expect(await ingest(database, { kind: "withdrawn", channelId: "C-link", ts: ask.ts })).toEqual(
+    stored(true, ["F1.png"]),
+  );
+  expect(
+    await database.read(
+      (sql) => sql`SELECT channel_id, ts, text, deleted, withdrawn FROM messages`,
+    ),
+  ).toEqual([{ channel_id: "C-new", ts: ask.ts, text: null, deleted: 1, withdrawn: 1 }]);
+  expect(
+    await database.read(
+      (sql) => sql`SELECT id, channel_id, state, input_rev, source_unverified_at FROM requests`,
+    ),
+  ).toEqual([
+    { id: 1, channel_id: "C-new", state: "open", input_rev: 2, source_unverified_at: context.now },
   ]);
 });
 

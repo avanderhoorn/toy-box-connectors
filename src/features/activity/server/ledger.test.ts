@@ -8,6 +8,7 @@ import {
   noteReply,
   storeDelete,
   storeMessage,
+  storeWithdrawal,
   trackRequestThread,
   type LedgerLink,
 } from "./ledger";
@@ -91,6 +92,12 @@ function storeDeleteOf(database: BridgeDatabase, message: SlackMessage) {
   );
 }
 
+function storeWithdrawalOf(database: BridgeDatabase, message: SlackMessage) {
+  return database.write((transaction) =>
+    storeWithdrawal(transaction, link.id, message.channelId, message.ts),
+  );
+}
+
 /** A request opens on `source` at `now`. */
 function track(database: BridgeDatabase, source: SlackMessage, now = 1_700_001_000_000) {
   return database.write((transaction) => trackRequestThread(transaction, link.id, source, now));
@@ -101,7 +108,7 @@ function readMessages(database: BridgeDatabase) {
   return database.read(async (sql) => [
     ...(await sql`
       SELECT ts, eligible, author_role, text, files, content_hash IS NOT NULL AS hashed,
-        mentions_bot, deleted, version, updated_seq
+        mentions_bot, deleted, withdrawn, version, updated_seq
       FROM messages ORDER BY ts
     `),
   ]);
@@ -132,6 +139,7 @@ test("a message stored again is still one row with one change", async () => {
       hashed: 1,
       mentions_bot: 1,
       deleted: 0,
+      withdrawn: 0,
       version: ask.version,
       updated_seq: 1,
     },
@@ -201,6 +209,7 @@ test("a delete drops the content for good, and every later version is ignored", 
       hashed: 0,
       mentions_bot: 0,
       deleted: 1,
+      withdrawn: 0,
       version: ask.version,
       updated_seq: 2,
     },
@@ -229,11 +238,97 @@ test("a delete the ledger sees first leaves a tombstone its late original can't 
       hashed: 0,
       mentions_bot: 0,
       deleted: 1,
+      withdrawn: 0,
       version: ask.ts,
       updated_seq: 1,
     },
   ]);
   expect(await readChanges(database)).toEqual([{ seq: 1, ts: ask.ts, kind: "deleted" }]);
+});
+
+test("a withdrawal empties a message for good, and keeps who wrote it", async () => {
+  const database = await openLedger();
+  await store(database, { ...ask, files: [file("F1"), file("F2")] });
+  await fetchFile(database, "F1");
+
+  expect(await storeWithdrawalOf(database, ask)).toEqual({
+    decision: { kind: "update", change: "withdrawn" },
+    purged: ["F1.png"],
+  });
+  expect((await store(database, edit)).decision).toEqual({ kind: "ignore", reason: "tombstoned" });
+  expect((await storeWithdrawalOf(database, ask)).decision).toEqual({
+    kind: "ignore",
+    reason: "duplicate",
+  });
+  expect(await readMessages(database)).toEqual([
+    {
+      ts: ask.ts,
+      eligible: 1,
+      author_role: "owner",
+      text: null,
+      files: null,
+      hashed: 0,
+      mentions_bot: 0,
+      deleted: 1,
+      withdrawn: 1,
+      version: ask.version,
+      updated_seq: 2,
+    },
+  ]);
+  expect(await readChanges(database)).toEqual([
+    { seq: 1, ts: ask.ts, kind: "new" },
+    { seq: 2, ts: ask.ts, kind: "withdrawn" },
+  ]);
+  expect(await readFiles(database)).toEqual([]);
+});
+
+test("a withdrawal the ledger sees first leaves a tombstone its late original can't fill in", async () => {
+  const database = await openLedger();
+
+  expect((await storeWithdrawalOf(database, ask)).decision).toEqual({
+    kind: "insert",
+    change: "withdrawn",
+  });
+  expect((await store(database, ask)).decision).toEqual({ kind: "ignore", reason: "tombstoned" });
+  expect(await readMessages(database)).toEqual([
+    {
+      ts: ask.ts,
+      eligible: 0,
+      author_role: "other",
+      text: null,
+      files: null,
+      hashed: 0,
+      mentions_bot: 0,
+      deleted: 1,
+      withdrawn: 1,
+      version: ask.ts,
+      updated_seq: 1,
+    },
+  ]);
+  expect(await readChanges(database)).toEqual([{ seq: 1, ts: ask.ts, kind: "withdrawn" }]);
+});
+
+test("a delete makes a withdrawn message deleted, and a withdrawal leaves a deleted one alone", async () => {
+  const database = await openLedger();
+  await store(database, ask);
+  await storeWithdrawalOf(database, ask);
+
+  expect((await storeDeleteOf(database, ask)).decision).toEqual({
+    kind: "update",
+    change: "deleted",
+  });
+  expect((await storeWithdrawalOf(database, ask)).decision).toEqual({
+    kind: "ignore",
+    reason: "tombstoned",
+  });
+  expect(await readMessages(database)).toMatchObject([
+    { deleted: 1, withdrawn: 0, updated_seq: 3 },
+  ]);
+  expect(await readChanges(database)).toEqual([
+    { seq: 1, ts: ask.ts, kind: "new" },
+    { seq: 2, ts: ask.ts, kind: "withdrawn" },
+    { seq: 3, ts: ask.ts, kind: "deleted" },
+  ]);
 });
 
 test("someone not on the allowlist keeps their text only in a request's thread", async () => {

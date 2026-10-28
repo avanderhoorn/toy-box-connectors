@@ -5,6 +5,7 @@ import {
   keepsText,
   mergeDelete,
   mergeSnapshot,
+  mergeWithdrawal,
   type AuthorRole,
   type LinkAudience,
   type MergeDecision,
@@ -36,14 +37,15 @@ export type StoredVersion = {
   purged: string[];
 };
 
-/** What storing a delete did. */
-export type StoredDelete = { decision: MergeDecision; purged: string[] };
+/** What storing a delete or a withdrawal did. */
+export type StoredRemoval = { decision: MergeDecision; purged: string[] };
 
 type Applied = Exclude<MergeDecision, { kind: "ignore" }>;
 
 type MessageRow = {
   version: SlackTs;
   deleted: number;
+  withdrawn: number;
   content_hash: string | null;
   mentions_bot: number;
 };
@@ -99,20 +101,23 @@ export async function storeDelete(
   linkId: string,
   channelId: string,
   ts: SlackTs,
-): Promise<StoredDelete> {
+): Promise<StoredRemoval> {
   const decision = mergeDelete(storedMessage(await readMessage(transaction, channelId, ts)));
-  if (decision.kind === "ignore") return { decision, purged: [] };
-  await writeMessage(
-    transaction,
-    linkId,
-    channelId,
-    ts,
-    decision,
-    decision.kind === "insert"
-      ? { eligible: 0, author_role: "other", deleted: 1, version: ts }
-      : { deleted: 1, text: null, files: null, content_hash: null, mentions_bot: 0 },
-  );
-  return { decision, purged: await forgetMessageFiles(transaction, channelId, ts) };
+  return removeContent(transaction, { linkId, channelId, ts, withdrawn: false }, decision);
+}
+
+/**
+ * Merges Slack withdrawing a message's content into the ledger, keeping who wrote it and where. A
+ * message the ledger never saw leaves a tombstone, so its late original stays withdrawn.
+ */
+export async function storeWithdrawal(
+  transaction: Bun.SQL,
+  linkId: string,
+  channelId: string,
+  ts: SlackTs,
+): Promise<StoredRemoval> {
+  const decision = mergeWithdrawal(storedMessage(await readMessage(transaction, channelId, ts)));
+  return removeContent(transaction, { linkId, channelId, ts, withdrawn: true }, decision);
 }
 
 /**
@@ -185,14 +190,43 @@ async function readMessage(
   ts: SlackTs,
 ): Promise<MessageRow | null> {
   const [row] = await transaction<MessageRow[]>`
-    SELECT version, deleted, content_hash, mentions_bot
+    SELECT version, deleted, withdrawn, content_hash, mentions_bot
     FROM messages WHERE channel_id = ${channelId} AND ts = ${ts}
   `;
   return row ?? null;
 }
 
 function storedMessage(row: MessageRow | null): StoredMessage | null {
-  return row && { version: row.version, deleted: row.deleted === 1, contentHash: row.content_hash };
+  return (
+    row && {
+      version: row.version,
+      deleted: row.deleted === 1,
+      withdrawn: row.withdrawn === 1,
+      contentHash: row.content_hash,
+    }
+  );
+}
+
+/** Tombstones a message as a delete or a withdrawal decided, forgetting its text and files. */
+async function removeContent(
+  transaction: Bun.SQL,
+  removal: { linkId: string; channelId: string; ts: SlackTs; withdrawn: boolean },
+  decision: MergeDecision,
+): Promise<StoredRemoval> {
+  if (decision.kind === "ignore") return { decision, purged: [] };
+  const { linkId, channelId, ts } = removal;
+  const withdrawn = removal.withdrawn ? 1 : 0;
+  await writeMessage(
+    transaction,
+    linkId,
+    channelId,
+    ts,
+    decision,
+    decision.kind === "insert"
+      ? { eligible: 0, author_role: "other", deleted: 1, withdrawn, version: ts }
+      : { deleted: 1, withdrawn, text: null, files: null, content_hash: null, mentions_bot: 0 },
+  );
+  return { decision, purged: await forgetMessageFiles(transaction, channelId, ts) };
 }
 
 async function isTracked(transaction: Bun.SQL, channelId: string, threadTs: SlackTs) {
@@ -228,7 +262,7 @@ async function appendChange(
   linkId: string,
   channelId: string,
   ts: SlackTs,
-  kind: "new" | "edited" | "deleted",
+  kind: NonNullable<Applied["change"]>,
 ): Promise<number> {
   const [change] = await transaction<{ seq: number }[]>`
     INSERT INTO changes (link_id, channel_id, ts, kind)

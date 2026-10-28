@@ -1,7 +1,7 @@
 import { readClaim } from "@links/model/claim";
 import { takeClaim } from "@links/server/claims";
 import { readChannelLink, type ChannelLink } from "@links/server/database";
-import { takeDelete, takeMessage } from "@requests/server/intake";
+import { takeDelete, takeMessage, takeWithdrawal } from "@requests/server/intake";
 import type { SlackMessage, SlackMessageEvent } from "@slackapi/model/messages";
 import { currentChannelId } from "@slackapi/server/channels";
 import { canonicalUserId } from "@slackapi/server/users";
@@ -9,6 +9,7 @@ import {
   noteReply,
   storeDelete,
   storeMessage,
+  storeWithdrawal,
   trackRequestThread,
   type LedgerLink,
 } from "./ledger";
@@ -79,6 +80,15 @@ export async function ingestMessageEvent(
         kind: "stored",
         linkId: link.id,
         requestsChanged: await takeDelete(transaction, channelId, event.ts, context.now),
+        purged: stored.purged,
+      };
+    }
+    case "withdrawn": {
+      const stored = await storeWithdrawal(transaction, link.id, channelId, event.ts);
+      return {
+        kind: "stored",
+        linkId: link.id,
+        requestsChanged: await takeWithdrawal(transaction, channelId, event.ts, context.now),
         purged: stored.purged,
       };
     }

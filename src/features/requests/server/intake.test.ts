@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { storeDelete, storeMessage, type LedgerLink } from "@activity/server/ledger";
+import {
+  storeDelete,
+  storeMessage,
+  storeWithdrawal,
+  type LedgerLink,
+} from "@activity/server/ledger";
 import { ledgerLink } from "@activity/server/testFixtures";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
@@ -15,7 +20,7 @@ import {
 import type { SlackMessage } from "@slackapi/model/messages";
 import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
 import { readInputHash, readRequest, saveRequest, type StoredRequest } from "./database";
-import { takeDelete, takeMessage, type IntakeLink } from "./intake";
+import { takeDelete, takeMessage, takeWithdrawal, type IntakeLink } from "./intake";
 
 const now = 1_700_001_000_000;
 const unchanged = { changed: false, opened: false };
@@ -71,6 +76,13 @@ function takeDeleteOf(database: BridgeDatabase, message: SlackMessage) {
   });
 }
 
+function takeWithdrawalOf(database: BridgeDatabase, message: SlackMessage, at = now) {
+  return database.write(async (transaction) => {
+    await storeWithdrawal(transaction, "link", message.channelId, message.ts);
+    return takeWithdrawal(transaction, message.channelId, message.ts, at);
+  });
+}
+
 /** Applies a lifecycle change to request `id`, as the lead's commands do. */
 function change(
   database: BridgeDatabase,
@@ -98,6 +110,14 @@ function readRequests(database: BridgeDatabase) {
 
 function readClosings(database: BridgeDatabase) {
   return database.read((sql) => sql`SELECT id, state, closed_reason FROM requests ORDER BY id`);
+}
+
+function readUnverified(database: BridgeDatabase) {
+  return database.read(
+    (sql) => sql`
+      SELECT id, state, input_rev, attention, source_unverified_at FROM requests ORDER BY id
+    `,
+  );
 }
 
 function readMembers(database: BridgeDatabase) {
@@ -399,4 +419,100 @@ test("deleting a finished request's message, or one that asked nothing, changes 
   expect(await takeDeleteOf(database, aside)).toBe(false);
   expect(await takeDeleteOf(database, askMessage("1700000400.000100"))).toBe(false);
   expect(await readClosings(database)).toEqual([{ id: 1, state: "answered", closed_reason: null }]);
+});
+
+test("Slack withdrawing a request's source holds its replies and revises it, in any state before answered", async () => {
+  for (const [state, reach] of beforeAnswered) {
+    const database = await openIntake();
+    await take(database, ask);
+    await take(database, more);
+    await change(database, 1, reach);
+    await queueReplies(database);
+
+    expect(await takeWithdrawalOf(database, ask)).toBe(true);
+    expect(await readUnverified(database)).toEqual([
+      {
+        id: 1,
+        state,
+        input_rev: 3,
+        attention: state === "open" ? null : "updated",
+        source_unverified_at: now,
+      },
+    ]);
+    // Unlike a delete, nobody took the question back, so its replies wait rather than end.
+    expect(await readItems(database)).toEqual([
+      { number: 1, state: "queued" },
+      { number: 2, state: "sending" },
+    ]);
+  }
+});
+
+test("a source withdrawn again stays held without being revised again", async () => {
+  const database = await openIntake();
+  await take(database, ask);
+  await takeWithdrawalOf(database, ask);
+  expect(await takeWithdrawalOf(database, ask, now + 1)).toBe(false);
+  await change(database, 1, (request) => ({ ...request, sourceUnverifiedAt: null }));
+
+  expect(await takeWithdrawalOf(database, ask, now + 2)).toBe(true);
+  expect(await readUnverified(database)).toEqual([
+    { id: 1, state: "open", input_rev: 2, attention: null, source_unverified_at: now + 2 },
+  ]);
+});
+
+test("a source held since an outage keeps that time once Slack withdraws it", async () => {
+  const database = await openIntake();
+  await take(database, ask);
+  await change(database, 1, (request) => ({ ...request, sourceUnverifiedAt: now - 1 }));
+
+  expect(await takeWithdrawalOf(database, ask)).toBe(true);
+  expect(await readUnverified(database)).toEqual([
+    { id: 1, state: "open", input_rev: 2, attention: null, source_unverified_at: now - 1 },
+  ]);
+});
+
+test("withdrawing another of a request's messages revises it and holds nothing", async () => {
+  const database = await openIntake();
+  await take(database, ask);
+  const opened = (await database.read((sql) => readRequest(sql, 1)))?.inputHash;
+  await take(database, more);
+
+  expect(await takeWithdrawalOf(database, more)).toBe(true);
+  expect(await readUnverified(database)).toEqual([
+    { id: 1, state: "open", input_rev: 3, attention: null, source_unverified_at: null },
+  ]);
+  expect((await database.read((sql) => readRequest(sql, 1)))?.inputHash).toBe(opened);
+});
+
+test("withdrawing a finished request's message, or one that asked nothing, changes nothing", async () => {
+  const database = await openIntake();
+  await take(database, ask);
+  await change(database, 1, answer);
+  const aside = askMessage("1700000300.000100", {
+    text: "green again",
+    mentions: [],
+    mentionsBot: false,
+  });
+  await take(database, aside);
+
+  expect(await takeWithdrawalOf(database, ask)).toBe(false);
+  expect(await takeWithdrawalOf(database, aside)).toBe(false);
+  expect(await takeWithdrawalOf(database, askMessage("1700000400.000100"))).toBe(false);
+  expect(await readUnverified(database)).toEqual([
+    { id: 1, state: "answered", input_rev: 1, attention: null, source_unverified_at: null },
+  ]);
+});
+
+test("its requester deleting a withdrawn source still cancels the request", async () => {
+  const database = await openIntake();
+  await take(database, ask);
+  await takeWithdrawalOf(database, ask);
+
+  expect(await takeDeleteOf(database, ask)).toBe(true);
+  expect(await readClosings(database)).toEqual([
+    { id: 1, state: "cancelled", closed_reason: "source_deleted" },
+  ]);
+  expect(await readUnverified(database)).toEqual([
+    { id: 1, state: "cancelled", input_rev: 2, attention: null, source_unverified_at: null },
+  ]);
 });

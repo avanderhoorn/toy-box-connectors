@@ -78,10 +78,12 @@ describe("normalizing Slack messages", () => {
   });
 
   test("an edit carries the whole message as it is now, versioned by the edit", () => {
+    // Slack hides the edit event itself from people, never the message it carries.
     const edited = normalize({
       type: "message",
       subtype: "message_changed",
       channel: "C1",
+      hidden: true,
       ts: "1700000050.000300",
       message: {
         ...plain,
@@ -123,6 +125,7 @@ describe("normalizing Slack messages", () => {
       type: "message",
       subtype: "message_deleted",
       channel: "C1",
+      hidden: true,
       ts: "1700000060.000000",
       deleted_ts: plain.ts,
       previous_message: plain,
@@ -130,22 +133,63 @@ describe("normalizing Slack messages", () => {
     expect(deleted).toEqual({ kind: "deleted", channelId: "C1", ts: plain.ts });
   });
 
-  test("the tombstone a deleted root leaves behind its replies is a delete", () => {
+  test("the tombstone Slack leaves of a root deleted with replies deletes it, live or from history", () => {
+    // It's hidden and Slackbot's, yet it's neither a withdrawal nor a bot's message.
     const tombstone = {
       subtype: "tombstone",
       user: "USLACKBOT",
+      hidden: true,
       text: "This message was deleted.",
       ts: plain.ts,
       thread_ts: plain.ts,
+      reply_count: 1,
+      latest_reply: "1700000070.000000",
     };
-    const edited = normalize({
-      type: "message",
-      subtype: "message_changed",
-      channel: "C1",
-      message: tombstone,
+    const deleted: SlackMessageEvent = { kind: "deleted", channelId: "C1", ts: plain.ts };
+    expect(
+      normalize({
+        type: "message",
+        subtype: "message_changed",
+        channel: "C1",
+        hidden: true,
+        message: tombstone,
+      }),
+    ).toEqual(deleted);
+    expect(normalizeHistoryMessage("C1", tombstone, context)).toEqual(deleted);
+  });
+
+  test("content an admin's key no longer unlocks is withdrawn, at its own ts, live or from history", () => {
+    const redacted = {
+      subtype: "ekm_access_denied",
+      user: "UALICE",
+      text: "Your admins have suspended everyone's access to this content.",
+      ts: plain.ts,
+    };
+    const withdrawn: SlackMessageEvent = { kind: "withdrawn", channelId: "C1", ts: plain.ts };
+    expect(normalize({ type: "message", channel: "C1", ...redacted })).toEqual(withdrawn);
+    expect(
+      normalize({ type: "message", subtype: "message_changed", channel: "C1", message: redacted }),
+    ).toEqual(withdrawn);
+    expect(normalizeHistoryMessage("C1", redacted, context)).toEqual(withdrawn);
+  });
+
+  test("a message Slack credits to its revoked user is withdrawn, whatever its subtype", () => {
+    expect(normalize({ type: "message", channel: "C1", ...plain, user: "UREVOKEDU" })).toEqual({
+      kind: "withdrawn",
+      channelId: "C1",
+      ts: plain.ts,
     });
-    expect(edited).toEqual({ kind: "deleted", channelId: "C1", ts: plain.ts });
-    expect(normalizeHistoryMessage("C1", tombstone, context)).toEqual(edited);
+  });
+
+  test("a message Slack hides from people is withdrawn", () => {
+    expect(normalize({ type: "message", channel: "C1", ...plain, hidden: true })).toEqual({
+      kind: "withdrawn",
+      channelId: "C1",
+      ts: plain.ts,
+    });
+    expect(normalize({ type: "message", channel: "C1", ...plain, hidden: false }).kind).toBe(
+      "message",
+    );
   });
 
   test("a reply notice updates the thread's bookkeeping and never repeats its root", () => {
@@ -237,7 +281,6 @@ describe("normalizing Slack messages", () => {
     expect(message({ ...plain, subtype: "channel_join" }).author).toBe("notice");
     expect(message({ ...plain, user: "UBOT", subtype: "channel_join" }).author).toBe("notice");
     expect(message({ ...plain, subtype: "channel_topic", topic: "<@UBOT>" }).author).toBe("notice");
-    expect(message({ ...plain, subtype: "ekm_access_denied", user: "U00" }).author).toBe("notice");
     expect(message({ ...plain, subtype: "a_subtype_from_next_year" }).author).toBe("notice");
     expect(message({ ...plain, user: undefined }).author).toBe("notice");
   });
@@ -280,8 +323,8 @@ describe("message event payloads", () => {
     expect(parses({ ...plain, blocks: [], client_msg_id: "x", brand_new_field: { a: 1 } })).toBe(
       true,
     );
-    expect(parses({ ...plain, bot_id: null, team: null, thread_ts: null, edited: null })).toBe(
-      true,
-    );
+    expect(
+      parses({ ...plain, bot_id: null, team: null, thread_ts: null, edited: null, hidden: null }),
+    ).toBe(true);
   });
 });

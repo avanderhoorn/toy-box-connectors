@@ -3,6 +3,7 @@ import {
   cancelRequest,
   expireRequest,
   isDueToExpire,
+  markSourceUnverified,
   releaseHold,
   reviseRequest,
   type CancelReason,
@@ -31,6 +32,22 @@ export async function reviseStoredRequest(
   now: number,
 ): Promise<boolean> {
   const revised = reviseRequest(request, await readInputHash(transaction, request.id), now);
+  if (revised === request) return false;
+  await saveRequest(transaction, revised);
+  return true;
+}
+
+/**
+ * Holds a request's replies because Slack withdrew its source, and revises it from what the ledger
+ * holds, which no longer counts the source. Returns whether it changed.
+ */
+export async function withdrawStoredSource(
+  transaction: Bun.SQL,
+  request: StoredRequest,
+  now: number,
+): Promise<boolean> {
+  const held = markSourceUnverified(request, now);
+  const revised = reviseRequest(held, await readInputHash(transaction, request.id), now);
   if (revised === request) return false;
   await saveRequest(transaction, revised);
   return true;

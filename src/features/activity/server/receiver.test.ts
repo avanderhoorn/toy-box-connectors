@@ -142,6 +142,33 @@ function deleted(ts: string, previous: object = {}) {
   };
 }
 
+/** The tombstone Slack leaves where `root` was, once it's deleted with replies still under it. */
+function tombstoneOf(root: RawMessage, replies: number): RawMessage {
+  return {
+    type: "message",
+    subtype: "tombstone",
+    channel: root.channel,
+    user: "USLACKBOT",
+    text: "This message was deleted.",
+    ts: root.ts,
+    thread_ts: root.ts,
+    reply_count: replies,
+    hidden: true,
+  };
+}
+
+/** `posted` as Slack shows it once an admin revokes its key. */
+function revokedOf(posted: RawMessage): RawMessage {
+  return {
+    type: "message",
+    subtype: "ekm_access_denied",
+    channel: posted.channel,
+    user: "UREVOKEDU",
+    text: "Your admins have suspended everyone's access to this content.",
+    ts: posted.ts,
+  };
+}
+
 function file(id: string) {
   return { id, name: `${id}.png`, mimetype: "image/png", size: 2048 };
 }
@@ -173,6 +200,16 @@ function stored(posted: RawMessage, changes: object = {}) {
     version: posted.ts,
     ...changes,
   };
+}
+
+function readRemovals(database: BridgeDatabase) {
+  return database.read((sql) => sql`SELECT ts, deleted, withdrawn FROM messages ORDER BY ts`);
+}
+
+function readRequests(database: BridgeDatabase) {
+  return database.read(
+    (sql) => sql`SELECT id, state, closed_reason, source_unverified_at FROM requests ORDER BY id`,
+  );
 }
 
 function readUpdates(database: BridgeDatabase) {
@@ -460,6 +497,28 @@ describe("what's taken", () => {
     ]);
   });
 
+  test("content Slack withdraws loses its text and local copies, and holds its request's replies", async () => {
+    const { database, filesFolder, receive, acks, changes } = await openReceiver();
+    const ask = message("1700000100.000100", "<@U0BOT> what broke?", { files: [file("F1")] });
+    await receive(eventFrame("1", ask));
+    await fetchFiles(database, filesFolder);
+
+    const redacted = revokedOf(ask);
+    await receive(eventFrame("2", changed(redacted)));
+    await receive(eventFrame("3", redacted));
+    await receive(eventFrame("4", { ...ask, text: "<@U0BOT> what broke?", files: [] }));
+
+    expect(acks).toEqual(["env-1", "env-2", "env-3", "env-4"]);
+    expect(await readMessages(database)).toEqual([stored(ask, { text: null, deleted: 1 })]);
+    expect(await readRemovals(database)).toEqual([{ ts: ask.ts, deleted: 1, withdrawn: 1 }]);
+    expect(await database.read((sql) => sql`SELECT file_id FROM files`)).toEqual([]);
+    expect(existsSync(join(filesFolder, "F1.png"))).toBe(false);
+    expect(await readRequests(database)).toEqual([
+      { id: 1, state: "open", closed_reason: null, source_unverified_at: committedAt },
+    ]);
+    expect(changes()).toBe(2);
+  });
+
   test("a click that decides an approval is taken once, and reported as a change", async () => {
     const { database, receive, acks, changes } = await openReceiver();
     await createStoredApproval(database, {
@@ -500,23 +559,33 @@ describe("what's taken", () => {
     silenceLog();
     const { database, receive, acks } = await openReceiver();
     const posted = message("1700000100.000100", "before the failure");
+    const kept = message("1700000150.000100", "also before the failure");
     await receive(eventFrame("1", posted));
+    await receive(eventFrame("2", kept));
     await database.write(
       (transaction) => transaction`
         UPDATE installation SET status = 'auth_failed', auth_failed_at = ${arrivedAt}
       `,
     );
 
-    await receive(eventFrame("2", message("1700000200.000100", "during the failure")));
-    await receive(eventFrame("3", changed({ ...posted, text: "edited during the failure" })));
-    await receive(eventFrame("4", deleted(posted.ts)));
+    await receive(eventFrame("3", message("1700000200.000100", "during the failure")));
+    await receive(eventFrame("4", changed({ ...posted, text: "edited during the failure" })));
+    await receive(eventFrame("5", deleted(posted.ts)));
+    await receive(eventFrame("6", changed(revokedOf(kept))));
     await receive(
-      eventFrame("5", { type: "member_left_channel", user: "U0BOT", channel: "C-link" }),
+      eventFrame("7", { type: "member_left_channel", user: "U0BOT", channel: "C-link" }),
     );
-    await receive(eventFrame("6", { type: "message", channel: "C-link", ts: "soon" }));
+    await receive(eventFrame("8", { type: "message", channel: "C-link", ts: "soon" }));
 
-    expect(acks).toEqual(["env-1", "env-2", "env-3", "env-4", "env-5", "env-6"]);
-    expect(await readMessages(database)).toEqual([stored(posted, { text: null, deleted: 1 })]);
+    expect(acks).toEqual(["env-1", "env-2", "env-3", "env-4", "env-5", "env-6", "env-7", "env-8"]);
+    expect(await readMessages(database)).toEqual([
+      stored(posted, { text: null, deleted: 1 }),
+      stored(kept, { text: null, deleted: 1 }),
+    ]);
+    expect(await readRemovals(database)).toEqual([
+      { ts: posted.ts, deleted: 1, withdrawn: 0 },
+      { ts: kept.ts, deleted: 1, withdrawn: 1 },
+    ]);
     expect(await readLinks(database)).toEqual([
       { id: "link", status: "suspended", status_reason: "bot_removed" },
     ]);
@@ -525,11 +594,13 @@ describe("what's taken", () => {
     ]);
     expect(await readReceipts(database)).toEqual([
       { key: "Ev-1", type: "message", disposition: "applied" },
-      { key: "Ev-2", type: "message", disposition: "ignored" },
+      { key: "Ev-2", type: "message", disposition: "applied" },
       { key: "Ev-3", type: "message", disposition: "ignored" },
-      { key: "Ev-4", type: "message", disposition: "applied" },
-      { key: "Ev-5", type: "member_left_channel", disposition: "applied" },
-      { key: "Ev-6", type: "message", disposition: "malformed" },
+      { key: "Ev-4", type: "message", disposition: "ignored" },
+      { key: "Ev-5", type: "message", disposition: "applied" },
+      { key: "Ev-6", type: "message", disposition: "applied" },
+      { key: "Ev-7", type: "member_left_channel", disposition: "applied" },
+      { key: "Ev-8", type: "message", disposition: "malformed" },
     ]);
   });
 });
@@ -835,6 +906,41 @@ describe("Slack's own sequences", () => {
     const after = await readUpdates(database);
     expect(after[0]).toEqual(before[0]);
     expect(after[1]?.updated_seq).toBeGreaterThan(before[1]?.updated_seq);
+  });
+
+  test("deleting a root with replies cancels its request by the tombstone Slack leaves, and keeps the replies", async () => {
+    const { database, receive, changes } = await openReceiver();
+    const root = message("1700000100.000100", "<@U0BOT> can you deploy?");
+    const reply = message("1700000200.000100", "me too", { thread_ts: root.ts });
+    await receive(eventFrame("1", root));
+    await receive(eventFrame("2", reply));
+
+    // Slack sends only the tombstone it leaves where the root was.
+    await receive(eventFrame("3", changed(tombstoneOf(root, 1))));
+    expect(await readMessages(database)).toEqual([
+      stored(root, { text: null, deleted: 1 }),
+      stored(reply),
+    ]);
+    expect(await readRemovals(database)).toEqual([
+      { ts: root.ts, deleted: 1, withdrawn: 0 },
+      { ts: reply.ts, deleted: 0, withdrawn: 0 },
+    ]);
+    expect(await readRequests(database)).toEqual([
+      { id: 1, state: "cancelled", closed_reason: "source_deleted", source_unverified_at: null },
+    ]);
+
+    // The root's own delete follows its last reply's, and changes nothing more.
+    await receive(eventFrame("4", deleted(reply.ts, reply)));
+    const before = { changes: changes(), updates: await readUpdates(database) };
+    await receive(eventFrame("5", deleted(root.ts, root)));
+    expect({ changes: changes(), updates: await readUpdates(database) }).toEqual(before);
+    expect(await readReceipts(database)).toEqual(
+      ["1", "2", "3", "4", "5"].map((n) => ({
+        key: `Ev-${n}`,
+        type: "message",
+        disposition: "applied",
+      })),
+    );
   });
 
   test("editing a root that has a broadcast reply changes only the root", async () => {

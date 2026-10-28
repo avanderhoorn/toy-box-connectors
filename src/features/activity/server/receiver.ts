@@ -34,9 +34,9 @@ import { moveLedgerChannel } from "./ledger";
 // commit isn't acked, and nothing after it is handled, so Slack sends it again to a bridge that
 // starts afresh. Local copies of files whose rows a delivery deleted are removed after the commit.
 //
-// While Slack rejects the bot token, a channel's lifecycle, deleted messages and files, gaps and
-// clicks are still taken, because repair can't find any of them later. What's posted or edited
-// meanwhile is left for the repair that follows recovery.
+// While Slack rejects the bot token, a channel's lifecycle, deleted and withdrawn messages, deleted
+// files, gaps and clicks are still taken, because repair can't find any of them later. What's
+// posted or edited meanwhile is left for the repair that follows recovery.
 
 export interface SlackReceiver {
   /**
@@ -219,15 +219,16 @@ async function takeMessage(
   payload: SlackMessageEventPayload,
   { installation, now }: TakeContext,
 ): Promise<Taken> {
-  // Repair finds what was posted or edited while Slack rejected the token, but never a delete.
-  if (installation.status !== "active" && payload.shape !== "deleted") return ignored;
-
   const botUserIds = await readBotUserIds(transaction);
   const event = normalizeMessageEvent(payload, {
     botUserId: installation.botUserId,
     botId: installation.botId,
     isBotUser: (userId) => botUserIds.has(userId),
   });
+  // Repair finds what was posted or edited while Slack rejected the token, but never a delete, and
+  // never a withdrawal of a message older than the gap.
+  const removes = event.kind === "deleted" || event.kind === "withdrawn";
+  if (installation.status !== "active" && !removes) return ignored;
 
   const ingested = await ingestMessageEvent(transaction, event, {
     botUserId: installation.botUserId,

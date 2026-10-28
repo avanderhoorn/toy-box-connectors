@@ -37,6 +37,7 @@ export const slackMessageSchema = z
       .nullish()
       .describe("Present once the message has been edited"),
     latest_reply: slackTsSchema.nullish().describe("The newest reply's ts on a thread root"),
+    hidden: z.boolean().nullish().describe("Set when Slack keeps the message from people"),
   })
   .describe("A Slack message");
 
@@ -146,7 +147,16 @@ export type SlackMessage = {
 export type SlackMessageEvent =
   /** A message as it is now. `edit` marks one that arrived as an edit. */
   | { kind: "message"; message: SlackMessage; edit: boolean }
+  /**
+   * Its author or an admin deleted the message. Slack deletes a root that still has replies by
+   * leaving a tombstone in its place, and that counts too.
+   */
   | { kind: "deleted"; channelId: string; ts: SlackTs }
+  /**
+   * Slack no longer shows what a message says, because an admin revoked its key or a data loss
+   * prevention rule hid it. Only a delete says its author took it back.
+   */
+  | { kind: "withdrawn"; channelId: string; ts: SlackTs }
   /** A thread gained a reply. Only its bookkeeping changes, never its root's text. */
   | { kind: "replied"; channelId: string; threadTs: SlackTs; latestReplyTs: SlackTs | null };
 
@@ -192,6 +202,8 @@ export function normalizeHistoryMessage(
 /** Subtypes a person posts directly. Every other subtype is a notice or another author's. */
 const personSubtypes = new Set(["file_share", "me_message", "thread_broadcast"]);
 const slackbotUserId = "USLACKBOT";
+/** The author Slack names for content an admin revoked. users.info can't look it up. */
+const revokedUserId = "UREVOKEDU";
 
 function fromSnapshot(
   channelId: string,
@@ -199,8 +211,10 @@ function fromSnapshot(
   context: NormalizeContext,
   edit: boolean,
 ): SlackMessageEvent {
-  // Deleting a root that has replies leaves a tombstone in its place.
+  // A tombstone is hidden and Slackbot's, so it's read before anything that would take it for a
+  // withdrawal or a bot's message. The root's message_deleted comes only after its last reply's.
   if (payload.subtype === "tombstone") return { kind: "deleted", channelId, ts: payload.ts };
+  if (isWithdrawn(payload)) return { kind: "withdrawn", channelId, ts: payload.ts };
 
   const threadTs = payload.thread_ts ?? null;
   const isReply = threadTs !== null && threadTs !== payload.ts;
@@ -236,6 +250,19 @@ function fromSnapshot(
       latestReplyTs: payload.latest_reply ?? null,
     },
   };
+}
+
+/**
+ * Whether Slack withheld a message's content. A snapshot like this keeps the original's ts, often
+ * without a newer edit, and what text it has is Slack's placeholder. Only the message's own hidden
+ * flag counts, since Slack hides every edit and delete event that carries one.
+ */
+function isWithdrawn(payload: SlackMessagePayload): boolean {
+  return (
+    payload.subtype === "ekm_access_denied" ||
+    payload.hidden === true ||
+    payload.user === revokedUserId
+  );
 }
 
 function messageAuthor(payload: SlackMessagePayload, context: NormalizeContext): MessageAuthor {

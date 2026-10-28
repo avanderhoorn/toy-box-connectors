@@ -67,8 +67,8 @@ export type Request = {
   servedRev: number;
   attention: RequestAttention | null;
   /**
-   * Set after an outage until repair re-reads the source. It holds the request's replies in the
-   * outbox, and it never wakes the lead.
+   * Set after an outage, or when Slack withdraws the source, until repair re-reads the source. It
+   * holds the request's replies in the outbox, and it never wakes the lead.
    */
   sourceUnverifiedAt: number | null;
   /** While held, the lead gets no reminders. The request still expires. */
@@ -229,6 +229,16 @@ export function returnToProgress<T extends Request>(
     throw new RequestStateError(request.state, "return to progress");
   }
   return move(request, "in_progress", { attention, changedAt: now });
+}
+
+/**
+ * Holds an active request's replies until repair re-reads its source. A request already held keeps
+ * the time it was first marked.
+ */
+export function markSourceUnverified<T extends Request>(request: T, now: number): T {
+  if (!isActive(request.state)) throw new RequestStateError(request.state, "hold its replies");
+  if (request.sourceUnverifiedAt !== null) return request;
+  return { ...request, sourceUnverifiedAt: now };
 }
 
 /** Closes a request the lead decided needs no answer. */
