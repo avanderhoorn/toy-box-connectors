@@ -183,6 +183,13 @@ export async function startOutboxAttempt(
   if (current.nextAttemptAt !== null && current.nextAttemptAt > now) {
     return { kind: "waiting", until: current.nextAttemptAt };
   }
+  if (current.kind === "card" && current.approvalId !== null) {
+    const [sending] = await transaction<{ id: string }[]>`
+      SELECT id FROM outbox WHERE kind = 'card' AND approval_id = ${current.approvalId}
+        AND state = 'sending' AND id <> ${current.id} LIMIT 1
+    `;
+    if (sending) return { kind: "waiting", until: now + 1_000 };
+  }
   if (postsMessage) {
     const [slot] = await transaction<{ next_post_at: number }[]>`
       SELECT next_post_at FROM outbox_channels WHERE channel_id = ${current.channelId}
@@ -192,7 +199,7 @@ export async function startOutboxAttempt(
   const encoded = encodePayload(payload);
   if (
     current.attempts > 0 &&
-    (encoded.hash !== current.payloadHash ||
+    ((current.kind !== "card" && encoded.hash !== current.payloadHash) ||
       (current.attemptMethod !== null && current.attemptMethod !== method))
   ) {
     throw new Error(`Retry o${current.number} with its stored method and payload snapshot.`);
@@ -249,6 +256,16 @@ export async function settleOutboxAttempt(
       AND state IN ('sending', 'delivery_unknown', 'stray')
     RETURNING *
   `;
+  if (
+    row &&
+    item.kind === "card" &&
+    item.phase === "update" &&
+    item.approvalId !== null &&
+    (outcome.state === "queued" || outcome.state === "delivery_unknown")
+  ) {
+    await supersedeCardUpdates(transaction, item.approvalId, now);
+    return readOutboxItem(transaction, item.id);
+  }
   return row ? outboxItem(row) : null;
 }
 
@@ -284,6 +301,7 @@ export async function recoverOutboxAttempts(transaction: Bun.SQL, now: number): 
     WHERE state = 'sending'
     RETURNING id
   `;
+  await supersedeCardUpdates(transaction, null, now);
   return rows.map((row) => row.id);
 }
 
@@ -335,22 +353,32 @@ export async function queueReaction(
 
 /**
  * Queues posting an approval's card, or updating it to show the approval as it is when the update
- * is sent. A new update supersedes the approval's updates still queued, and an update waits until
- * the post it edits has landed.
+ * is sent. A new update supersedes older queued or unknown updates. A sending one finishes first,
+ * and its settlement or startup recovery supersedes it if its result still needs another attempt.
  */
 export async function queueCard(
   transaction: Bun.SQL,
   card: { approvalId: string; linkId: string | null; channelId: string; phase: "post" | "update" },
   now: number,
 ): Promise<void> {
-  if (card.phase === "update") {
-    await transaction`
-      UPDATE outbox SET state = 'superseded', updated_at = ${now}
-      WHERE approval_id = ${card.approvalId} AND kind = 'card' AND phase = 'update'
-        AND state = 'queued'
-    `;
-  }
   await queueItem(transaction, { kind: "card", ...card, payload: {} }, now);
+  if (card.phase === "update") await supersedeCardUpdates(transaction, card.approvalId, now);
+}
+
+async function supersedeCardUpdates(
+  transaction: Bun.SQL,
+  approvalId: string | null,
+  now: number,
+): Promise<void> {
+  await transaction`
+    UPDATE outbox SET state = 'superseded', next_attempt_at = NULL, updated_at = ${now}
+    WHERE kind = 'card' AND phase = 'update' AND state IN ('queued', 'delivery_unknown')
+      AND (${approvalId} IS NULL OR approval_id = ${approvalId})
+      AND EXISTS (
+        SELECT 1 FROM outbox AS newer WHERE newer.kind = 'card' AND newer.phase = 'update'
+          AND newer.approval_id = outbox.approval_id AND newer.number > outbox.number
+      )
+  `;
 }
 
 /**

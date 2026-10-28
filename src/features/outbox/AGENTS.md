@@ -18,6 +18,13 @@ payload hash. Manual resolution may use exact sent text only when metadata is ab
 never when metadata identifies another item. A receipt that shows a reply at the root
 requires withdrawal, not confirmation.
 
+`server/posts.ts` posts finals, follow-ups, publications and new approval cards through the shared
+bot client, never from inside a write. It refreshes missing or stale channel facts before checking
+all authority again, commits sending, then builds metadata from the committed snapshot. Receipt
+proof and request settlement share a transaction. A misplaced receipt stores stray and queues its
+withdrawal together. Cards bypass a link's audience gate so a suspended link can receive its resume
+card, but still require an active installation and the approval's current target.
+
 `model/posting.ts` checks the current installation, link, destination, requester and request
 revision. Only explicit follow-ups reach answered, dismissed or expired requests, and none
 reach cancelled requests. A destination needs channel facts younger than two minutes with no
@@ -36,7 +43,11 @@ misplaced post is failure, never a successful delivery.
 `server/database.ts` commits each attempt's method, start time, incremented attempt count, and
 exact send-time payload before the call. An unknown post can never be requeued automatically.
 Idempotent updates, deletions and feedback may retry without posting another message.
-After a rejected attempt, a retry uses the stored method and payload unchanged. Slack metadata
+After a rejected attempt, a reply, progress note or publication uses the stored method and payload
+unchanged. A card keeps its method but renders the approval afresh for every attempt. Only one
+attempt per approval can be sending. Newer updates supersede queued or unknown older updates,
+including an older sending update that becomes retryable after its replacement was queued, or
+is recovered at startup. Slack metadata
 is never stored inside that snapshot: the call adds it from the committed ID and payload hash.
 Reconciliation counts only fully read passes, scheduled
 from that immutable attempt time at 10, 60 and 120 seconds. Unsuccessful reads never turn an
@@ -64,6 +75,10 @@ allows only HTTP(S) links without credentials, local hostnames, or private IP li
 Private URLs inside code stay plain text and are allowed. Password-bearing URLs are
 secrets even in code. These are shape checks, not complete DLP or DNS-based network
 classification.
+
+`model/payload.ts` checks a stored lead-authored snapshot at the send boundary without rendering
+it again. It requires the renderer's blocks and disabled parsing/unfurls, enforces both size
+limits, and rechecks secrets and clickable targets. Approval cards have their own trusted renderer.
 
 ## Boundaries and invariants
 
