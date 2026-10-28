@@ -2,6 +2,7 @@
 
 import { onTestFinished } from "bun:test";
 import { join } from "node:path";
+import { openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
 import { startFakeSlack, type FakeSlackIdentity } from "../fakes/slack";
 
 const REPOSITORY = join(import.meta.dir, "..", "..");
@@ -65,4 +66,17 @@ export function startSlackForBridge(identity?: Partial<FakeSlackIdentity>) {
     SLACK_APP_TOKEN: slack.appToken,
   };
   return { slack, env };
+}
+
+/** Opens the data folder's database for `use` while no bridge holds it. */
+export async function withDatabase<T>(
+  dataFolder: string,
+  use: (database: BridgeDatabase) => Promise<T>,
+): Promise<T> {
+  const database = await openBridgeDatabase(join(dataFolder, "bridge.db"));
+  try {
+    return await use(database);
+  } finally {
+    await database.close();
+  }
 }
