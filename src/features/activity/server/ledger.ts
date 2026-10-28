@@ -4,6 +4,7 @@ import {
   keepsText,
   mergeDelete,
   mergeSnapshot,
+  RETENTION_MS,
   type AuthorRole,
   type LinkAudience,
   type MergeDecision,
@@ -96,6 +97,16 @@ export async function storeDelete(
       : { deleted: 1, text: null, content_hash: null, mentions_bot: 0 },
   );
   return decision;
+}
+
+/**
+ * Forgets every message last changed longer ago than the ledger keeps one, a tombstone too, since
+ * Slack never shows a deleted message again. Changes keep no text, so they stay.
+ */
+export async function forgetOldMessages(transaction: Bun.SQL, now: number): Promise<void> {
+  // SQLite casts a ts to its whole seconds.
+  const before = Math.floor((now - RETENTION_MS) / 1000);
+  await transaction`DELETE FROM messages WHERE CAST(version AS INTEGER) < ${before}`;
 }
 
 async function readMessage(

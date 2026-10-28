@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import type { LinkAudience } from "@activity/model/ledger";
+import { RETENTION_MS, type LinkAudience } from "@activity/model/ledger";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import type { SlackMessage } from "@slackapi/model/messages";
 import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
-import { storeDelete, storeMessage } from "./ledger";
+import { forgetOldMessages, storeDelete, storeMessage } from "./ledger";
 import { ledgerLink } from "./testFixtures";
 
 const ask = askMessage();
@@ -91,4 +91,17 @@ test("a stranger's text is kept only where the link observes them", async () => 
     { ts: atRoot.ts, text: null, deleted: 0, updated_seq: 2 },
     { ts: "1700000400.000100", text: inThread.text, deleted: 0, updated_seq: 3 },
   ]);
+});
+
+test("the ledger forgets a message 30 days after its latest version, and a tombstone too", async () => {
+  const database = await openLedger();
+  const edited = editMessage(askMessage("1700000050.000100"), "1700000300.000100", "it's red");
+  for (const message of [ask, edited]) await store(database, message);
+  await storeDeleteOf(database, askMessage("1700000060.000100"));
+  const now = 1_700_000_200_000 + RETENTION_MS;
+  await database.write((transaction) => forgetOldMessages(transaction, now));
+
+  const { messages, changes } = await readLedger(database);
+  expect(messages.map((message: { ts: string }) => message.ts)).toEqual([edited.ts]);
+  expect(changes).toHaveLength(3);
 });

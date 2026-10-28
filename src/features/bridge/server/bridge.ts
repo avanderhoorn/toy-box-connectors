@@ -3,15 +3,17 @@
 // The bridge prepares its data folder, reads its settings, takes the
 // single-bridge lock, and only then opens `bridge.db`, so a second bridge stops
 // before it opens anything.
-// Then it starts its work: connecting to Slack once both tokens are set, waking
-// leads, and answering commands on its socket. It lets go of everything in the
-// reverse order, so it stops taking commands before anything they use stops.
+// Then it starts its work: forgetting old messages hourly, connecting to Slack
+// once both tokens are set, waking leads, and answering commands on its socket.
+// It lets go of everything in the reverse order, so it stops taking commands
+// before anything they use stops.
 //
 // A part that fails in a way retrying can't fix, such as a storage error,
 // reports it through one fatal path, and the bridge exits so launchd restarts
 // it.
 
 import { join } from "node:path";
+import { forgetOldMessages } from "@activity/server/ledger";
 import { unconfiguredSlack, type SlackState } from "@commands/model/status";
 import { activityCommand, markReadCommand } from "@commands/server/activity";
 import { dismissCommand } from "@commands/server/dismiss";
@@ -84,8 +86,10 @@ export async function startBridge(
   let slack: SlackSupervisor | undefined;
   let socket: CommandSocket | undefined;
   let outbox: OutboxWorker | undefined;
+  let retention: Timer | undefined;
 
   async function stop() {
+    clearInterval(retention);
     try {
       await socket?.stop();
       await scheduler?.stop();
@@ -100,6 +104,7 @@ export async function startBridge(
   try {
     database = await openBridgeDatabase(join(dataFolder, "bridge.db"));
     await database.write((tx) => recoverOutboxAttempts(tx, Date.now()));
+    retention = await startRetention(database, failure.resolve);
     // Slack is supervised exactly when both tokens are set.
     const slackState = (): SlackState => unconfiguredSlack(settings) ?? slack!.state();
     const { botToken, appToken, slackApiUrl } = settings;
@@ -174,6 +179,21 @@ export async function startBridge(
     await stop();
     throw error;
   }
+}
+
+/** Forgets old messages now and then hourly, until the timer it returns is cleared. */
+async function startRetention(
+  database: BridgeDatabase,
+  onError: (error: unknown) => void,
+): Promise<Timer> {
+  const forget = () => database.write((tx) => forgetOldMessages(tx, Date.now()));
+  await forget();
+  return setInterval(() => {
+    forget().catch((error: unknown) => {
+      console.error("Couldn't forget old messages:", error);
+      onError(error);
+    });
+  }, 60 * 60_000);
 }
 
 /**

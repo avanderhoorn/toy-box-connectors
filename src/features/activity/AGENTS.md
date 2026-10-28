@@ -18,6 +18,8 @@ Each message gets its author role when it's stored. In the default requesters mo
 
 Each hello notes a gap since the last hello in the same transaction that records it, so whatever happened while the bridge wasn't connected is caught up on, even after a crash. Once gaps have ended, catch-up reads every linked channel's history, then the threads replied to since, and stores what changed through ingest as live intake would have. It takes changes from five minutes before the earliest gap, since Slack's clock and ours can differ, but never from before the link or from longer ago than the ledger keeps messages. Each channel is stored in one transaction, so the lead never sees half of what was missed, and reading something twice changes nothing. Catch-up waits out Slack's rate limits, skips a channel and suspends its links when Slack shuts the bot out of it, and retries a run that can't finish on the wake backoff, with status saying why. History shows a message only as it stands, so catch-up never finds a delete, and it misses a reply in a thread whose root is older than the ledger keeps.
 
+The ledger forgets a message 30 days after its latest version, a tombstone too, when the bridge starts and hourly after. Changes keep no text, so they stay.
+
 ## Boundaries and invariants
 
 - Commit before ack. A delivery is acked only after what it changed commits, and only while Slack still waits for the ack.
