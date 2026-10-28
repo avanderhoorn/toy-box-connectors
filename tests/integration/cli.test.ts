@@ -4,6 +4,7 @@ import { expect, onTestFinished, test } from "bun:test";
 import { existsSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTestFolder } from "@bridge/server/testFixtures";
+import { MALLORY, connectedBridge } from "./connectedBridge";
 import { startLinkedBridge, storeNewRequest } from "./linkedBridge";
 
 const CLI = join(import.meta.dir, "..", "..", "cli", "index.ts");
@@ -105,6 +106,47 @@ test("reply reads its text from stdin, and says to write it there when there's n
     exitCode: 0,
     stdout: "Queued o1 to answer r1 in its thread. If it can't post, inbox shows r1 again.\n",
     stderr: "",
+  });
+}, 15_000);
+
+test("allow shows who it adds and takes the owner's passphrase on stdin, as set at the time", async () => {
+  const { channelId, home, slack } = await connectedBridge();
+  slack.setUser({
+    id: MALLORY,
+    team_id: "T-home",
+    real_name: "Mallory",
+    is_bot: false,
+    is_restricted: false,
+    is_ultra_restricted: false,
+  });
+  const owner = { HOME: home };
+  const passphrase = (typed: string) => runToyBoxSlack(["passphrase"], owner, typed);
+  const allow = (typed: string) =>
+    runToyBoxSlack(["allow", MALLORY, "--channel", channelId], owner, typed);
+  const shown = `Allowing them would let them ask the lead to act, from #C-link:\n\n- Mallory (${MALLORY})\n\n`;
+
+  expect(await allow("first\n")).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr: `${shown}No passphrase is set, so nothing can widen access. Run \`toy-box-slack passphrase\` at a terminal first.\n`,
+  });
+  expect(await passphrase("first\nfirst\n")).toEqual({
+    exitCode: 0,
+    stdout: "Set the owner's passphrase.\n",
+    stderr: "",
+  });
+  // Changing it needs the old one, so a lead that runs passphrase can't replace it.
+  expect(await passphrase("guess\nmine\nmine\n")).toMatchObject({ exitCode: 1 });
+  expect(await passphrase("first\nsecond\nsecond\n")).toMatchObject({ exitCode: 0 });
+  expect(await allow("first\n")).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr: `${shown}That isn't the owner's passphrase, so nothing changed.\n`,
+  });
+  expect(await allow("second\n")).toEqual({
+    exitCode: 0,
+    stdout: "They can all ask the lead to act, from #C-link.\n",
+    stderr: shown,
   });
 }, 15_000);
 
