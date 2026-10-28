@@ -418,9 +418,16 @@ export function createFakeSlackApi(options: {
   }
 
   function post(
-    input: z.output<(typeof schemas)["chat.postMessage"]>,
+    requested: z.output<(typeof schemas)["chat.postMessage"]>,
     injected?: FakeSlackFailure,
   ): Response {
+    const misplaced = injected !== undefined && "misplacedReply" in injected;
+    if (misplaced && requested.thread_ts === undefined)
+      return unexpected("misplacedReply needs a chat.postMessage with thread_ts.");
+    // Slack accepted the reply as a new root, so the store, the event and the receipt all say so.
+    const input = misplaced
+      ? { ...requested, thread_ts: undefined, reply_broadcast: undefined }
+      : requested;
     const problem = writeProblem(input.channel);
     if (problem) return failure(problem);
     if (!input.text && !input.blocks?.length && !input.attachments?.length)
@@ -843,6 +850,8 @@ export function createFakeSlackApi(options: {
         throw new Error("HTTP failure status must be between 400 and 599.");
       if ("dropMetadata" in injected && method !== "chat.postMessage")
         throw new Error("Metadata dropping is only supported for chat.postMessage.");
+      if ("misplacedReply" in injected && method !== "chat.postMessage")
+        throw new Error("Misplacing a reply is only supported for chat.postMessage.");
       const queue = failures.get(method) ?? [];
       queue.push(structuredClone(injected));
       failures.set(method, queue);

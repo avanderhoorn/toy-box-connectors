@@ -475,6 +475,44 @@ test("partial success, a metadata warning, 5xx and rate limits have distinct wir
   expect(fake.getMessages(channel)).toHaveLength(2);
 });
 
+test("a misplaced reply can also lose its response, leaving only a root to reconcile", async () => {
+  const { fake, client } = setup(undefined, 40);
+  const channel = fake.addChannel();
+  fake.setMessage(channel, { ts: "1.000001", user: "U1", text: "Question" });
+  const metadata = { event_type: "toy_box_outbox", event_payload: { id: "stray" } };
+  fake.failNext("chat.postMessage", { misplacedReply: true, lostResponse: true });
+  await expect(
+    client.chat.postMessage({ channel, thread_ts: "1.000001", text: "Answer", metadata }),
+  ).rejects.toMatchObject({ code: ErrorCode.RequestError });
+  expect(fake.calls.filter(({ method }) => method === "chat.postMessage")).toHaveLength(1);
+  const history = await client.conversations.history({ channel, include_all_metadata: true });
+  expect(history.messages).toMatchObject([
+    { text: "Answer", bot_id: fake.identity.botId, metadata },
+    { ts: "1.000001", text: "Question" },
+  ]);
+  expect(history.messages?.[0]).not.toHaveProperty("thread_ts");
+  expect(history.messages?.[1]).not.toHaveProperty("reply_count");
+  expect(
+    (await client.conversations.replies({ channel, ts: "1.000001" })).messages?.map(({ ts }) => ts),
+  ).toEqual(["1.000001"]);
+});
+
+test("only a requested chat.postMessage reply can be misplaced", async () => {
+  const { fake, client } = setup();
+  const channel = fake.addChannel();
+  expect(() => fake.failNext("chat.update", { misplacedReply: true })).toThrow(
+    "Misplacing a reply is only supported for chat.postMessage.",
+  );
+  fake.failNext("chat.postMessage", { misplacedReply: true });
+  await expect(client.chat.postMessage({ channel, text: "A root" })).rejects.toMatchObject({
+    data: { error: "invalid_arguments" },
+  });
+  expect(fake.getMessages(channel)).toEqual([]);
+  await expect(fake.stop()).rejects.toThrow(
+    "misplacedReply needs a chat.postMessage with thread_ts.",
+  );
+});
+
 test("channel/thread refusals remain Slack platform errors, and status expires or clears", async () => {
   let now = 1000;
   const { fake, client } = setup({ now: () => now });

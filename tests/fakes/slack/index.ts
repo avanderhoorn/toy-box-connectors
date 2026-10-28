@@ -39,7 +39,9 @@ export type FakeSlackFailure =
   | { retryAfter: number }
   | { status: number }
   | { lostResponse: true }
-  | { dropMetadata: true };
+  | { dropMetadata: true }
+  /** Slack posts a requested thread reply as a new root, and may also lose the response. */
+  | { misplacedReply: true; lostResponse?: true };
 
 export type FakeSlackConnection = {
   id: number;

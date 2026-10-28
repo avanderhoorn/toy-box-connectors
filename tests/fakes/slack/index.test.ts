@@ -293,3 +293,44 @@ test("real Web API writes produce Socket Mode message, edit and delete events", 
   await event.ack();
   await until(() => fake.acks.length === 3);
 });
+
+test("a misplaced reply is stored, emitted and returned as a new root, once", async () => {
+  const fake = fakeSlack();
+  const client = await socketClient(fake);
+  const channel = fake.addChannel();
+  const web = webClient(fake);
+  const question = { type: "message", ts: "1.000001", user: "U1", text: "Question" };
+  fake.setMessage(channel, question);
+  const thread = { channel_id: channel, thread_ts: question.ts };
+  await web.assistant.threads.setStatus({ ...thread, status: "Thinking" });
+  fake.failNext("chat.postMessage", { misplacedReply: true });
+  let incoming = nextDelivery(client);
+  const stray = await web.chat.postMessage({ channel, thread_ts: question.ts, text: "Answer" });
+  let event = await incoming;
+  const root = {
+    team: fake.identity.teamId,
+    user: fake.identity.botUserId,
+    bot_id: fake.identity.botId,
+    text: "Answer",
+    ts: stray.ts,
+  };
+  expect(stray).toMatchObject({ ok: true, channel, message: root });
+  expect(event.body.event).toMatchObject({ ...root, channel, event_ts: stray.ts });
+  for (const message of [stray.message, event.body.event, fake.getMessages(channel)[1]]) {
+    expect(message).not.toHaveProperty("thread_ts");
+    expect(message).not.toHaveProperty("parent_user_id");
+  }
+  await event.ack();
+  expect(fake.getMessages(channel)[0]).toEqual(question);
+  expect(fake.getThreadStatus(channel, question.ts)).toBe("Thinking");
+
+  incoming = nextDelivery(client);
+  const reply = await web.chat.postMessage({ channel, thread_ts: question.ts, text: "Answer" });
+  event = await incoming;
+  expect(reply.message).toMatchObject({ thread_ts: question.ts, parent_user_id: "U1" });
+  expect(event.body.event).toMatchObject({ ts: reply.ts, thread_ts: question.ts });
+  await event.ack();
+  expect(fake.getMessages(channel)[0]).toMatchObject({ reply_count: 1, latest_reply: reply.ts });
+  expect(fake.getThreadStatus(channel, question.ts)).toBeNull();
+  await until(() => fake.acks.length === 2);
+});
