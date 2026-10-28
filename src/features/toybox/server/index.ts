@@ -8,6 +8,7 @@
 
 import type { BridgeDatabase } from "@bridge/server/database";
 import { suspendLink } from "@links/server/status";
+import { cancelLinkRequests, releaseHolds } from "@requests/server/lifecycle";
 import { channelFrameSchema, type ChannelFrame, type RoutineRunOutcome } from "@toybox/model";
 import {
   observeChannelFrame,
@@ -176,7 +177,8 @@ export function startToyBoxClient(
     return established ? "established" : undefined;
   }
 
-  // Applies one frame and says whether it changed what a wake decision reads.
+  // Applies one frame and says whether it changed what a wake decision reads. The owner speaking
+  // releases the holds taken before, and a deleted channel ends its link's requests.
   async function record(follower: Follower, observation: ChannelObservation): Promise<boolean> {
     const { link } = follower;
     const previous = follower.stream;
@@ -186,11 +188,15 @@ export function startToyBoxClient(
     const linkChanged = await database.write(async (transaction) => {
       await writeToyBoxStream(transaction, link.channelId, stream);
       const at = now();
-      const routinesChanged = await recordLinkRoutines(transaction, link.id, observation, at);
-      const suspended =
-        observation.deleted === true &&
-        (await suspendLink(transaction, link.id, "toybox_channel_deleted", at));
-      return routinesChanged || suspended;
+      const changes = [await recordLinkRoutines(transaction, link.id, observation, at)];
+      if (stream.ownerSpokeAt !== null && stream.ownerSpokeAt !== previous.ownerSpokeAt) {
+        changes.push(await releaseHolds(transaction, link.id, stream.ownerSpokeAt));
+      }
+      if (observation.deleted === true) {
+        changes.push(await suspendLink(transaction, link.id, "toybox_channel_deleted", at));
+        changes.push(await cancelLinkRequests(transaction, link.id, "channel_deleted", at));
+      }
+      return changes.includes(true);
     });
     follower.stream = stream;
     return (

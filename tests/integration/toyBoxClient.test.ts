@@ -2,6 +2,8 @@ import { expect, onTestFinished, test } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
+import { createStoredOutboxItem } from "@outbox/server/testFixtures";
+import { createStoredRequest } from "@requests/server/testFixtures";
 import { startToyBoxClient, type ToyBoxClient } from "@toybox/server";
 import { defaultWakeTimings } from "@wakes/model";
 import { startFakeToyBox } from "../fakes/toybox";
@@ -66,6 +68,10 @@ function readLink(database: BridgeDatabase) {
     `;
     return row;
   });
+}
+
+function readHolds(database: BridgeDatabase) {
+  return database.read((sql) => sql`SELECT id, held_at, hold_reason FROM requests ORDER BY id`);
 }
 
 async function waitFor(assertion: () => void | Promise<void>, timeoutMs = 2_000): Promise<void> {
@@ -249,8 +255,30 @@ test("a series routine's new schedule registers the series again", async () => {
   );
 });
 
-test("a deleted channel suspends its link and is never followed again", async () => {
+test("the owner's next message in Toy Box releases the holds taken before it", async () => {
   const { toyBox, database, channelId, changes, startClient } = await linkFakeChannel();
+  const held = { state: "seen", seenAt: 1, holdReason: "asked the owner" } as const;
+  await createStoredRequest(database, { ...held, heldAt: NOW - 1_000 });
+  await createStoredRequest(database, { ...held, heldAt: NOW + 1_000, requesterUserId: "U-x" });
+  await startClient();
+  changes.length = 0;
+
+  toyBox.postOwnerMessage(channelId, "Go ahead and answer Alice.");
+
+  await waitFor(async () =>
+    expect(await readHolds(database)).toEqual([
+      { id: 1, held_at: null, hold_reason: null },
+      { id: 2, held_at: NOW + 1_000, hold_reason: "asked the owner" },
+    ]),
+  );
+  expect(changes).toEqual(["link"]);
+});
+
+test("a deleted channel suspends its link, cancels its requests and is never followed again", async () => {
+  const { toyBox, database, channelId, changes, startClient } = await linkFakeChannel();
+  await createStoredRequest(database, { state: "in_progress", seenAt: 1 });
+  await createStoredRequest(database, { state: "answered", seenAt: 1, requesterUserId: "U-x" });
+  await createStoredOutboxItem(database, 1, { request_id: 1 });
   const client = await startClient();
 
   toyBox.deleteChannel(channelId);
@@ -266,6 +294,15 @@ test("a deleted channel suspends its link and is never followed again", async ()
   );
   expect(audit).toEqual([
     { actor: "bridge", action: "suspend", link_id: "link", subject: "toybox_channel_deleted" },
+  ]);
+  expect(
+    await database.read((sql) => sql`SELECT id, state, closed_reason FROM requests ORDER BY id`),
+  ).toEqual([
+    { id: 1, state: "cancelled", closed_reason: "channel_deleted" },
+    { id: 2, state: "answered", closed_reason: null },
+  ]);
+  expect(await database.read((sql) => sql`SELECT state FROM outbox`)).toEqual([
+    { state: "cancelled" },
   ]);
   expect(client.view(channelId)).toEqual({ connected: false, provider: null, leadWorking: false });
   expect(changes.at(-1)).toBe("link");
