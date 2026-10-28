@@ -1,3 +1,4 @@
+import type { ChannelFacts } from "./channels";
 import type { SlackMessage } from "./messages";
 import type { SlackTs } from "./ts";
 
@@ -58,5 +59,20 @@ export function editMessage(message: SlackMessage, editedTs: SlackTs, text: stri
     mentionsBot: mentions.length > 0,
     editedTs,
     version: editedTs,
+  };
+}
+
+/** The private channel `createStoredLink` links, as the bot last read it. `changes` replace its facts. */
+export function channelFacts(changes: Partial<ChannelFacts> = {}): ChannelFacts {
+  return {
+    id: "C-link",
+    name: "toy-box-private",
+    kind: "private",
+    isMember: true,
+    isArchived: false,
+    isExtShared: false,
+    isPendingExtShared: false,
+    isOrgShared: false,
+    ...changes,
   };
 }
