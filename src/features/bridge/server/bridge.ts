@@ -14,6 +14,7 @@
 import { join } from "node:path";
 import { commandContracts } from "@commands/model";
 import { unconfiguredSlack, type SlackState } from "@commands/model/status";
+import { inboxCommand } from "@commands/server/inbox";
 import { serveCommands } from "@commands/server/serve";
 import { statusCommand } from "@commands/server/status";
 import { startToyBoxClient, type ToyBoxClient } from "@toybox/server";
@@ -99,6 +100,7 @@ export async function startBridge(
         contracts: commandContracts,
         handlers: {
           status: statusCommand({ database, origin, slack, toyBox, wakes: scheduler }),
+          inbox: inboxCommand({ database, wakes: scheduler, workspaceUrl: () => null }),
         },
         database,
         origin,

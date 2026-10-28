@@ -199,6 +199,7 @@ Usage: toy-box-slack <command> [options]
 
 Commands:
   status  Show Slack's connection and the health of each link
+  inbox   Read new and changed Slack requests, and how the owner decided your proposals
   serve   Run the bridge in the foreground until SIGTERM or SIGINT
 
 Run \`toy-box-slack <command> --help\` to see a command's options.
@@ -213,6 +214,18 @@ Usage: toy-box-slack status [options]
 Options:
   --channel <id>  The Toy Box channel to act for, from a terminal
   --json          Print the bridge's answer as JSON
+`,
+  ],
+  [
+    ["inbox", "--help"],
+    `Read new and changed Slack requests, and how the owner decided your proposals
+
+Usage: toy-box-slack inbox [options]
+
+Options:
+  --limit <number>  The most requests to show in each list
+  --channel <id>    The Toy Box channel to act for, from a terminal
+  --json            Print the bridge's answer as JSON
 `,
   ],
   [

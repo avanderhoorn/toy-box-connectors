@@ -236,8 +236,12 @@ export function catchUpPeriod(
   return period && period.scheduledAt >= series.registeredAt ? period : null;
 }
 
-// Answering requests wait on the outbox, not the lead.
-function isPending({ state, attention }: WakeRequest): boolean {
+/**
+ * Whether a request waits for the lead to read it: it's new, or it changed or its reply failed
+ * since the lead read it. Inbox shows the lead exactly these. Answering requests wait on the
+ * outbox, not the lead, and are never read here.
+ */
+export function isPending({ state, attention }: Pick<WakeRequest, "state" | "attention">): boolean {
   return state === "open" || attention === "updated" || attention === "reply_failed";
 }
 
