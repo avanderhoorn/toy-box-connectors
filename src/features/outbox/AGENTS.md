@@ -49,6 +49,18 @@ A card update with no proved ts waits only while an initial post is queued, send
 Without such a post it is dropped explicitly. The queue runner must revisit these waits when a
 post settles, including a manual resolution.
 
+`server/retract.ts` deletes only the proved message of a reply, progress note or publication,
+or a misplaced initial card. Its operation must match the target's link, channel, request and
+thread. Cleanup bypasses a suspended link's posting gate but never an inactive installation.
+`queueRetraction` shares an outstanding operation for the same target and scope. The snapshot
+retains that local target ID alongside the frozen Slack ts; only channel and ts go on the wire.
+An uncertain deletion retries that same target with 5-to-120-second backoff, and message_not_found
+means it is already absent. Startup-recovered deletions go to this handler, not message reads.
+A valid delivery becomes retracted without losing its proof or publication key. A withdrawn
+misplaced post becomes failed, never retracted, and returns its request with reply_failed.
+The operation, target and request commit together. Failed withdrawal leaves the target stray
+with Slack's exact error, and an explicit new retraction can try again.
+
 `model/posting.ts` checks the current installation, link, destination, requester and request
 revision. Only explicit follow-ups reach answered, dismissed or expired requests, and none
 reach cancelled requests. A destination needs channel facts younger than two minutes with no

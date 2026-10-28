@@ -712,6 +712,24 @@ conservative policy, not Slack's exactly-once guarantee.
 [Reconciliation implementation](../../src/features/outbox/server/reconcile.ts),
 [credential-free protocol cases](../../src/features/outbox/server/reconcile.test.ts).
 
+### Withdrawal without inventing answer proof
+
+`chat.delete` requires `chat:write` and permits a bot token to delete only its
+own messages. Its documented success identifies channel and ts, and
+`message_not_found` means no message exists at that target.
+[Delete contract](https://docs.slack.dev/reference/methods/chat.delete/).
+
+The local withdrawal handler accepts only a previously proved outbox target,
+never an arbitrary Slack message ID. It freezes the target ts, validates the
+receipt, and safely retries uncertain deletions with 5-to-120-second backoff.
+An already absent target also completes the operation. Cleanup still runs for
+a suspended link, but requires an active installation. A valid delivery becomes
+`retracted` while retaining its proof and publication key. A misplaced post
+instead becomes `failed` once withdrawn, returning the question as `reply_failed`.
+Failed withdrawal retains `stray` and Slack's exact error.
+[Withdrawal implementation](../../src/features/outbox/server/retract.ts),
+[credential-free protocol cases](../../src/features/outbox/server/retract.test.ts).
+
 ### Daily and weekly releases
 
 Use a durable local occurrence key such as `(binding, schedule, intended_time)`.

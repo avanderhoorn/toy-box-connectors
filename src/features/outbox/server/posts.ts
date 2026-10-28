@@ -25,14 +25,13 @@ import {
 } from "../model/delivery";
 import { checkCardPayload, checkCardUpdatePayload, checkLeadPayload } from "../model/payload";
 import { postingPermission, type PostingLink } from "../model/posting";
-import { settleRequestAnswer } from "./answers";
 import {
   readOutboxItem,
   startOutboxAttempt,
   type OutboxItem,
   type OutboxSettlement,
 } from "./database";
-import { settleDelivery } from "./delivery";
+import { deferQueuedDelivery, settleDelivery, settleQueuedDelivery } from "./delivery";
 
 export type PostStep =
   | { kind: "settled"; item: OutboxItem }
@@ -329,14 +328,8 @@ export function createPostDelivery(
 
   async function defer(id: string, reason: string, until: number): Promise<PostStep> {
     return database.write(async (tx) => {
-      const item = await readOutboxItem(tx, id);
-      if (!item || item.state !== "queued") return { kind: "changed" };
-      const next = Math.max(until, item.nextAttemptAt ?? 0);
-      await tx`
-        UPDATE outbox SET error = ${reason}, next_attempt_at = ${next}, updated_at = ${now()}
-        WHERE id = ${id} AND state = 'queued'
-      `;
-      return { kind: "waiting", reason, until: next };
+      const next = await deferQueuedDelivery(tx, id, reason, until, now());
+      return next === null ? { kind: "changed" } : { kind: "waiting", reason, until: next };
     });
   }
 
@@ -350,14 +343,8 @@ async function finishQueued(
   error: string,
   now: number,
 ): Promise<PostStep> {
-  await tx`
-    UPDATE outbox SET state = ${state}, error = ${error}, next_attempt_at = NULL, updated_at = ${now}
-    WHERE id = ${item.id} AND state = 'queued'
-  `;
-  const settled = await readOutboxItem(tx, item.id);
-  if (!settled) return { kind: "changed" };
-  if (item.requestId !== null) await settleRequestAnswer(tx, item.requestId, now);
-  return { kind: "settled", item: settled };
+  const settled = await settleQueuedDelivery(tx, item, state, error, now);
+  return settled ? { kind: "settled", item: settled } : { kind: "changed" };
 }
 
 async function readPostingLink(sql: Bun.SQL, id: string | null): Promise<PostingLink | null> {

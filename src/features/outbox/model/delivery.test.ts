@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  deleteReceipt,
   messageEvidence,
   nextReconciliation,
   outboxMetadata,
@@ -41,6 +42,27 @@ function response(changes: Record<string, unknown> = {}, outer: Record<string, u
     ...outer,
   };
 }
+
+test.each([
+  { ok: false, channel: post.channelId, ts: "200.000001" },
+  { channel: post.channelId, ts: "200.000001" },
+  { ok: true, ts: "200.000001" },
+  { ok: true, channel: post.channelId },
+  { ok: true, channel: "COTHER", ts: "200.000001" },
+  { ok: true, channel: post.channelId, ts: "200.000002" },
+  { ok: true, channel: post.channelId, ts: "not-a-ts" },
+])("an incomplete or contradictory deletion receipt is not proof: %j", (receipt) => {
+  expect(deleteReceipt(receipt, { channelId: post.channelId, ts: "200.000001" })).toBe(false);
+});
+
+test("a deletion confirms its exact channel and target without requiring a message echo", () => {
+  expect(
+    deleteReceipt(
+      { ok: true, channel: post.channelId, ts: "200.000001" },
+      { channelId: post.channelId, ts: "200.000001" },
+    ),
+  ).toBe(true);
+});
 
 test("a write is accepted only when the shared client got a successful response", () => {
   expect(writeOutcome({ kind: "ok", result: { ok: true, ts: "1.0" } })).toEqual({

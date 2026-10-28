@@ -367,6 +367,37 @@ export async function queueCard(
   if (card.phase === "update") await supersedeCardUpdates(transaction, card.approvalId, now);
 }
 
+/** Repeated cleanup or an explicit retract shares the outstanding operation for this item. */
+export async function queueRetraction(
+  transaction: Bun.SQL,
+  target: OutboxItem,
+  now: number,
+): Promise<{ id: string; number: number }> {
+  const [existing] = await transaction<{ id: string; number: number }[]>`
+    SELECT id, number FROM outbox WHERE kind = 'retract'
+      AND json_extract(payload, '$.target') = ${target.id}
+      AND channel_id = ${target.channelId} AND link_id IS ${target.linkId}
+      AND request_id IS ${target.requestId} AND thread_ts IS ${target.threadTs}
+      AND state IN ('queued', 'sending', 'delivery_unknown', 'sent')
+    ORDER BY number DESC LIMIT 1
+  `;
+  return (
+    existing ??
+    queueItem(
+      transaction,
+      {
+        kind: "retract",
+        linkId: target.linkId,
+        requestId: target.requestId,
+        channelId: target.channelId,
+        threadTs: target.threadTs,
+        payload: { target: target.id },
+      },
+      now,
+    )
+  );
+}
+
 async function supersedeCardUpdates(
   transaction: Bun.SQL,
   approvalId: string | null,

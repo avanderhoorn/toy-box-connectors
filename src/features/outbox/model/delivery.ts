@@ -85,6 +85,7 @@ const receiptSchema = z.object({
 const updateReceiptSchema = receiptSchema.extend({
   message: deliveryMessageSchema.extend({ ts: slackTsSchema.optional() }).optional(),
 });
+const deleteReceiptSchema = receiptSchema.pick({ ok: true, channel: true, ts: true });
 
 export type PostReceipt =
   | { kind: "confirmed"; ts: SlackTs; metadataOk: boolean }
@@ -151,6 +152,19 @@ export function updateReceipt(
     ts: receipt.ts,
     metadataOk: receiptMetadataOk(receipt, post),
   };
+}
+
+/** A deletion proves only the exact known message that was requested. */
+export function deleteReceipt(
+  result: unknown,
+  target: { channelId: string; ts: SlackTs },
+): boolean {
+  const parsed = deleteReceiptSchema.safeParse(result);
+  return (
+    parsed.success &&
+    parsed.data.channel === target.channelId &&
+    compareTs(parsed.data.ts, target.ts) === 0
+  );
 }
 
 /**
