@@ -18,24 +18,12 @@ type FakeChannel = Required<FakeChannelSettings> & { routines: FakeRoutine[] };
 /** A routine run Toy Box accepted. */
 export type FakeRun = { channelId: string; routineId: string; at: number };
 
-export type FakeToyBox = {
-  url: string;
-  runs: FakeRun[];
-  /** Adds a channel, whose ID is its lead's session ID, as in Toy Box. */
-  addChannel(settings?: FakeChannelSettings): string;
-  scheduleRoutine(channelId: string, routine: Omit<FakeRoutine, "id">): FakeRoutine;
-  deleteChannel(channelId: string): void;
-  /** Answers the next run with `status` and doesn't run it. */
-  failNextRun(status?: number): void;
-  /** How many of the channels' event streams are open. */
-  openStreams(): number;
-  stop(): Promise<void>;
-};
+export type FakeToyBox = ReturnType<typeof startFakeToyBox>;
 
 const encoder = new TextEncoder();
 
 /** Starts a fake Toy Box on an ephemeral loopback port. */
-export function startFakeToyBox(): FakeToyBox {
+export function startFakeToyBox() {
   const channels = new Map<string, FakeChannel>();
   const runs: FakeRun[] = [];
   const failures: number[] = [];
@@ -104,17 +92,17 @@ export function startFakeToyBox(): FakeToyBox {
   return {
     url: server.url.href,
     runs,
-    addChannel({ name = "Linked", provider = "copilot" } = {}) {
+    addChannel({ name = "Linked", provider = "copilot" }: FakeChannelSettings = {}) {
       const channelId = crypto.randomUUID();
       channels.set(channelId, { name, provider, routines: [] });
       return channelId;
     },
-    scheduleRoutine(channelId, input) {
+    scheduleRoutine(channelId: string, input: Omit<FakeRoutine, "id">) {
       const routine = { id: crypto.randomUUID(), ...input, prompt: input.prompt.trim() };
       channels.get(channelId)!.routines.push(routine);
       return routine;
     },
-    deleteChannel(channelId) {
+    deleteChannel(channelId: string) {
       channels.delete(channelId);
     },
     failNextRun(status = 500) {

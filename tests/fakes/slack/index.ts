@@ -8,7 +8,7 @@
 
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
-import { createFakeSlackApi, type FakeSlackReads } from "./api";
+import { createFakeSlackApi } from "./api";
 export type { FakeSlackChannel, FakeSlackUser, FakeSlackMessage } from "./api";
 
 export type FakeSlackIdentity = {
@@ -28,31 +28,20 @@ export type FakeSlackCall = {
 
 export type FakeSlackAck = {
   envelopeId: string;
-  connectionId: number;
   at: number;
-  payload?: unknown;
   body: { envelope_id: string; payload?: unknown };
 };
 
 export type FakeSlackFailure =
-  | { error: string; afterWrite?: boolean }
+  | { error: string }
   | { retryAfter: number }
   | { status: number }
   | { lostResponse: true }
-  | { dropMetadata: true }
   /** Slack posts a requested thread reply as a new root, and may also lose the response. */
   | { misplacedReply: true; lostResponse?: true };
 
-export type FakeSlackConnection = {
-  id: number;
-  openedAt: number;
-  closedAt: number | null;
-};
-
 export type FakeSlackDelivery = {
   envelopeId: string;
-  connectionId: number;
-  sentAt: number;
   frame: Readonly<Record<string, unknown>>;
 };
 
@@ -63,36 +52,11 @@ export type FakeEventOptions = {
   appId?: string;
   /** Omit this option for our bot tuple; explicitly pass undefined to omit the wire field. */
   authorizations?: unknown;
-  retryAttempt?: number;
-  retryReason?: string;
   /** Additional outer callback fields, such as event_context or context_team_id. */
   context?: Record<string, unknown>;
 };
 
-export type FakeSlack = FakeSlackReads & {
-  readonly url: string;
-  readonly botToken: string;
-  readonly appToken: string;
-  readonly identity: FakeSlackIdentity;
-  readonly calls: readonly FakeSlackCall[];
-  readonly acks: readonly FakeSlackAck[];
-  readonly connections: readonly FakeSlackConnection[];
-  readonly deliveries: readonly FakeSlackDelivery[];
-  readonly activeConnections: number;
-  sendEvent(event: Record<string, unknown>, options?: FakeEventOptions): FakeSlackDelivery;
-  /** Also allows deliberately malformed/new payloads for receiver robustness tests. */
-  sendFrame(frame: Record<string, unknown>, connectionId?: number): FakeSlackDelivery;
-  /** Retries an unacked delivery, keeping its ID unless a new envelope ID is requested. */
-  redeliver(envelopeId: string, newEnvelopeId?: string): FakeSlackDelivery;
-  disconnect(reason?: "warning" | "refresh_requested" | "link_disabled"): void;
-  dropConnections(): void;
-  setNextHelloAppId(appId: string): void;
-  setSocketResponsive(responsive: boolean): void;
-  waitForAck(envelopeId: string, timeoutMs?: number): Promise<FakeSlackAck | null>;
-  failNext(method: string, failure: FakeSlackFailure): void;
-  /** Stops the server and fails if a client used an unknown method, argument or ack. */
-  stop(): Promise<void>;
-};
+export type FakeSlack = ReturnType<typeof startFakeSlack>;
 
 type SocketData = { id: number };
 const ackSchema = z
@@ -106,9 +70,8 @@ export function startFakeSlack(
     pingIntervalMs?: number;
     scopes?: readonly string[];
     pageSize?: number;
-    emojiNames?: readonly string[];
   } = {},
-): FakeSlack {
+) {
   const now = options.now ?? Date.now;
   const identity: FakeSlackIdentity = {
     appId: "AFAKE",
@@ -121,7 +84,7 @@ export function startFakeSlack(
   const botToken = "xoxb-fake-for-local-tests-only";
   const appToken = "xapp-fake-for-local-tests-only";
   const acks: FakeSlackAck[] = [];
-  const connections: FakeSlackConnection[] = [];
+  const connections: number[] = [];
   const deliveries: FakeSlackDelivery[] = [];
   const problems: string[] = [];
   const tickets = new Set<string>();
@@ -140,7 +103,7 @@ export function startFakeSlack(
       sendPings: false,
       open(socket) {
         sockets.set(socket.data.id, socket);
-        connections.push({ id: socket.data.id, openedAt: now(), closedAt: null });
+        connections.push(socket.data.id);
         socket.send(
           JSON.stringify({
             type: "hello",
@@ -152,7 +115,7 @@ export function startFakeSlack(
         nextHelloAppId = undefined;
         if (!responsive) socket.pause();
       },
-      message(socket, bytes) {
+      message(_socket, bytes) {
         let value: unknown;
         try {
           value = JSON.parse(typeof bytes === "string" ? bytes : bytes.toString());
@@ -178,9 +141,7 @@ export function startFakeSlack(
         }
         const recorded = {
           envelopeId: ack.data.envelope_id,
-          connectionId: socket.data.id,
           at: now(),
-          ...(Object.hasOwn(ack.data, "payload") ? { payload: ack.data.payload } : {}),
           body: ack.data,
         };
         acks.push(recorded);
@@ -190,8 +151,6 @@ export function startFakeSlack(
       },
       close(socket) {
         sockets.delete(socket.data.id);
-        const connection = connections.find(({ id }) => id === socket.data.id);
-        if (connection) connection.closedAt = now();
       },
     },
   });
@@ -203,7 +162,6 @@ export function startFakeSlack(
     now,
     scopes: options.scopes,
     pageSize: options.pageSize,
-    emojiNames: options.emojiNames,
     emitEvent(event, context) {
       if (sockets.size) sendEvent(event, { context });
     },
@@ -235,13 +193,12 @@ export function startFakeSlack(
     return api.handle(request);
   }
 
-  function sendFrame(frame: Record<string, unknown>, connectionId?: number): FakeSlackDelivery {
-    const socket =
-      connectionId === undefined ? [...sockets.values()].at(-1) : sockets.get(connectionId);
+  function sendFrame(frame: Record<string, unknown>): FakeSlackDelivery {
+    const socket = [...sockets.values()].at(-1);
     if (!socket) throw new Error("Fake Slack has no matching open socket.");
     const copy = structuredClone(frame);
     const envelopeId = typeof copy.envelope_id === "string" ? copy.envelope_id : "";
-    const delivery = { envelopeId, connectionId: socket.data.id, sentAt: now(), frame: copy };
+    const delivery = { envelopeId, frame: copy };
     deliveries.push(delivery);
     socket.send(JSON.stringify(copy));
     return delivery;
@@ -283,8 +240,8 @@ export function startFakeSlack(
       type: "events_api",
       envelope_id: settings.envelopeId ?? crypto.randomUUID(),
       accepts_response_payload: false,
-      retry_attempt: settings.retryAttempt ?? 0,
-      retry_reason: settings.retryReason ?? "",
+      retry_attempt: 0,
+      retry_reason: "",
       payload,
     });
   }
@@ -304,7 +261,7 @@ export function startFakeSlack(
     },
     sendFrame,
     sendEvent,
-    redeliver(envelopeId, newEnvelopeId = envelopeId) {
+    redeliver(envelopeId: string, newEnvelopeId = envelopeId) {
       const previous = deliveries.findLast((delivery) => delivery.envelopeId === envelopeId);
       if (!previous) throw new Error(`Unknown envelope ${envelopeId}.`);
       if (acks.some((ack) => ack.envelopeId === envelopeId))
@@ -317,23 +274,23 @@ export function startFakeSlack(
         retry_reason: "timeout",
       });
     },
-    disconnect(reason = "refresh_requested") {
+    disconnect(reason: "warning" | "refresh_requested" | "link_disabled" = "refresh_requested") {
       sendFrame({ type: "disconnect", reason, debug_info: { host: "fake-slack" } });
     },
     dropConnections() {
       for (const socket of sockets.values()) socket.terminate();
     },
-    setNextHelloAppId(appId) {
+    setNextHelloAppId(appId: string) {
       nextHelloAppId = appId;
     },
-    setSocketResponsive(value) {
+    setSocketResponsive(value: boolean) {
       responsive = value;
       for (const socket of sockets.values()) {
         if (value) socket.resume();
         else socket.pause();
       }
     },
-    waitForAck(envelopeId, timeoutMs = 1000) {
+    waitForAck(envelopeId: string, timeoutMs = 1000): Promise<FakeSlackAck | null> {
       if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
         throw new Error("Ack timeout must be nonnegative and finite.");
       const existing = acks.findLast((ack) => ack.envelopeId === envelopeId);
@@ -351,7 +308,7 @@ export function startFakeSlack(
         ackWaiters.add(waiter);
       });
     },
-    failNext: (method, failure) => api.failNext(method, failure),
+    failNext: api.failNext,
     async stop() {
       if (stopped) return;
       stopped = true;
