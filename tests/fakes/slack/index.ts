@@ -8,6 +8,8 @@
 
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
+import { createFakeSlackApi, type FakeSlackReads } from "./api";
+export type { FakeSlackChannel, FakeSlackUser, FakeSlackMessage } from "./api";
 
 export type FakeSlackIdentity = {
   appId: string;
@@ -60,7 +62,7 @@ export type FakeEventOptions = {
   context?: Record<string, unknown>;
 };
 
-export type FakeSlack = {
+export type FakeSlack = FakeSlackReads & {
   readonly url: string;
   readonly botToken: string;
   readonly appToken: string;
@@ -96,6 +98,8 @@ export function startFakeSlack(
     now?: () => number;
     identity?: Partial<FakeSlackIdentity>;
     pingIntervalMs?: number;
+    scopes?: readonly string[];
+    pageSize?: number;
   } = {},
 ): FakeSlack {
   const now = options.now ?? Date.now;
@@ -109,14 +113,12 @@ export function startFakeSlack(
   };
   const botToken = "xoxb-fake-for-local-tests-only";
   const appToken = "xapp-fake-for-local-tests-only";
-  const calls: FakeSlackCall[] = [];
   const acks: FakeSlackAck[] = [];
   const connections: FakeSlackConnection[] = [];
   const deliveries: FakeSlackDelivery[] = [];
   const problems: string[] = [];
   const tickets = new Set<string>();
   const sockets = new Map<number, ServerWebSocket<SocketData>>();
-  const failures = new Map<string, FakeSlackFailure[]>();
   const ackWaiters = new Set<{ envelopeId: string; finish(ack: FakeSlackAck | null): void }>();
   let nextHelloAppId: string | undefined;
   let responsive = true;
@@ -185,6 +187,21 @@ export function startFakeSlack(
     },
   });
   const url = new URL("/api/", server.url).href;
+  const api = createFakeSlackApi({
+    identity,
+    botToken,
+    appToken,
+    now,
+    scopes: options.scopes,
+    pageSize: options.pageSize,
+    connectionUrl() {
+      const ticket = crypto.randomUUID();
+      tickets.add(ticket);
+      const socketUrl = new URL(`/socket?ticket=${ticket}`, server.url);
+      socketUrl.protocol = "ws:";
+      return socketUrl.href;
+    },
+  });
   const heartbeat = setInterval(() => {
     if (responsive) for (const socket of sockets.values()) socket.ping("fake-slack");
   }, options.pingIntervalMs ?? 1000);
@@ -202,54 +219,7 @@ export function startFakeSlack(
       problems.push(`Unexpected Slack route: ${target.pathname}`);
       return new Response("Unknown fake Slack route", { status: 404 });
     }
-    const method = target.pathname.slice("/api/".length);
-    const contentType = request.headers.get("content-type") ?? "";
-    let args: Record<string, unknown>;
-    if (request.method === "GET") {
-      args = Object.fromEntries(target.searchParams);
-    } else if (
-      request.method === "POST" &&
-      contentType.startsWith("application/x-www-form-urlencoded")
-    ) {
-      args = Object.fromEntries(new URLSearchParams(await request.text()));
-    } else if (request.method === "POST" && contentType.startsWith("application/json")) {
-      const parsed = z.record(z.string(), z.unknown()).safeParse(await request.json());
-      if (!parsed.success) return unexpected(`${method} body is not an object.`);
-      args = parsed.data;
-    } else {
-      return unexpected(`${method} used unexpected HTTP method/content type.`);
-    }
-    const token = request.headers.get("authorization")?.replace(/^Bearer /, "") ?? null;
-    calls.push({ method, args, token, at: now() });
-    if (method !== "apps.connections.open")
-      return unexpected(`Unknown fake Slack method: ${method}`);
-    const parsed = z.object({}).strict().safeParse(args);
-    if (!parsed.success) return unexpected(`${method}: ${parsed.error.message}`);
-    if (token !== appToken)
-      return Response.json({ ok: false, error: token ? "invalid_auth" : "not_authed" });
-    const failure = failures.get(method)?.shift();
-    if (failure) {
-      if ("retryAfter" in failure)
-        return Response.json(
-          { ok: false, error: "ratelimited" },
-          { status: 429, headers: { "Retry-After": String(failure.retryAfter) } },
-        );
-      return Response.json({ ok: false, error: failure.error });
-    }
-    const ticket = crypto.randomUUID();
-    tickets.add(ticket);
-    const socketUrl = new URL(`/socket?ticket=${ticket}`, server.url);
-    socketUrl.protocol = "ws:";
-    return Response.json({ ok: true, url: socketUrl.href });
-  }
-
-  function unexpected(message: string): Response {
-    problems.push(message);
-    return Response.json({
-      ok: false,
-      error: "invalid_arguments",
-      response_metadata: { messages: [message] },
-    });
+    return api.handle(request);
   }
 
   function sendFrame(frame: Record<string, unknown>, connectionId?: number): FakeSlackDelivery {
@@ -265,11 +235,12 @@ export function startFakeSlack(
   }
 
   return {
+    ...api.controls,
     url,
     botToken,
     appToken,
     identity,
-    calls,
+    calls: api.calls,
     acks,
     connections,
     deliveries,
@@ -365,11 +336,7 @@ export function startFakeSlack(
         ackWaiters.add(waiter);
       });
     },
-    failNext(method, failure) {
-      const queue = failures.get(method) ?? [];
-      queue.push(failure);
-      failures.set(method, queue);
-    },
+    failNext: (method, failure) => api.failNext(method, failure),
     async stop() {
       if (stopped) return;
       stopped = true;
@@ -377,8 +344,9 @@ export function startFakeSlack(
       for (const waiter of ackWaiters) waiter.finish(null);
       for (const socket of sockets.values()) socket.terminate();
       await server.stop(true);
-      if (problems.length)
-        throw new Error(`Unexpected fake Slack traffic:\n${problems.join("\n")}`);
+      const allProblems = [...problems, ...api.problems];
+      if (allProblems.length)
+        throw new Error(`Unexpected fake Slack traffic:\n${allProblems.join("\n")}`);
     },
   };
 }
