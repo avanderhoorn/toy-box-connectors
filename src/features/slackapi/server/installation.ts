@@ -1,3 +1,4 @@
+import type { SlackIdentity } from "@slackapi/model/identity";
 import type { Installation, InstallationStatus } from "@slackapi/model/installation";
 
 // The stored installation.
@@ -28,6 +29,37 @@ export async function readInstallation(sql: Bun.SQL): Promise<Installation | nul
     ownerUserId: row.owner_user_id,
     status: row.status,
   };
+}
+
+/** Records the installation Slack first confirmed the tokens for, active and with no owner yet. */
+export async function recordInstallation(
+  transaction: Bun.SQL,
+  identity: SlackIdentity,
+): Promise<void> {
+  const row = {
+    id: 1,
+    team_id: identity.teamId,
+    app_id: identity.appId,
+    bot_id: identity.botId,
+    bot_user_id: identity.botUserId,
+    enterprise_id: identity.enterpriseId,
+    status: "active",
+  };
+  await transaction`INSERT INTO installation ${transaction(row)}`;
+}
+
+/**
+ * Puts an installation in auth_failed back to active, and returns when it began failing, which is
+ * where recovery's gap starts, or null when it wasn't failing. A failure that wasn't timed counts
+ * from the epoch, so its gap reaches back to when each link began.
+ */
+export async function reactivateInstallation(transaction: Bun.SQL): Promise<number | null> {
+  const [failing] = await transaction<{ auth_failed_at: number | null }[]>`
+    SELECT auth_failed_at FROM installation WHERE status = 'auth_failed'
+  `;
+  if (!failing) return null;
+  await transaction`UPDATE installation SET status = 'active', auth_failed_at = NULL`;
+  return failing.auth_failed_at ?? 0;
 }
 
 /**

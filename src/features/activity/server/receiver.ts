@@ -1,4 +1,4 @@
-import { interruptionGap, rateLimitedGap, type GapWindow } from "@activity/model/gaps";
+import { interruptionGap, rateLimitedGap } from "@activity/model/gaps";
 import {
   acksInTime,
   lifecycleAction,
@@ -16,12 +16,11 @@ import type { EventCallback, MalformedHint } from "@slackapi/model/envelopes";
 import { isForInstallation, readSlackEvent } from "@slackapi/model/events";
 import type { Installation } from "@slackapi/model/installation";
 import { normalizeMessageEvent, type SlackMessageEventPayload } from "@slackapi/model/messages";
-import type { SlackTs } from "@slackapi/model/ts";
 import { currentChannelId, invalidateChannelInfo } from "@slackapi/server/channels";
 import { readInstallation } from "@slackapi/server/installation";
 import { hasReceipt, recordReceipt, type ReceiptDisposition } from "@slackapi/server/receipts";
 import { readBotUserIds } from "@slackapi/server/users";
-import { readWatchedChannels, recordGap, type GapReason } from "./coverage";
+import { recordChannelGaps } from "./coverage";
 import { forgetFile, removeLocalCopies } from "./files";
 import { ingestMessageEvent } from "./ingest";
 import { moveLedgerChannel } from "./ledger";
@@ -275,7 +274,7 @@ async function takeLifecycle(
       await moveRequestChannel(transaction, oldChannelId, newChannelId);
       // Events under the new ID that arrived before this one found no link watching it.
       const since = happenedAt(eventTime, arrivedAt);
-      await recordGaps(transaction, newChannelId, "moved", now, (linkedAtTs) =>
+      await recordChannelGaps(transaction, newChannelId, "moved", now, (linkedAtTs) =>
         interruptionGap(since, arrivedAt, linkedAtTs),
       );
       break;
@@ -301,7 +300,7 @@ async function takeRateLimit(
     return { disposition: "foreign" };
   }
   console.error("Slack held events back for a minute, so repair will read that minute.");
-  await recordGaps(transaction, null, "rate_limited", now, (linkedAtTs) =>
+  await recordChannelGaps(transaction, null, "rate_limited", now, (linkedAtTs) =>
     rateLimitedGap(delivery.minute, linkedAtTs),
   );
   return { disposition: "rate_limited" };
@@ -331,7 +330,7 @@ async function takeMalformed(
     `Couldn't read ${what} from Slack, so repair will read around it: ${issues.join(", ")}`,
   );
   const since = hint.eventTime === null ? arrivedAt : happenedAt(hint.eventTime, arrivedAt);
-  await recordGaps(transaction, hint.channelId, "malformed", now, (linkedAtTs) =>
+  await recordChannelGaps(transaction, hint.channelId, "malformed", now, (linkedAtTs) =>
     interruptionGap(since, arrivedAt, linkedAtTs),
   );
   return { disposition: "malformed" };
@@ -343,25 +342,4 @@ async function takeMalformed(
  */
 function happenedAt(eventTime: number, arrivedAt: number): number {
   return Math.min(eventTime * 1000, arrivedAt);
-}
-
-/**
- * Records a channel gap for each link that watches `channelId` at its current ID, or for every
- * link when it's null, whatever the link's status. `windowFrom` bounds each by when its link began.
- */
-async function recordGaps(
-  transaction: Bun.SQL,
-  channelId: string | null,
-  reason: GapReason,
-  now: number,
-  windowFrom: (linkedAtTs: SlackTs) => GapWindow | null,
-): Promise<void> {
-  const current = channelId === null ? null : await currentChannelId(transaction, channelId);
-  for (const watched of await readWatchedChannels(transaction)) {
-    if (current !== null && watched.channelId !== current) continue;
-    const window = windowFrom(watched.linkedAtTs);
-    if (window === null) continue;
-    const gap = { linkId: watched.linkId, channelId: watched.channelId, threadTs: null };
-    await recordGap(transaction, { ...gap, window, reason }, now);
-  }
 }

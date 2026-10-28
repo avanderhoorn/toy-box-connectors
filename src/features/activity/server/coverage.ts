@@ -1,5 +1,6 @@
-import type { GapWindow } from "@activity/model/gaps";
+import { interruptionGap, type GapWindow } from "@activity/model/gaps";
 import type { SlackTs } from "@slackapi/model/ts";
+import { currentChannelId } from "@slackapi/server/channels";
 
 // Coverage.
 //
@@ -14,7 +15,9 @@ export type GapReason =
   | "startup"
   | "thread"
   /** Slack gave the channel a new ID, and events under either ID may have gone unmatched. */
-  | "moved";
+  | "moved"
+  /** Slack rejected the bot token, and what was posted or edited meanwhile was left for repair. */
+  | "auth_failed";
 
 export type Gap = {
   linkId: string;
@@ -50,4 +53,41 @@ export async function recordGap(transaction: Bun.SQL, gap: Gap, now: number): Pr
     opened_at: now,
   };
   await transaction`INSERT INTO coverage ${transaction(row)}`;
+}
+
+/**
+ * Records a channel gap for each link that watches `channelId` at its current ID, or for every
+ * link when it's null, whatever the link's status. `windowFrom` bounds each by when its link began.
+ */
+export async function recordChannelGaps(
+  transaction: Bun.SQL,
+  channelId: string | null,
+  reason: GapReason,
+  now: number,
+  windowFrom: (linkedAtTs: SlackTs) => GapWindow | null,
+): Promise<void> {
+  const current = channelId === null ? null : await currentChannelId(transaction, channelId);
+  for (const watched of await readWatchedChannels(transaction)) {
+    if (current !== null && watched.channelId !== current) continue;
+    const window = windowFrom(watched.linkedAtTs);
+    if (window === null) continue;
+    const gap = { linkId: watched.linkId, channelId: watched.channelId, threadTs: null };
+    await recordGap(transaction, { ...gap, window, reason }, now);
+  }
+}
+
+/**
+ * Records a gap in every linked channel for a span the bridge may have missed everywhere, from
+ * `sinceMs` to `untilMs`, such as while its connection was down.
+ */
+export function recordInterruption(
+  transaction: Bun.SQL,
+  reason: GapReason,
+  sinceMs: number,
+  untilMs: number,
+  now: number,
+): Promise<void> {
+  return recordChannelGaps(transaction, null, reason, now, (linkedAtTs) =>
+    interruptionGap(sinceMs, untilMs, linkedAtTs),
+  );
 }
