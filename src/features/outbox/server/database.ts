@@ -171,21 +171,6 @@ export async function readOutboxItem(
   return row ? outboxItem(row) : null;
 }
 
-export async function readUnconfirmedItems(sql: Bun.SQL, linkId: string) {
-  const rows = await sql<OutboxRow[]>`
-    SELECT * FROM outbox WHERE link_id = ${linkId} AND state IN ('queued', 'sending', 'delivery_unknown', 'failed')
-    ORDER BY number
-  `;
-  return rows.map((row) => ({
-    number: row.number,
-    requestId: row.request_id,
-    series: row.series,
-    state: row.state,
-    problem: row.error,
-    unknownSince: row.unknown_since,
-  }));
-}
-
 export async function readReadyOutbox(sql: Bun.SQL, now: number): Promise<OutboxItem[]> {
   const rows = await sql<OutboxRow[]>`
     SELECT outbox.* FROM outbox JOIN links ON links.id = outbox.link_id
