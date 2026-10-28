@@ -520,12 +520,14 @@ describe("proposing a setup change", () => {
   test("a change whose needs keep moving is refused rather than judged on facts read for others", async () => {
     const database = await linked();
     const owners = ["U-erin", "U-owner"];
-    const { reader, reads } = fakeFactsReader(world(), (read) =>
-      database.write(
+    const { reader, reads } = fakeFactsReader(world(), async (read) => {
+      // The owner moves on every read, so a command without a limit would read forever.
+      if (read > 2) throw new Error("read the facts again after giving up");
+      await database.write(
         (transaction) =>
           transaction`UPDATE installation SET owner_user_id = ${owners[(read - 1) % 2]!}`,
-      ),
-    );
+      );
+    });
 
     expect(await change(database, reader, allowCarol)).toEqual({
       kind: "refused",
