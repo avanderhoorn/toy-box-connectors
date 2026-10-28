@@ -1,11 +1,37 @@
-import type { ChannelFacts, ChannelKind } from "@slackapi/model/channels";
+import { WebAPIPlatformError, type WebClient } from "@slack/web-api";
+import {
+  slackConversationSchema,
+  type ChannelFacts,
+  type ChannelKind,
+} from "@slackapi/model/channels";
 
-// Stored channel facts.
+// Channel facts.
 //
-// A row holds what conversations.info last said about a channel and when the read that said it
-// began. A lifecycle signal invalidates the row rather than deleting it, so the next refresh still
-// compares against what it held. A write clears only an invalidation that came before its read
-// began, and never replaces a row read later than its own.
+// A read asks conversations.info and keeps nothing, so whoever reads decides what the answer means
+// before storing it. A row holds what conversations.info last said about a channel and when the
+// read that said it began. A lifecycle signal invalidates the row rather than deleting it, so the
+// next refresh still compares against what it held. A write clears only an invalidation that came
+// before its read began, and never replaces a row read later than its own.
+
+/**
+ * What conversations.info says about `channelId` now, or null when Slack can't find it, as it says
+ * of a private channel the bot isn't in. Throws when the read fails or returns something that isn't
+ * a conversation, which never means anything about the channel.
+ */
+export async function fetchChannelFacts(
+  client: WebClient,
+  channelId: string,
+): Promise<ChannelFacts | null> {
+  try {
+    const response = await client.conversations.info({ channel: channelId });
+    return slackConversationSchema.parse(response.channel);
+  } catch (error) {
+    if (error instanceof WebAPIPlatformError && error.data.error === "channel_not_found") {
+      return null;
+    }
+    throw error;
+  }
+}
 
 /** A channel's stored facts, when they were read, and whether anything has cast doubt on them. */
 export type ChannelInfo = {

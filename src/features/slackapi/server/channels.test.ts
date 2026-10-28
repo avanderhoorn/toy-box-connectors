@@ -1,13 +1,83 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { WebClient } from "@slack/web-api";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { channelFacts } from "@slackapi/model/testFixtures";
 import {
   currentChannelId,
+  fetchChannelFacts,
   invalidateChannelInfo,
   readChannelInfo,
   recordChannelAlias,
   writeChannelInfo,
 } from "./channels";
+
+/** What the fake conversations.info answers for each channel it's asked about. */
+const answers = new Map<string, unknown>([
+  [
+    "C-shared",
+    {
+      ok: true,
+      channel: {
+        id: "C-shared",
+        name: "release-eng",
+        is_private: true,
+        is_member: true,
+        is_archived: false,
+        is_ext_shared: true,
+        is_pending_ext_shared: false,
+        is_org_shared: false,
+        context_team_id: "T-home",
+        shared_team_ids: ["T-partner", "T-home"],
+        num_members: 12,
+      },
+    },
+  ],
+  ["C-gone", { ok: false, error: "channel_not_found" }],
+  ["C-broken", { ok: false, error: "invalid_auth" }],
+  ["C-odd", { ok: true, channel: { id: "C-odd", is_private: false } }],
+]);
+
+const server = Bun.serve({
+  hostname: "127.0.0.1",
+  port: 0,
+  async fetch(request) {
+    const channel = new URLSearchParams(await request.text()).get("channel") ?? "";
+    if (channel === "C-down") return new Response("unavailable", { status: 503 });
+    return Response.json(answers.get(channel) ?? { ok: false, error: "unexpected" });
+  },
+});
+afterAll(() => server.stop(true));
+
+const client = new WebClient("xoxb-test", {
+  slackApiUrl: `http://127.0.0.1:${server.port}/api/`,
+  retryConfig: { retries: 0 },
+});
+
+test("reading a channel returns what conversations.info says decides its audience", async () => {
+  expect(await fetchChannelFacts(client, "C-shared")).toEqual({
+    id: "C-shared",
+    name: "release-eng",
+    kind: "private",
+    isMember: true,
+    isArchived: false,
+    isExtShared: true,
+    isPendingExtShared: false,
+    isOrgShared: false,
+    enterpriseId: null,
+    contextTeamId: "T-home",
+    sharedTeamIds: ["T-home", "T-partner"],
+  });
+});
+
+test("a channel Slack can't find reads as null", async () => {
+  expect(await fetchChannelFacts(client, "C-gone")).toBeNull();
+});
+
+test("a read that fails, or answers with something that isn't a channel, throws", async () => {
+  await expect(fetchChannelFacts(client, "C-broken")).rejects.toThrow("invalid_auth");
+  await expect(fetchChannelFacts(client, "C-down")).rejects.toThrow();
+  await expect(fetchChannelFacts(client, "C-odd")).rejects.toThrow();
+});
 
 test("a channel's facts read back as they were written, with when they were read", async () => {
   const database = await openTestDatabase();
