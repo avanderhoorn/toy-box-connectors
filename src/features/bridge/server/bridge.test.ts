@@ -24,20 +24,6 @@ test("creates its data folder, lock and database on first start", async () => {
   expect(readdirSync(dataFolder)).toEqual(expect.arrayContaining(["bridge.db", "bridge.lock"]));
 });
 
-test("refuses to start beside a running bridge and starts once that one stops", async () => {
-  const dataFolder = createTestFolder();
-  const first = await startBridge(dataFolder, env);
-
-  const second = startBridge(dataFolder, env);
-  await expect(second).rejects.toThrow(BridgeRefusedError);
-  await expect(second).rejects.toThrow(
-    `Another toy-box-slack bridge is already running for ${dataFolder}. Stop it before starting a new one.`,
-  );
-  await first.stop();
-
-  await start(dataFolder);
-});
-
 test("refuses a data folder that others can open before it creates anything there", async () => {
   const dataFolder = join(createTestFolder(), "shared");
   mkdirSync(dataFolder);

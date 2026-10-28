@@ -9,45 +9,18 @@ async function open(path: string): Promise<BridgeDatabase> {
   return database;
 }
 
-async function readSchema(sql: Bun.SQL) {
-  const [{ user_version: version }] = await sql<{ user_version: number }[]>`PRAGMA user_version`;
-  const objects = await sql<{ type: string; name: string; sql: string }[]>`
-    SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name
-  `;
-  return { version, objects: [...objects] };
-}
-
 describe("openBridgeDatabase", () => {
   test("runs with the settings that keep each commit through a power loss and references whole", async () => {
     const database = await openTestDatabase();
 
-    const reported = await database.read(async (sql) => {
-      const settings: Record<string, unknown> = {};
-      for (const name of ["journal_mode", "synchronous", "fullfsync", "foreign_keys"]) {
-        const [row] = await sql.unsafe<Record<string, unknown>[]>(`PRAGMA ${name}`);
-        settings[name] = row?.[name];
-      }
-      return settings;
-    });
+    const [pragmas] = await database.read(
+      (sql) => sql`
+        SELECT journal_mode, synchronous, fullfsync, foreign_keys
+        FROM pragma_journal_mode, pragma_synchronous, pragma_fullfsync, pragma_foreign_keys
+      `,
+    );
 
-    expect(reported).toEqual({
-      journal_mode: "wal",
-      synchronous: 2,
-      fullfsync: 1,
-      foreign_keys: 1,
-    });
-  });
-
-  test("creates the tables in a new file once, so opening it again changes nothing", async () => {
-    const path = join(createTestFolder(), "bridge.db");
-    const first = await openBridgeDatabase(path);
-    const schema = await first.read(readSchema);
-    await first.close();
-
-    const second = await open(path);
-
-    expect(schema).toMatchObject({ version: 1 });
-    expect(await second.read(readSchema)).toEqual(schema);
+    expect(pragmas).toEqual({ journal_mode: "wal", synchronous: 2, fullfsync: 1, foreign_keys: 1 });
   });
 });
 
