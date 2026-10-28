@@ -4,7 +4,8 @@
 // for it in kebab case, except the fields the contract takes as arguments, and every command also
 // takes --channel and --json. Parsing is strict: an option the command doesn't have, one given
 // twice, or a value that looks like the next option is refused, because a lead whose misspelled
-// option was ignored would believe the bridge did what it asked.
+// option was ignored would believe the bridge did what it asked. For the same reason a command
+// line must name its command first, since citty skips an option that comes before the command.
 
 import { parseArgs } from "node:util";
 import { z } from "zod";
@@ -12,8 +13,12 @@ import type { CommandContract } from "./contract";
 
 /** The options every command takes besides its contract's. */
 export const globalOptions = {
-  channel: { type: "string", description: "The Toy Box channel to act for, from a terminal" },
-  json: { type: "boolean", description: "Print the bridge's answer as JSON" },
+  channel: {
+    type: "string",
+    usage: "--channel <id>",
+    description: "The Toy Box channel to act for, from a terminal",
+  },
+  json: { type: "boolean", usage: "--json", description: "Print the bridge's answer as JSON" },
 } as const;
 
 /** One input field as the CLI takes it. */
@@ -132,6 +137,7 @@ export function parseCommandLine(
       );
     }
     if (option === "channel") {
+      if (value.trim() === "") return refuse("--channel needs a Toy Box channel ID.");
       channelId = value;
       continue;
     }
@@ -186,7 +192,8 @@ export function checkCommandInput(
     const label = typeof field === "string" ? labels.get(field) : undefined;
     if (label === undefined) return issue.message;
     if (issue.code === "invalid_type" && values[field as string] === undefined) {
-      return `\`${name}\` needs ${label}`;
+      const stdin = field === contract.stdin ? ", or its text on stdin" : "";
+      return `\`${name}\` needs ${label}${stdin}`;
     }
     return `${label}: ${issue.message}`;
   });
@@ -194,6 +201,82 @@ export function checkCommandInput(
     kind: "refused",
     message: `${problems.join(". ")}. Run \`toy-box-slack ${name} --help\`.`,
   };
+}
+
+/**
+ * Why `args` don't start with one of the commands in `names`, or null when they do. Asking for help
+ * anywhere, or for the version alone, needs no command.
+ */
+export function commandNameProblem(
+  args: readonly string[],
+  names: readonly string[],
+): string | null {
+  if (args.some((arg) => arg === "--help" || arg === "-h")) return null;
+  if (args.length === 1 && (args[0] === "--version" || args[0] === "-v")) return null;
+  const [first] = args;
+  if (first !== undefined && names.includes(first)) return null;
+  const help = "Run `toy-box-slack --help` to see the commands.";
+  if (first === undefined) return `Name a command, as in \`toy-box-slack status\`. ${help}`;
+  if (first.startsWith("-")) {
+    const at = args.findIndex((arg) => names.includes(arg));
+    if (at === -1) return `Name a command before its options. ${help}`;
+    const rest = at < args.length - 1 ? " ..." : "";
+    const fixed = `toy-box-slack ${args[at]} ${args.slice(0, at).join(" ")}${rest}`;
+    return `Name the command before its options, as in \`${fixed}\`. ${help}`;
+  }
+  return `toy-box-slack has no command \`${first}\`. ${help}`;
+}
+
+/** `toy-box-slack <name> --help`: what the command does, how to write it and what each part means. */
+export function presentUsage(name: string, contract: CommandContract): string {
+  const takes = commandArguments(name, contract);
+  const positionals = takes.filter((argument) => argument.positional);
+  const options = takes.filter((argument) => !argument.positional);
+  const line = [
+    `toy-box-slack ${name}`,
+    ...positionals.map((argument) =>
+      argument.required ? syntax(argument) : `[${syntax(argument)}]`,
+    ),
+    ...options
+      .filter((argument) => argument.required && argument.field !== contract.stdin)
+      .map(syntax),
+    "[options]",
+  ];
+  const describe = (argument: CommandArgument): HelpRow => {
+    if (argument.field !== contract.stdin) return [syntax(argument), argument.description ?? ""];
+    const from = argument.description ? `${argument.description}, from` : "From";
+    return [syntax(argument), `${from} stdin by default`];
+  };
+  return [
+    contract.description,
+    `Usage: ${line.join(" ")}`,
+    presentSections([
+      ["Arguments:", positionals.map(describe)],
+      [
+        "Options:",
+        [
+          ...options.map(describe),
+          ...Object.values(globalOptions).map(({ usage, description }): HelpRow => [
+            usage,
+            description,
+          ]),
+        ],
+      ],
+    ]),
+  ].join("\n\n");
+}
+
+/** `toy-box-slack --help`: what the CLI does and every command it has. */
+export function presentCommands(
+  description: string,
+  commands: readonly { name: string; description: string }[],
+): string {
+  return [
+    description,
+    "Usage: toy-box-slack <command> [options]",
+    presentSections([["Commands:", commands.map(({ name, description }) => [name, description])]]),
+    "Run `toy-box-slack <command> --help` to see a command's options.",
+  ].join("\n\n");
 }
 
 /** `wakeAfterMinutes` as an option name, `wake-after-minutes`. */
@@ -235,6 +318,35 @@ function describeArgument(
   throw new Error(
     `\`${name}\` takes ${field} as a ${element.def.type}, which no command line can give.`,
   );
+}
+
+type HelpRow = readonly [label: string, description: string];
+
+// Each section that has rows, with every description in one column.
+function presentSections(sections: readonly (readonly [string, readonly HelpRow[]])[]): string {
+  const width = Math.max(...sections.flatMap(([, rows]) => rows.map(([label]) => label.length)));
+  return sections
+    .filter(([, rows]) => rows.length > 0)
+    .map(([title, rows]) =>
+      [
+        title,
+        ...rows.map(([label, description]) => `  ${label.padEnd(width)}  ${description}`.trimEnd()),
+      ].join("\n"),
+    )
+    .join("\n\n");
+}
+
+// `<request>`, `--revision <number>` or `--allow <value>...`, as a command line writes it.
+function syntax(argument: CommandArgument): string {
+  const list = argument.multiple ? "..." : "";
+  if (argument.positional) return `${argument.label}${list}`;
+  if (argument.type === "boolean") return argument.label;
+  const value = argument.choices
+    ? argument.choices.join("|")
+    : argument.type === "number"
+      ? "number"
+      : "value";
+  return `${argument.label} <${value}>${list}`;
 }
 
 function convert(

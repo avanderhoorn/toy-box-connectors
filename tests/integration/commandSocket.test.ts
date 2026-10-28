@@ -2,70 +2,10 @@
 // catalog, the way it reads the real one, so these follow each caller rule from the call to the
 // answer.
 
-import { expect, onTestFinished, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { z } from "zod";
-import { prepareDataFolder } from "@bridge/server/dataFolder";
-import { openBridgeDatabase } from "@bridge/server/database";
-import { createTestFolder } from "@bridge/server/testFixtures";
-import type { CallerFacts } from "@commands/model/callers";
-import { commandPath, commandRefusalSchema, commandResultSchema } from "@commands/model/protocol";
-import { statusResultSchema } from "@commands/model/status";
-import { createStoredLink } from "@links/server/testFixtures";
-import { startFakeToyBox } from "../fakes/toybox";
-import { spawnBridge } from "./bridgeProcess";
+import { startLinkedBridge } from "./linkedBridge";
 import { waitFor } from "./waitFor";
-
-const REQUESTS_ROUTINE = {
-  title: "Slack requests",
-  schedule: "0 9 * * 1-5",
-  prompt: "Run `toy-box-slack inbox` and answer what's waiting.",
-};
-
-const answerSchema = z.union([commandResultSchema(statusResultSchema), commandRefusalSchema]);
-
-/** A bridge running for a data folder whose link follows a fake Toy Box channel. */
-async function startLinkedBridge() {
-  const toyBox = startFakeToyBox();
-  onTestFinished(() => toyBox.stop());
-  const channelId = toyBox.addChannel();
-  const routine = toyBox.scheduleRoutine(channelId, REQUESTS_ROUTINE);
-  const home = createTestFolder();
-  const dataFolder = join(home, ".toy-box-slack");
-  prepareDataFolder(dataFolder);
-  const database = await openBridgeDatabase(join(dataFolder, "bridge.db"));
-  try {
-    await createStoredLink(database, "link", {
-      toybox_channel_id: channelId,
-      requests_routine_id: routine.id,
-    });
-  } finally {
-    await database.close();
-  }
-  const bridge = spawnBridge(home, { TOY_BOX_URL: toyBox.url });
-  await bridge.running();
-  const socket = join(dataFolder, "bridge.sock");
-  const port = Number(new URL(toyBox.url).port);
-
-  /**
-   * Calls `status` the way the CLI does for `sessionId`, which runs in the fake Toy Box like
-   * every agent, or for the operator at a terminal when it's null.
-   */
-  async function status(sessionId: string | null, facts: Partial<CallerFacts> = {}) {
-    const response = await fetch(`http://localhost${commandPath("status")}`, {
-      unix: socket,
-      method: "POST",
-      body: JSON.stringify({
-        caller: { sessionId, toyBoxPort: sessionId && port, channelId: null, ...facts },
-        input: {},
-      }),
-    });
-    return { status: response.status, answer: answerSchema.parse(await response.json()) };
-  }
-
-  return { toyBox, channelId, bridge, dataFolder, socket, port, status };
-}
 
 test("answers the channel's lead with its link, once the bridge follows the channel", async () => {
   const { channelId, status } = await startLinkedBridge();

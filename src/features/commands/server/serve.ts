@@ -94,7 +94,9 @@ export function serveCommands<Contracts extends Record<string, CommandContract>>
     const call = commandRequestSchema.safeParse(await request.json().catch(() => undefined));
     if (!call.success) {
       return Response.json(
-        { error: `The bridge couldn't read the call to \`${name}\`.` },
+        {
+          error: `The bridge couldn't read the call to \`${name}\`, so it didn't run. That happens when the CLI runs another release of toy-box-slack. Whoever runs the bridge can restart it to run the same release as the CLI.`,
+        },
         { status: 400 },
       );
     }
@@ -143,7 +145,9 @@ export function serveCommands<Contracts extends Record<string, CommandContract>>
     } catch (error) {
       console.error(`Couldn't finish \`${name}\`:`, error);
       return Response.json(
-        { error: `The bridge couldn't finish \`${name}\`. Its log says why.` },
+        {
+          error: `The bridge couldn't finish \`${name}\`, so it may or may not have run. Its log says why. Check \`toy-box-slack status\` before you run \`${name}\` again.`,
+        },
         { status: 500 },
       );
     }

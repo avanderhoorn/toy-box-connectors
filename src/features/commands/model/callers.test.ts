@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ToyBoxCatalog } from "@toybox/model";
 import {
   permitCaller,
+  readCallerFacts,
   resolveCaller,
   type Caller,
   type CallerFacts,
@@ -25,6 +26,39 @@ const toyBox = { origin, catalog };
 function facts(overrides: Partial<CallerFacts>): CallerFacts {
   return { sessionId: null, toyBoxPort: null, channelId: null, ...overrides };
 }
+
+describe("reading what the environment says about the caller", () => {
+  test("forwards the session, Toy Box's port and the channel --channel named", () => {
+    const env = { COPILOT_AGENT_SESSION_ID: "release-eng", NITRO_PORT: "3000" };
+
+    expect(readCallerFacts(env, "design")).toEqual({
+      sessionId: "release-eng",
+      toyBoxPort: 3000,
+      channelId: "design",
+    });
+    expect(readCallerFacts({}, null)).toEqual(facts({}));
+  });
+
+  test("trims both, and a blank variable says nothing", () => {
+    expect(
+      readCallerFacts({ COPILOT_AGENT_SESSION_ID: " release-eng\n", NITRO_PORT: " 3000 " }, null),
+    ).toEqual(facts({ sessionId: "release-eng", toyBoxPort: 3000 }));
+    expect(readCallerFacts({ COPILOT_AGENT_SESSION_ID: "  ", NITRO_PORT: "" }, null)).toEqual(
+      facts({}),
+    );
+  });
+
+  test.each(["1", "65535"])("takes %p as a port", (port) => {
+    expect(readCallerFacts({ NITRO_PORT: port }, null).toyBoxPort).toBe(Number(port));
+  });
+
+  test.each(["0", "65536", "123456", "-1", "+80", "3.5", "1e3", "0x10", "3000abc", "abc"])(
+    "doesn't take %p as a port",
+    (port) => {
+      expect(readCallerFacts({ NITRO_PORT: port }, null).toyBoxPort).toBeNull();
+    },
+  );
+});
 
 describe("resolving who is calling", () => {
   test("a session that is a channel's ID is that channel's lead", () => {

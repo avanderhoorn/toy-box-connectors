@@ -3,8 +3,11 @@ import { z } from "zod";
 import {
   checkCommandInput,
   commandArguments,
+  commandNameProblem,
   kebabCase,
   parseCommandLine,
+  presentCommands,
+  presentUsage,
   type ParsedCommandLine,
 } from "./commandLine";
 import { commandContract, type CommandContract } from "./contract";
@@ -196,6 +199,8 @@ describe("parsing a command line", () => {
     ],
     ["a flag with a value", ["--progress=yes"], "--progress takes no value."],
     ["a number that isn't one", ["--revision", "two"], "--revision takes a number, not two."],
+    ["an empty channel", ["--channel", " "], "--channel needs a Toy Box channel ID."],
+    ["an empty inline channel", ["--channel="], "--channel needs a Toy Box channel ID."],
     ["an extra argument", ["r14", "r15"], "`reply` takes <request>, but also got r15."],
   ])("refuses %s", (_name, args, message) => {
     expect(refusal(reply, ...args)).toBe(`${message} Run \`toy-box-slack reply --help\`.`);
@@ -226,7 +231,111 @@ describe("checking a command's input", () => {
         "`reply` needs <request>. --revision: Too small: expected number to be >=1. Run `toy-box-slack reply --help`.",
     });
     expect(checkCommandInput("reply", reply, { request: "r14", revision: 1 })).toMatchObject({
-      message: "`reply` needs --text. Run `toy-box-slack reply --help`.",
+      message: "`reply` needs --text, or its text on stdin. Run `toy-box-slack reply --help`.",
     });
+  });
+});
+
+describe("naming the command", () => {
+  const names = ["status", "serve"];
+  const help = "Run `toy-box-slack --help` to see the commands.";
+
+  test.each([
+    ["a command first", ["status", "--json"]],
+    ["help anywhere", ["bogus", "--help"]],
+    ["help in short", ["-h"]],
+    ["the version alone", ["--version"]],
+    ["the version in short", ["-v"]],
+  ])("needs nothing more with %s", (_name, args) => {
+    expect(commandNameProblem(args, names)).toBeNull();
+  });
+
+  test.each([
+    ["nothing", [], `Name a command, as in \`toy-box-slack status\`. ${help}`],
+    [
+      "an option before the command",
+      ["--json", "status"],
+      `Name the command before its options, as in \`toy-box-slack status --json\`. ${help}`,
+    ],
+    [
+      "options on both sides of the command",
+      ["--channel", "c1", "status", "--json"],
+      `Name the command before its options, as in \`toy-box-slack status --channel c1 ...\`. ${help}`,
+    ],
+    ["options without a command", ["--json"], `Name a command before its options. ${help}`],
+    [
+      "the version with more",
+      ["--version", "--json"],
+      `Name a command before its options. ${help}`,
+    ],
+    ["an unknown command", ["bogus"], `toy-box-slack has no command \`bogus\`. ${help}`],
+    ["a key every object has", ["toString"], `toy-box-slack has no command \`toString\`. ${help}`],
+  ])("refuses %s", (_name, args, message) => {
+    expect(commandNameProblem(args, names)).toBe(message);
+  });
+});
+
+describe("help", () => {
+  test("shows how to write a command, and what each part means", () => {
+    expect(presentUsage("reply", reply)).toBe(
+      [
+        "Answer a request in its thread",
+        "",
+        "Usage: toy-box-slack reply <request> --revision <number> [options]",
+        "",
+        "Arguments:",
+        "  <request>            The request, such as r14",
+        "",
+        "Options:",
+        "  --revision <number>  The revision you read",
+        "  --progress           Say you're working on it",
+        "  --text <value>       The answer in Markdown, from stdin by default",
+        "  --channel <id>       The Toy Box channel to act for, from a terminal",
+        "  --json               Print the bridge's answer as JSON",
+      ].join("\n"),
+    );
+  });
+
+  test("shows a list, its choices, and an option without a description", () => {
+    expect(presentUsage("link", link)).toBe(
+      [
+        "Link a Slack channel",
+        "",
+        "Usage: toy-box-slack link --slack-channel <value> [options]",
+        "",
+        "Options:",
+        "  --slack-channel <value>   The Slack channel",
+        "  --allow <value>...        Someone the lead may answer",
+        "  --requests <mention|all>",
+        "  --channel <id>            The Toy Box channel to act for, from a terminal",
+        "  --json                    Print the bridge's answer as JSON",
+      ].join("\n"),
+    );
+    expect(presentUsage("allow", allow)).toContain(
+      "Usage: toy-box-slack allow <users>... [options]\n\nArguments:\n  <users>...\n",
+    );
+    expect(presentUsage("status", status)).toStartWith(
+      "Show the bridge's health\n\nUsage: toy-box-slack status [options]\n\nOptions:\n",
+    );
+  });
+
+  test("lists every command", () => {
+    const commands = [
+      { name: "status", description: "Show the bridge's health" },
+      { name: "serve", description: "Run the bridge" },
+    ];
+    expect(presentCommands("Watch a Slack channel", commands)).toBe(
+      [
+        "Watch a Slack channel",
+        "",
+        "Usage: toy-box-slack <command> [options]",
+        "",
+        "Commands:",
+        "  status  Show the bridge's health",
+        "  serve   Run the bridge",
+        "",
+        "Run `toy-box-slack <command> --help` to see a command's options.",
+      ].join("\n"),
+    );
   });
 });

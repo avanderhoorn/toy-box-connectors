@@ -279,7 +279,10 @@ describe("answering a call", () => {
       (await startServer({ pause })).call("pause", lead);
     const answer = {
       status: 500,
-      body: { error: "The bridge couldn't finish `pause`. Its log says why." },
+      body: {
+        error:
+          "The bridge couldn't finish `pause`, so it may or may not have run. Its log says why. Check `toy-box-slack status` before you run `pause` again.",
+      },
     };
 
     expect(await failing(() => () => Promise.reject(new Error("disk I/O error")))).toEqual(answer);
@@ -313,7 +316,8 @@ describe("requests that aren't calls", () => {
     const unreadable = {
       status: 400,
       allow: null,
-      error: "The bridge couldn't read the call to `peek`.",
+      error:
+        "The bridge couldn't read the call to `peek`, so it didn't run. That happens when the CLI runs another release of toy-box-slack. Whoever runs the bridge can restart it to run the same release as the CLI.",
     };
     expect(await request("/v1/commands/peek", post("not json"))).toEqual(unreadable);
     expect(await request("/v1/commands/peek", post(JSON.stringify({ input: {} })))).toEqual(

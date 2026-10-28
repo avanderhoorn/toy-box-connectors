@@ -45,6 +45,23 @@ export const callerFactsSchema = z
 export type CallerFacts = z.output<typeof callerFactsSchema>;
 
 /**
+ * What `env` says about whoever runs the CLI, with the channel --channel named. A variable that's
+ * empty or isn't a port says nothing.
+ */
+export function readCallerFacts(
+  env: Record<string, string | undefined>,
+  channelId: string | null,
+): CallerFacts {
+  const port = env.NITRO_PORT?.trim() ?? "";
+  return {
+    sessionId: env.COPILOT_AGENT_SESSION_ID?.trim() || null,
+    toyBoxPort:
+      /^\d{1,5}$/.test(port) && Number(port) >= 1 && Number(port) <= 65_535 ? Number(port) : null,
+    channelId,
+  };
+}
+
+/**
  * Who the bridge acts for. A lead or member always acts for its own channel, and the operator
  * for the channel it names, if any.
  */

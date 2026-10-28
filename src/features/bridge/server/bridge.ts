@@ -23,7 +23,7 @@ import { openBridgeDatabase, type BridgeDatabase } from "./database";
 import { readCredentialsFile, resolveBridgeSettings } from "./environment";
 import { acquireBridgeLock } from "./lock";
 import { BridgeRefusedError } from "./refusal";
-import { listenForCommands, type CommandSocket } from "./socket";
+import { commandSocketPath, listenForCommands, type CommandSocket } from "./socket";
 
 export interface Bridge {
   /** Resolves with the first error that stopped part of the bridge, after which it must stop. */
@@ -94,7 +94,7 @@ export async function startBridge(
       unconfiguredSlack(settings) ?? { connection: "connecting", problem: null };
     const origin = settings.toyBoxOrigin;
     socket = listenForCommands(
-      join(dataFolder, "bridge.sock"),
+      commandSocketPath(dataFolder),
       serveCommands({
         contracts: commandContracts,
         handlers: {

@@ -21,6 +21,11 @@ export type CommandContract<
   scope: Scope;
   /** Whether the bridge serves it while it can't use Slack. Only status and doctor do. */
   withoutSlack?: boolean;
+  /**
+   * Whether it's a step of another command, such as claim's wait, which the CLI runs for that
+   * command. The bridge serves it like any command, but the CLI never offers it on its own.
+   */
+  step?: true;
   /** A strict object. The CLI offers each field as an option named for it in kebab case. */
   input: Input;
   /** The input fields the CLI takes as arguments instead, in order. Only the last may be a list. */

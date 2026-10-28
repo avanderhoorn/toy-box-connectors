@@ -6,7 +6,13 @@
 // what each call says about its caller.
 
 import { rmSync } from "node:fs";
+import { join } from "node:path";
 import { COMMAND_TIMEOUT } from "@commands/model/protocol";
+
+/** Where the bridge for `dataFolder` takes calls. */
+export function commandSocketPath(dataFolder: string): string {
+  return join(dataFolder, "bridge.sock");
+}
 
 export interface CommandSocket {
   /** Stops taking calls, and waits for those in flight until the grace period cuts them off. */
@@ -45,7 +51,10 @@ export function listenForCommands(
       error(error) {
         console.error("Couldn't answer a call on the bridge's socket:", error);
         return Response.json(
-          { error: "The bridge couldn't answer. Its log says why." },
+          {
+            error:
+              "The bridge couldn't answer, so the command may or may not have run. Its log says why. Check `toy-box-slack status` before you run it again.",
+          },
           { status: 500 },
         );
       },
