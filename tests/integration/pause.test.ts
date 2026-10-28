@@ -67,7 +67,7 @@ test.each([
       json: { links: [{ status: "suspended", statusReason: reason }] },
     });
     expect(await inbox()).toMatchObject({ linkStatus: "suspended", requests: [] });
-    await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
+    await waitFor(() => expect(toyBox.runs).toHaveLength(1));
     expect(await stop()).toEqual({ code: 0, stderr: saying() });
     expect(toyBox.runs).toHaveLength(1);
   },
