@@ -45,7 +45,8 @@ afterAll(() => {
 async function linkFakeChannel({
   provider,
   start = NOW,
-}: { provider?: string; start?: number } = {}) {
+  timings = TIMINGS,
+}: { provider?: string; start?: number; timings?: WakeTimings } = {}) {
   const offset = start - Date.now();
   const now = () => Date.now() + offset;
   const toyBox = startFakeToyBox({ now });
@@ -72,7 +73,7 @@ async function linkFakeChannel({
       onChange: () => scheduler?.reconsider(),
       onError: (error) => errors.push(error),
       now,
-      timings: TIMINGS,
+      timings,
       reconnectDelay: 10,
     });
     stops.push(() => client.stop());
@@ -81,7 +82,7 @@ async function linkFakeChannel({
     scheduler = startWakeScheduler(database, client, {
       onError: (error) => errors.push(error),
       now,
-      timings: TIMINGS,
+      timings,
     });
     stops.push(() => scheduler.stop());
     return { client, scheduler };
@@ -177,6 +178,23 @@ test("a wake the lead ignores is repeated on the backoff, then stalls until a re
   await storeRequest(database, now());
   scheduler.reconsider();
   await waitFor(() => expect(toyBox.runs).toHaveLength(5));
+});
+
+test("a link whose channel is busy keeps the decision that started the run", async () => {
+  const { toyBox, database, now, startWaking } = await linkFakeChannel({
+    timings: { ...TIMINGS, settle: 60_000 },
+  });
+  const { scheduler } = await startWaking();
+  await storeRequest(database, now());
+  scheduler.reconsider();
+  await waitFor(async () =>
+    expect(await readOutcomes(database)).toEqual([{ kind: "requests", outcome: "ran" }]),
+  );
+
+  scheduler.reconsider();
+  await Bun.sleep(TIMINGS.debounce);
+  expect(toyBox.runs).toHaveLength(1);
+  expect(scheduler.decision("link")).toEqual({ kind: "wake", reason: "requests" });
 });
 
 test("a lead mid-turn is steered once the request has waited a while", async () => {
