@@ -571,26 +571,32 @@ describe("while Slack isn't connected", () => {
     expect(attempts[3]! - attempts[2]!).toBeLessThan(300);
   });
 
-  test("a change Slack stays disconnected for goes stale when its 15 minutes are up, unread", async () => {
-    const world = await linkFakeChannel();
-    const clickedAt = world.now() - APPLY_VERIFY_MS + 300;
-    const approval = await world.approve(allow("U-carol"), {
-      proposedAt: clickedAt - 60_000,
-      clickedAt,
-    });
-    await world.database.write(
-      (transaction) => transaction`UPDATE installation SET status = 'auth_failed'`,
-    );
+  test.each([
+    ["Socket Mode hasn't said hello", false, "active"],
+    ["Slack has rejected the token", true, "auth_failed"],
+  ] as const)(
+    "a change goes stale when its 15 minutes are up, unread, while %s",
+    async (_, slackUsable, status) => {
+      const world = await linkFakeChannel();
+      const clickedAt = world.now() - APPLY_VERIFY_MS + 300;
+      const approval = await world.approve(allow("U-carol"), {
+        proposedAt: clickedAt - 60_000,
+        clickedAt,
+      });
+      await world.database.write(
+        (transaction) => transaction`UPDATE installation SET status = ${status}`,
+      );
 
-    const { attempts } = world.startApplying();
+      const { attempts } = world.startApplying({ slackUsable: () => slackUsable });
 
-    await waitFor(() => expect(world.changes).toHaveLength(1));
-    expect(await readState(world.database, approval)).toEqual({
-      state: "stale",
-      staleReason: "not_verified",
-    });
-    expect(attempts).toEqual([]);
-  });
+      await waitFor(() => expect(world.changes).toHaveLength(1));
+      expect(await readState(world.database, approval)).toEqual({
+        state: "stale",
+        staleReason: "not_verified",
+      });
+      expect(attempts).toEqual([]);
+    },
+  );
 });
 
 describe("stopping", () => {
