@@ -7,7 +7,7 @@
 
 import type { BridgeDatabase } from "@bridge/server/database";
 import { expireRequests } from "@requests/server/lifecycle";
-import type { RoutineRunOutcome } from "@toybox/model";
+import { REQUESTS_COMMAND, type RoutineRunOutcome } from "@toybox/model";
 import { decideWake, defaultWakeTimings, type WakeTimings } from "@wakes/model";
 import { pruneWakes, readLinkWakes, recordWake } from "./database";
 
@@ -32,7 +32,7 @@ export type WakeLead = (channelId: string) => Promise<RoutineRunOutcome>;
 const MAX_WAIT = 60_000;
 
 const unwoken: Record<Exclude<RoutineRunOutcome, "ran">, string> = {
-  missing: "no routine in the channel runs `toy-box-slack inbox`",
+  missing: `no routine in the channel runs \`${REQUESTS_COMMAND}\``,
   failed: "Toy Box didn't run the routine, so the wake will retry",
   refused: "Toy Box refused to run the routine, so wakes wait for a new request",
 };
