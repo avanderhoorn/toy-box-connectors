@@ -20,9 +20,17 @@ Secret-shaped output is refused both at rendering and at the send boundary.
 Method cooldowns are shared by the bridge's one Slack client in memory. Restart
 may encounter another 429, but never releases an ambiguous post's reservation.
 
-The 30-day cleanup being added in t5 applies to message-ledger rows, measured
-from their latest posted or edited version, not all bridge text. Queued and
-sent outbox payloads remain until unlink or uninstall. Content-free `changes`
+Catch-up records gaps on reconnect, throttled delivery and unreadable events.
+It scans 30 days of roots and follows threads with recent replies, merging
+new or edited versions through normal ingest. History is not a deletion log.
+Catch-up misses replies on older roots and edits to replies in threads it
+does not revisit. Unfinished reads are retried and reported, without holding posts.
+Fresh channel-audience reads happen at link, resume and before every post,
+not at startup or before catch-up.
+
+The startup and hourly cleanup applies to message-ledger rows whose latest
+posted or edited version is over 30 days old, not all bridge text. Queued and sent
+outbox payloads remain until unlink or uninstall. Content-free `changes`
 records remain too. Reviewers must approve retained output separately.
 
 ### Smaller v1: live Markdown probe
@@ -53,9 +61,9 @@ Slack documents the block's combined 12,000-character limit and translation:
 1. Use a local, outbound-only Socket Mode bridge. Never expose Toy Box or proxy
    its unauthenticated API to Slack. Start with `@slack/socket-mode` plus
    `@slack/web-api`, not a custom WebSocket implementation.
-2. Receive events into a durable inbox before acknowledging them. Separate
-   transport receipt, local message storage, agent consumption, and external
-   posting. These are four different checkpoints.
+2. Commit event effects before acknowledging them. Keep transport acknowledgement,
+   ledger storage, agent consumption and external posting distinct. An ack
+   does not mean the lead has read or answered a message.
 3. Keep channel history and thread recovery separate. A high-water timestamp for
    channel roots cannot prove that replies to old roots have been recovered.
 4. Authorize requests in deterministic bridge code using installation,

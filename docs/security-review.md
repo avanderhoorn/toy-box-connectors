@@ -6,9 +6,8 @@ publishes opt-in scheduled updates in that same channel. A Copilot lead reads
 the bridge's ledger and queues posts through a CLI.
 
 **Review status:** this is a reviewer guide, not a compliance attestation or
-deployment approval. History catch-up and automatic ledger retention are
-still being completed on main. The checks below must pass against the landed
-code. Real Enterprise payloads and the company's private app and AI-processing
+deployment approval. The checks below must pass against the landed code.
+Real Enterprise payloads and the company's private app and AI-processing
 policies still need approval. [Platform research](research/slack.md#enterprise-deployment-verified-2026-10-28)
 records the evidence and its limits.
 
@@ -141,9 +140,8 @@ DLP and does not constrain the lead's other shell tools.
 
 ## Retention and deletion
 
-Automatic ledger cleanup is pending on main. The t5 change will delete
-`messages` rows at startup and hourly once their latest posted or edited
-version is over 30 days old, including content-free markers and tombstones.
+Ledger cleanup deletes `messages` rows at startup and hourly once their latest
+posted or edited version is over 30 days old, including markers and tombstones.
 `changes` rows contain only identifiers, timestamps and kinds, and remain.
 
 **That job does not prune outbox payloads.** Queued and sent replies and
@@ -181,9 +179,12 @@ Ambiguous posts are checked for matching metadata about one and five minutes
 later, then remain unknown and reserved. They are never automatically resent,
 and no human-resolution command releases the reservation.
 
-Catch-up is pending on main. Its planned history read cannot guarantee every
-old-thread reply or unseen edit/delete to an older stored message. Successful
-API access is not proof of complete history or approval for AI processing.
+Catch-up rereads up to 30 days of roots and follows threads with recent replies.
+It can recover new messages and current edits, but cannot reliably repair
+missed deletes. It misses replies on older roots and reply edits in threads
+it does not revisit. Unfinished reads are retried and reported in status,
+but do not hold posts. Successful API access is not proof of complete history
+or approval for AI processing.
 
 v1 refuses Slack Connect, pending external shares, org-wide installs, rotating
 credentials and non-Copilot leads. Use exactly one workspace installation.

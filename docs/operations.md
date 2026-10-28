@@ -5,7 +5,6 @@ startup and the login service. Toy Box must run separately on loopback.
 Default state lives in `~/.toy-box-slack`; keep its mode 0700 and
 `credentials.env` mode 0600.
 
-History catch-up and 30-day ledger pruning are still pending on main.
 Replace `TOYBOX_ID` and `USER_ID` below with the IDs from setup.
 
 ## Check status
@@ -14,6 +13,14 @@ The lead runs `toy-box-slack status`. At a terminal, add
 `--channel <toybox-channel-id>` to inspect one link, or omit it to list links.
 Status shows the allowlist, pending requests, wake failures and unconfirmed
 posts. Use `--json` for structured output.
+
+After reconnecting, a minute of throttled events or an unreadable delivery,
+the bridge catches up from channel history and recently active threads.
+It waits out API rate limits and retries unfinished reads. A connected
+bridge can still report `Can't catch up on messages the bridge may have
+missed` in status and logs. Successful recovery clears that problem.
+Catch-up trouble does not hold queued posts. Pause the link if output must
+wait while you investigate.
 
 For digests, the lead runs `activity`, then the exact `mark-read --through N`
 it prints after handling the page. Only the lead can do this. The cursor
@@ -47,6 +54,10 @@ preview and asks for the passphrase.
 The owner must fix the cause before resuming with the passphrase. A new Slack
 channel ID requires unlinking the old link and linking the new ID. Do not edit
 the database to bypass an audience or policy refusal.
+
+Channel audience is checked at link, at resume and before every post, not
+at startup or before catch-up. If a share or privacy-change event was missed
+offline, the audience comparison waits until a later fresh check.
 
 For bad credentials, stop the foreground bridge with Ctrl-C or unload the
 login job, repair `credentials.env`, then restart. Environment variables
@@ -83,16 +94,17 @@ database to recover an unknown post.
 Deleting or restoring an older database can also lose post reservations.
 Check Slack before resuming publications after any state reset.
 
-The pending ledger cleanup runs at startup and hourly. It removes messages
+Ledger cleanup runs at startup and hourly. It removes messages
 whose latest posted or edited version is over 30 days old, including markers
 and tombstones. Content-free change records remain. **Outbox payloads do not
 expire after 30 days:** queued and sent replies and publications keep their
 text until unlink or uninstall.
 
-History recovery still needs to land.
-Planned catch-up reads replies only for roots at most 30 days old. History is
-not an edit/delete event log, so recovery cannot guarantee repairing unseen
-changes to older stored messages.
+Catch-up scans roots at most 30 days old and follows threads with replies
+since the gap. It takes new or edited versions from five minutes before the
+gap, never before the link or the retention horizon. Current snapshots are
+not an event log: do not rely on catch-up to repair missed deletes. Replies
+on older roots are missed, and reply edits alone do not make a thread get reread.
 
 Bridge deletion does not erase Toy Box transcripts, provider copies, sent
 Slack messages, exported files or backups. See the [reviewer guide](security-review.md)
