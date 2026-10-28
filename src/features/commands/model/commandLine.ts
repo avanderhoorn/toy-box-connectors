@@ -1,0 +1,253 @@
+// The command line.
+//
+// The CLI builds each command's grammar from its contract. Every input field is an option named
+// for it in kebab case, except the fields the contract takes as arguments, and every command also
+// takes --channel and --json. Parsing is strict: an option the command doesn't have, one given
+// twice, or a value that looks like the next option is refused, because a lead whose misspelled
+// option was ignored would believe the bridge did what it asked.
+
+import { parseArgs } from "node:util";
+import { z } from "zod";
+import type { CommandContract } from "./contract";
+
+/** The options every command takes besides its contract's. */
+export const globalOptions = {
+  channel: { type: "string", description: "The Toy Box channel to act for, from a terminal" },
+  json: { type: "boolean", description: "Print the bridge's answer as JSON" },
+} as const;
+
+/** One input field as the CLI takes it. */
+export type CommandArgument = {
+  field: string;
+  /** `--revision` for an option, or `<request>` for an argument. */
+  label: string;
+  positional: boolean;
+  type: "string" | "number" | "boolean";
+  /** Whether it takes a list, which an option does by repeating. */
+  multiple: boolean;
+  required: boolean;
+  choices: readonly string[] | null;
+  description: string | undefined;
+};
+
+/** A command line the CLI can send, or why it can't. */
+export type ParsedCommandLine =
+  | { kind: "parsed"; values: Record<string, unknown>; channelId: string | null; json: boolean }
+  | { kind: "refused"; message: string };
+
+/**
+ * The arguments `contract` takes, positionals first in order. Throws for a field the CLI can't
+ * take, so a contract can't ship with an input no command line can give it.
+ */
+export function commandArguments(name: string, contract: CommandContract): CommandArgument[] {
+  const positionals: readonly string[] = contract.positionals ?? [];
+  const fields = Object.entries(contract.input.shape as Record<string, z.ZodType>);
+  const described = fields.map(([field, schema]) => {
+    if (field in globalOptions) {
+      throw new Error(`\`${name}\` can't have an input named ${field}, every command takes it.`);
+    }
+    return describeArgument(name, field, schema, positionals.includes(field));
+  });
+  for (const [index, field] of positionals.entries()) {
+    const argument = described.find((candidate) => candidate.field === field);
+    if (!argument) throw new Error(`\`${name}\` has no input named ${field}.`);
+    if (argument.multiple && index !== positionals.length - 1) {
+      throw new Error(`\`${name}\` can take a list only as its last argument.`);
+    }
+  }
+  if (contract.stdin !== undefined) {
+    const argument = described.find((candidate) => candidate.field === contract.stdin);
+    if (!argument || argument.positional || argument.type !== "string" || argument.multiple) {
+      throw new Error(`\`${name}\` can read only a text option from stdin.`);
+    }
+  }
+  return described.sort(
+    (left, right) =>
+      Number(right.positional) - Number(left.positional) ||
+      positionals.indexOf(left.field) - positionals.indexOf(right.field),
+  );
+}
+
+/** Reads `args`, which follow the command's name, into the values its contract will check. */
+export function parseCommandLine(
+  name: string,
+  contract: CommandContract,
+  args: readonly string[],
+): ParsedCommandLine {
+  const commandArgs = commandArguments(name, contract);
+  const byOption = new Map(
+    commandArgs
+      .filter((argument) => !argument.positional)
+      .map((arg) => [kebabCase(arg.field), arg]),
+  );
+  const options = Object.fromEntries([
+    ...Object.entries(globalOptions).map(([option, { type }]) => [option, { type }]),
+    ...[...byOption].map(([option, { type, multiple }]) => [
+      option,
+      { type: type === "boolean" ? "boolean" : "string", multiple },
+    ]),
+  ]);
+  const { tokens } = parseArgs({
+    args: [...args],
+    options,
+    strict: false,
+    allowPositionals: true,
+    tokens: true,
+  });
+
+  const refuse = (message: string): ParsedCommandLine => ({
+    kind: "refused",
+    message: `${message} Run \`toy-box-slack ${name} --help\`.`,
+  });
+  const values: Record<string, unknown> = {};
+  const seen = new Set<string>();
+  const positionals: string[] = [];
+  let channelId: string | null = null;
+  let json = false;
+  for (const token of tokens) {
+    if (token.kind === "option-terminator") continue;
+    if (token.kind === "positional") {
+      positionals.push(token.value);
+      continue;
+    }
+    const { name: option, rawName, value, inlineValue } = token;
+    const argument = byOption.get(option);
+    const known = option in globalOptions || argument !== undefined;
+    if (!known || !rawName.startsWith("--")) return refuse(`\`${name}\` has no option ${rawName}.`);
+    const multiple = argument?.multiple ?? false;
+    if (seen.has(option) && !multiple) return refuse(`${rawName} appears more than once.`);
+    seen.add(option);
+
+    const type = argument?.type ?? globalOptions[option as keyof typeof globalOptions].type;
+    if (type === "boolean") {
+      if (inlineValue) return refuse(`${rawName} takes no value.`);
+      if (option === "json") json = true;
+      else values[argument!.field] = true;
+      continue;
+    }
+    if (value === undefined) return refuse(`${rawName} needs a value.`);
+    if (!inlineValue && /^--?[A-Za-z]/.test(value)) {
+      return refuse(
+        `${rawName} needs a value, but ${value} looks like an option. To pass it as the value, write ${rawName}=${value}.`,
+      );
+    }
+    if (option === "channel") {
+      channelId = value;
+      continue;
+    }
+    const converted = convert(argument!, value);
+    if (converted.kind === "refused") return refuse(converted.message);
+    if (multiple)
+      values[argument!.field] = [
+        ...((values[argument!.field] as unknown[]) ?? []),
+        converted.value,
+      ];
+    else values[argument!.field] = converted.value;
+  }
+
+  const takes = commandArgs.filter((argument) => argument.positional);
+  const last = takes.at(-1);
+  for (const [index, argument] of takes.entries()) {
+    const given = argument.multiple
+      ? positionals.slice(index)
+      : positionals.slice(index, index + 1);
+    if (given.length === 0) continue;
+    const converted = given.map((value) => convert(argument, value));
+    const refusal = converted.find((result) => result.kind === "refused");
+    if (refusal) return refuse(refusal.message);
+    const accepted = converted.map((result) => (result as { value: unknown }).value);
+    values[argument.field] = argument.multiple ? accepted : accepted[0];
+  }
+  if (positionals.length > takes.length && !last?.multiple) {
+    const extra = positionals.slice(takes.length).join(" ");
+    const expected =
+      takes.length === 0 ? "no arguments" : takes.map((argument) => argument.label).join(" ");
+    return refuse(`\`${name}\` takes ${expected}, but also got ${extra}.`);
+  }
+  return { kind: "parsed", values, channelId, json };
+}
+
+/**
+ * The input `values` give the command, checked against its contract. Says what's missing or wrong
+ * by the option or argument the caller wrote.
+ */
+export function checkCommandInput(
+  name: string,
+  contract: CommandContract,
+  values: Record<string, unknown>,
+): { kind: "checked"; input: unknown } | { kind: "refused"; message: string } {
+  const parsed = contract.input.safeParse(values);
+  if (parsed.success) return { kind: "checked", input: parsed.data };
+  const labels = new Map(
+    commandArguments(name, contract).map((argument) => [argument.field, argument.label]),
+  );
+  const problems = parsed.error.issues.map((issue) => {
+    const field = issue.path[0];
+    const label = typeof field === "string" ? labels.get(field) : undefined;
+    if (label === undefined) return issue.message;
+    if (issue.code === "invalid_type" && values[field as string] === undefined) {
+      return `\`${name}\` needs ${label}`;
+    }
+    return `${label}: ${issue.message}`;
+  });
+  return {
+    kind: "refused",
+    message: `${problems.join(". ")}. Run \`toy-box-slack ${name} --help\`.`,
+  };
+}
+
+/** `wakeAfterMinutes` as an option name, `wake-after-minutes`. */
+export function kebabCase(field: string): string {
+  return field.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+}
+
+function describeArgument(
+  name: string,
+  field: string,
+  schema: z.ZodType,
+  positional: boolean,
+): CommandArgument {
+  let inner: z.ZodType = schema;
+  let description = schema.description;
+  while (
+    inner instanceof z.ZodOptional ||
+    inner instanceof z.ZodDefault ||
+    inner instanceof z.ZodNullable
+  ) {
+    inner = inner.unwrap() as z.ZodType;
+    description ??= inner.description;
+  }
+  const element = inner instanceof z.ZodArray ? (inner.element as z.ZodType) : inner;
+  const multiple = element !== inner;
+  description ??= element.description;
+  const label = positional ? `<${kebabCase(field)}>` : `--${kebabCase(field)}`;
+  const base = { field, label, positional, multiple, description };
+  const required = !schema.safeParse(undefined).success;
+  if (element instanceof z.ZodString) return { ...base, type: "string", required, choices: null };
+  if (element instanceof z.ZodNumber) return { ...base, type: "number", required, choices: null };
+  if (element instanceof z.ZodEnum) {
+    const choices = (element.options as unknown[]).map(String);
+    return { ...base, type: "string", required, choices };
+  }
+  if (element instanceof z.ZodBoolean && !multiple && !positional) {
+    return { ...base, type: "boolean", required, choices: null };
+  }
+  throw new Error(
+    `\`${name}\` takes ${field} as a ${element.def.type}, which no command line can give.`,
+  );
+}
+
+function convert(
+  argument: CommandArgument,
+  value: string,
+): { kind: "converted"; value: unknown } | { kind: "refused"; message: string } {
+  if (argument.choices && !argument.choices.includes(value)) {
+    const choices = argument.choices.join(" or ");
+    return { kind: "refused", message: `${argument.label} takes ${choices}, not ${value}.` };
+  }
+  if (argument.type !== "number") return { kind: "converted", value };
+  if (!/^-?\d+(\.\d+)?$/.test(value)) {
+    return { kind: "refused", message: `${argument.label} takes a number, not ${value}.` };
+  }
+  return { kind: "converted", value: Number(value) };
+}

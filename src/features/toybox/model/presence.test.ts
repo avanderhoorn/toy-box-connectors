@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { observeLeadPresence, restoreLine, type LeadPresence } from "./presence";
+import { observeLeadPresence, restoreArguments, type LeadPresence } from "./presence";
 
 const waiting: LeadPresence = {
   state: "waiting",
@@ -64,28 +64,30 @@ describe("observing the lead's presence", () => {
   });
 });
 
-describe("the restore line", () => {
+describe("the restore arguments", () => {
   const now = Date.parse("2026-10-27T16:00:00.000Z");
   const minutes = (count: number) => now + count * 60_000;
 
-  test("hands back what the lead waited for and the minutes left until its wake", () => {
-    expect(restoreLine({ text: "The owner's decision", wakeAt: minutes(42) }, now)).toBe(
-      `Before this turn you were waiting for "The owner's decision". If that's still true when you finish, call finish_agent_turn with that waitingFor and wakeAfterMinutes 42.`,
-    );
+  test("hand back what the lead waited for and the minutes left until its wake", () => {
+    expect(restoreArguments({ text: "The owner's decision", wakeAt: minutes(42) }, now)).toEqual({
+      waitingFor: "The owner's decision",
+      wakeAfterMinutes: 42,
+    });
   });
 
-  test("leaves the wake out when the lead had none", () => {
-    expect(restoreLine({ text: "CI", wakeAt: null }, now)).toBe(
-      `Before this turn you were waiting for "CI". If that's still true when you finish, call finish_agent_turn with that waitingFor.`,
-    );
+  test("leave the wake out when the lead had none", () => {
+    expect(restoreArguments({ text: "CI", wakeAt: null }, now)).toEqual({
+      waitingFor: "CI",
+      wakeAfterMinutes: null,
+    });
   });
 
   test.each([
-    ["rounds a partial minute up", minutes(41.2), 42],
-    ["waits at least 5 minutes", minutes(1), 5],
-    ["waits at least 5 minutes once the wake is due", minutes(-30), 5],
-    ["waits at most 2 hours", minutes(600), 120],
+    ["round a partial minute up", minutes(41.2), 42],
+    ["wait at least 5 minutes", minutes(1), 5],
+    ["wait at least 5 minutes once the wake is due", minutes(-30), 5],
+    ["wait at most 2 hours", minutes(600), 120],
   ])("%s", (_name, wakeAt, expected) => {
-    expect(restoreLine({ text: "CI", wakeAt }, now)).toEndWith(` wakeAfterMinutes ${expected}.`);
+    expect(restoreArguments({ text: "CI", wakeAt }, now).wakeAfterMinutes).toBe(expected);
   });
 });

@@ -38,14 +38,21 @@ export function observeLeadPresence(
   }
 }
 
-/** The banner line that hands a working lead back what it was waiting for before this turn. */
-export function restoreLine(restore: WaitingStatus, now: number): string {
-  const wake =
-    restore.wakeAt === null ? "" : ` and wakeAfterMinutes ${wakeAfterMinutes(restore.wakeAt, now)}`;
-  return `Before this turn you were waiting for "${restore.text}". If that's still true when you finish, call finish_agent_turn with that waitingFor${wake}.`;
+/** The finish_agent_turn arguments that would restore a waiting status. */
+export type RestoreArguments = { waitingFor: string; wakeAfterMinutes: number | null };
+
+/**
+ * What a working lead passes finish_agent_turn to wait again for what it waited for before this
+ * turn. The wake is the time left until the old one, rounded up and kept within what
+ * finish_agent_turn accepts, and there's none when the lead had none.
+ */
+export function restoreArguments(restore: WaitingStatus, now: number): RestoreArguments {
+  return {
+    waitingFor: restore.text,
+    wakeAfterMinutes: restore.wakeAt === null ? null : wakeAfterMinutes(restore.wakeAt, now),
+  };
 }
 
-// The time left until the old wake, rounded up and kept within what finish_agent_turn accepts.
 function wakeAfterMinutes(wakeAt: number, now: number): number {
   return Math.min(Math.max(Math.ceil((wakeAt - now) / 60_000), 5), 120);
 }
