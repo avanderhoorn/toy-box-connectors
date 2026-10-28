@@ -1,0 +1,1034 @@
+# Slack integration research
+
+Evidence checked: 2026-10-28. This document distinguishes Slack's published
+contract from recommendations and items that need a live workspace to verify.
+No Slack credentials or live workspace have been used.
+
+## Recommendations that affect the architecture
+
+1. Use a local, outbound-only Socket Mode bridge. Never expose Toy Box or proxy
+   its unauthenticated API to Slack. Start with `@slack/socket-mode` plus
+   `@slack/web-api`, not a custom WebSocket implementation.
+2. Receive events into a durable inbox before acknowledging them. Separate
+   transport receipt, local message storage, agent consumption, and external
+   posting. These are four different checkpoints.
+3. Keep channel history and thread recovery separate. A high-water timestamp for
+   channel roots cannot prove that replies to old roots have been recovered.
+4. Authorize requests in deterministic bridge code using installation,
+   channel, and immutable Slack user IDs. Monitoring content is not permission
+   to execute its instructions. Recheck authorization when posting.
+5. Reply in the original thread, using one clearly identified Toy Box app.
+   Do not mirror the internal agent transcript or use customized identities by
+   default.
+6. Treat Slack sends as non-idempotent, with an ambiguous-outcome state. There is
+   no verified public exactly-once contract for `chat.postMessage`.
+7. Prefer a local durable schedule that wakes the lead, then posts its newly
+   generated release notes. Slack's scheduled-message API schedules an already
+   composed message, not future reasoning.
+
+Socket Mode and message delivery contracts:
+[Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/),
+[Events API](https://docs.slack.dev/apis/events-api/),
+[history](https://docs.slack.dev/reference/methods/conversations.history/),
+[replies](https://docs.slack.dev/reference/methods/conversations.replies/),
+[posting](https://docs.slack.dev/reference/methods/chat.postMessage/).
+
+## App manifest, ready for a private test app
+
+This is the recommended first manifest for public and private channel monitoring,
+threaded answers, daily/weekly publications, inbound files, and outbound report
+files. It deliberately omits DMs, agent-container features, impersonation,
+workspace administration, automatic channel joining, and Slack-side configuration
+commands. All message monitoring already exposes mentions, so a separate
+`app_mention` subscription is unnecessary.
+
+```yaml
+_metadata:
+  major_version: 1
+display_information:
+  name: Toy Box
+  description: Channel monitoring and threaded answers from your local Toy Box lead
+  background_color: "#4a154b"
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: false
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: toy-box
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - channels:history
+      - channels:read
+      - groups:history
+      - groups:read
+      - users:read
+      - chat:write
+      - metadata.message:read
+      - files:read
+      - files:write
+      - reactions:write
+settings:
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false
+  event_subscriptions:
+    bot_events:
+      - message.channels
+      - message.groups
+      - member_joined_channel
+      - member_left_channel
+      - channel_archive
+      - channel_deleted
+      - channel_rename
+      - group_rename
+      - app_uninstalled
+      - tokens_revoked
+      - channel_shared
+      - channel_unshared
+      - channel_id_changed
+      - file_deleted
+```
+
+| Scope | Why it is present |
+| --- | --- |
+| `channels:history` | Receive public-channel messages and recover accessible history and threads. |
+| `channels:read` | Resolve/validate channel IDs and detect sharing or ID changes. |
+| `groups:history` | Equivalent message/history access for private channels the app has joined. |
+| `groups:read` | Resolve/validate those private channels and their privacy/sharing flags. |
+| `users:read` | Resolve explicit allowlist selections and check bot/deactivated/external user attributes without collecting email. |
+| `chat:write` | Post threaded answers and publications, and update/delete the app's own messages. |
+| `metadata.message:read` | Read correlation metadata when reconciling an uncertain outbound post. |
+| `files:read` | Read files shared in authorized monitored channels and process deletion notifications. |
+| `files:write` | Upload explicitly published reports/images through the current external-upload flow. |
+| `reactions:write` | Optional acceptance/completion indicators on requests. Remove if not implemented. |
+
+Create a separate **app-level token** with `connections:write` under Basic
+Information. It is not a bot scope and does not go in `oauth_config.scopes.bot`.
+Install the app to obtain a bot token, invite it explicitly to each monitored
+channel, and store both tokens outside the repository. No request URL, public
+tunnel, user token, signing secret, or OAuth redirect server is needed for this
+single-workspace, manually installed Socket Mode setup.
+
+Adding scopes later requires reinstalling the app. Manifest syntax is based on
+the published schema, but server-side validation in Slack's app settings remains
+necessary because no configuration token exists here.
+
+Sources:
+[manifest schema](https://docs.slack.dev/reference/app-manifest/),
+[manifest setup and reinstall behavior](https://docs.slack.dev/app-manifests/configuring-apps-with-app-manifests/),
+[scope catalog](https://docs.slack.dev/reference/scopes/),
+[Socket Mode setup](https://docs.slack.dev/apis/events-api/using-socket-mode/),
+[uninstall event](https://docs.slack.dev/reference/events/app_uninstalled/),
+[revocation event](https://docs.slack.dev/reference/events/tokens_revoked/),
+[Slack Connect](https://docs.slack.dev/apis/slack-connect/),
+[files](https://docs.slack.dev/messaging/working-with-files/).
+
+## Important current-platform qualifications
+
+The May 29, 2025 announcement now explicitly exempts internal customer-built apps.
+It limits affected new commercially distributed, non-Marketplace apps/installations
+to one request per minute and 15 objects per request for both history and replies.
+Its current wording says existing installations are not impacted. Do not copy
+older claims about a universal March 3, 2026 deadline into our setup guide.
+Treat this test app as internal only while that is factually true. Slack explicitly
+includes templated custom apps connecting to a commercial product in its commercial
+distribution guidance.
+[Current dated announcement and FAQ](https://docs.slack.dev/changelog/2025/05/29/rate-limit-changes-for-non-marketplace-apps/).
+
+The current `conversations.replies` method page lists bot scopes for public and
+private channels and no longer states the historical DM/MPIM-only bot restriction.
+That is published documentation, not a live test. Probe a public and a private
+thread during setup and expose unsupported/missing-scope failures rather than
+silently claiming complete thread recovery. Do not request a broad user token
+preemptively.
+[Current method reference](https://docs.slack.dev/reference/methods/conversations.replies/).
+
+## V1 decisions settled for app creation
+
+**Channel-thread status is in, agent container and streaming are out.** On
+March 5, 2026 Slack explicitly enabled `assistant.threads.setStatus` with
+`chat:write`, without `assistant:write` or the AI split-view container.
+Use that existing method for a short "is working on your request..." indicator,
+refresh sparingly for long jobs, and clear it explicitly on failure/cancellation.
+It clears automatically on a reply or after a two-minute timeout. Its currently
+documented default limit is 600 calls/minute/app/workspace.
+[Scope change](https://docs.slack.dev/changelog/2026/03/05/set-status-scope-update/),
+[method contract](https://docs.slack.dev/reference/methods/assistant.threads.setStatus/).
+
+`chat.startStream` currently lists only `chat:write`. Channel streaming requires
+the root `thread_ts`, `recipient_user_id`, and `recipient_team_id`. However, the
+method also lists `messages_tab_disabled`, and we have not live-tested streaming
+with a disabled app Messages tab and no agent declaration. More importantly,
+streams end after 10 minutes, do not extend on append, and are a poor fit for a
+lead doing open-ended research or code work. V1 should use complete answers plus
+a small number of edited progress messages. No extra AI scope is needed for
+that UX.
+[Streaming method and limits](https://docs.slack.dev/reference/methods/chat.startStream/),
+[Slack's long-running-task recommendation](https://docs.slack.dev/ai/developing-agents/#respond).
+
+**Disable the app Messages tab.** The manifest does so explicitly. No `message.im`
+subscription or DM scopes are requested. Explain in the app description/setup
+that requests belong in configured channels. Hiding this entry point is not a
+security control and should not be advertised as preventing every possible DM
+route in every Slack client.
+[Manifest app-home fields](https://docs.slack.dev/reference/app-manifest/#features).
+
+**Subscribe to lifecycle signals, but also reconcile channel metadata.** The
+manifest includes public archive/delete, public/private rename, membership,
+sharing, and ID-change events. Compare `member_left_channel.user` with the bot's
+authenticated user ID to suspend a binding immediately. Public-to-private
+conversion arrives as a `message` subtype already covered by message
+subscriptions. Refresh `conversations.info` when any lifecycle signal arrives,
+on reconnect, periodically for configured channels, and before sends when the
+cached privacy/sharing information is stale. Never bind automatically because
+someone invited the app. Acknowledge and drop content from unconfigured channels
+before writing it to disk, queues, logs, or model context.
+
+Do not add `group_archive` or `channel_unarchive` to an Events API manifest on
+the strength of their names: their current reference pages mark them RTM-only.
+Private archive/unarchive detection therefore must not depend solely on those
+events. Check authoritative `is_archived`, membership/privacy flags, and API
+failures. A rename changes display metadata, not our authorization key.
+[Membership](https://docs.slack.dev/reference/events/member_left_channel/),
+[join](https://docs.slack.dev/reference/events/member_joined_channel/),
+[public archive](https://docs.slack.dev/reference/events/channel_archive/),
+[public delete](https://docs.slack.dev/reference/events/channel_deleted/),
+[public rename](https://docs.slack.dev/reference/events/channel_rename/),
+[private rename](https://docs.slack.dev/reference/events/group_rename/),
+[private archive limitation](https://docs.slack.dev/reference/events/group_archive/),
+[unarchive limitation](https://docs.slack.dev/reference/events/channel_unarchive/),
+[conversion subtype](https://docs.slack.dev/reference/events/message/channel_convert_to_private/),
+[channel info](https://docs.slack.dev/reference/methods/conversations.info/).
+
+**Attach outbox correlation metadata.** Post with:
+
+```json
+{
+  "metadata": {
+    "event_type": "toy_box_outbox",
+    "event_payload": {
+      "outbox_id": "opaque-random-id",
+      "payload_hash": "hash-of-approved-public-content"
+    }
+  }
+}
+```
+
+No schema registration or org-wide deployment is needed for a custom event type.
+Do not add a top-level manifest `events` schema: current Slack docs say that
+requires org-wide deployment, which this local app does not need.
+Read message metadata using `include_all_metadata=true` on history or replies.
+The history/replies method pages do not list a separate metadata scope, while
+the metadata scope explicitly covers metadata-event subscriptions. The v1
+manifest nevertheless includes the correctly named `metadata.message:read`
+scope for the intentional metadata-reading capability, avoiding a reinstall if
+workspace/token filtering requires it. We do not subscribe to other apps'
+metadata events or request wildcard metadata subscriptions.
+[Sending/receiving metadata](https://docs.slack.dev/messaging/message-metadata/),
+[metadata scope](https://docs.slack.dev/reference/scopes/metadata.message.read/),
+[history argument](https://docs.slack.dev/reference/methods/conversations.history/),
+[replies argument](https://docs.slack.dev/reference/methods/conversations.replies/).
+
+After an uncertain send, scan the known target thread, or a bounded channel time
+range for a root post, paginating completely. Match both our actual app/bot
+identity and the exact outbox ID/hash. One matching message proves that post was
+accepted and lets us recover its `ts`. No match does **not** prove non-delivery:
+the message might not yet be visible, metadata might have been rejected, access
+may have changed, or a human may have deleted the post. Retry bounded reads,
+then expose `delivery_unknown` for operator resolution rather than blindly
+resending. This greatly improves recovery but is not an exactly-once primitive.
+Metadata is accessible to others in the workspace, so never put credentials,
+private paths, internal prompts, or sensitive Toy Box context in it.
+[Metadata visibility](https://docs.slack.dev/reference/methods/chat.postMessage/#arguments).
+
+## 1. Connection and runtime
+
+### Wire protocol and lifetime
+
+Call `apps.connections.open` with an app-level token in the Authorization
+header, connect to its temporary WebSocket URL, and wait for `hello`. The
+app-level token opens connections, while the bot token performs workspace Web
+API operations. Never log the connection URL because its ticket is sensitive.
+Socket Mode needs no inbound request URL and its established connection is
+pre-authenticated, so individual payloads do not need HTTP signature checking.
+That authenticates Slack delivery, not the authority of the author of a message.
+[Socket Mode protocol](https://docs.slack.dev/apis/events-api/using-socket-mode/),
+[connection method](https://docs.slack.dev/reference/methods/apps.connections.open/).
+
+Slack currently does not permit Socket Mode apps in the public Marketplace.
+This is suitable for the local internal install. Any future Marketplace strategy
+must revisit the transport without exposing unauthenticated Toy Box. A
+commercially distributed unlisted Socket Mode app can still fall into the
+restricted history/replies rate-limit category.
+[Distribution restriction](https://docs.slack.dev/apis/events-api/using-socket-mode/#creating),
+[commercial rate-limit classification](https://docs.slack.dev/changelog/2025/05/29/rate-limit-changes-for-non-marketplace-apps/).
+
+An application payload arrives as an envelope:
+
+```json
+{
+  "type": "events_api",
+  "envelope_id": "unique-delivery-envelope",
+  "accepts_response_payload": false,
+  "payload": {
+    "type": "event_callback",
+    "team_id": "T...",
+    "api_app_id": "A...",
+    "event_id": "Ev...",
+    "event": { "type": "message", "channel": "C...", "ts": "123.000001" }
+  }
+}
+```
+
+Send `{"envelope_id":"unique-delivery-envelope"}` to acknowledge receipt. The
+envelope ID acknowledges a delivery, while the Events API `event_id` identifies
+the underlying event. A retry or another connection must not create another
+logical request. Keep retry metadata for diagnosis, not authorization.
+`accepts_response_payload` is not a general way to post an answer to a channel.
+[Envelope and ack](https://docs.slack.dev/apis/events-api/using-socket-mode/#events),
+[event identity](https://docs.slack.dev/apis/events-api/#callback-field).
+
+**Recommended handler boundary:** validate the envelope and configured
+installation/channel, insert an approved minimal payload into a transactional
+inbox with a uniqueness constraint, commit, and ack. On a duplicate, ack without
+re-enqueueing. On storage failure, report unhealthy and do not send a success ack.
+Do not fetch history/files or wait for an agent in this path. Set a conservative
+three-second ack budget and measure p99 with a stricter local target such as
+250 ms. Slack explicitly documents three seconds for HTTP Events API responses.
+The Socket Mode guide requires acks but does not publish an equally detailed
+retry timetable, so do not import HTTP's nearly-immediate/one-minute/five-minute
+retry sequence as a Socket Mode guarantee.
+[HTTP retry contract](https://docs.slack.dev/apis/events-api/#retries).
+
+Route installation-level control events separately from channel messages.
+Uninstall/revocation/rate-limit events have no message channel. A `file_deleted`
+event has a file ID but no channel and should affect only our existing
+configured-file index. Do not solve "drop unconfigured messages" by discarding
+every payload that lacks `event.channel`.
+
+Connections refresh every few hours. Handle `disconnect` reasons including
+`warning`, `refresh_requested`, and `link_disabled`, plus unexpected network
+close, absent heartbeat, machine sleep, proxy resets, and DNS/TLS failures.
+Request a fresh URL on reconnect. A warning may precede disconnect by roughly
+ten seconds but is not guaranteed. Slack permits up to ten concurrent
+connections and distributes each payload to any of them without an ordering
+promise. Prefer one bridge owner with a process/database lease. A second socket
+can ease planned rotation, but multiple sockets are not replay or extra API
+quota. Mark every disconnected interval as a potential recovery gap.
+[Lifecycle and connections](https://docs.slack.dev/apis/events-api/using-socket-mode/#connections).
+
+### Library choice
+
+| Option | Assessment |
+| --- | --- |
+| `@slack/socket-mode` + `@slack/web-api` | Recommended starting point. Explicit ack control, SDK reconnection/heartbeat, typed Web API, small integration surface. The control-payload gap below is a production gate. |
+| Bolt | Prefer if we add substantial Slack interactivity, OAuth installation, or agent-container handlers. It adds receiver/middleware behavior that must be audited for ack-before-persistence and is unnecessary for a channel-monitoring worker. |
+| Custom Socket Mode client | Avoid by default. It owns heartbeat frames, ticket refresh, reconnect races, shutdown and protocol evolution. A targeted receiver adapter is preferable to replacing all transport behavior. |
+
+Bolt's receiver passes retry metadata and an ack into `App.processEvent`, and
+its built-in `autoAcknowledge` middleware acks before calling the next listener.
+Do not assume placing a database write inside a high-level event listener gives
+ack-after-commit durability.
+[Bolt receiver, pinned release source](https://github.com/slackapi/bolt-js/blob/ffbe0b6c03a6b1e16b3d5d3c5c9a8ab3effcbc1d/src/receivers/SocketModeReceiver.ts),
+[Bolt auto-ack middleware](https://github.com/slackapi/bolt-js/blob/ffbe0b6c03a6b1e16b3d5d3c5c9a8ab3effcbc1d/src/middleware/builtin.ts).
+
+### Verified local spike
+
+`spikes/slack-sdk/` pins `@slack/socket-mode` 3.1.0, `@slack/web-api` 8.2.0,
+`undici` 7.29.0, and a `ws` 8.21.3 fake server. On this machine, all eight
+protocol/SDK tests pass under **Bun 1.4.4** and **Node 24.19.0**:
+
+```sh
+bun install --cwd spikes/slack-sdk
+cd spikes/slack-sdk
+node --test protocol.test.mjs
+bun test protocol.test.mjs
+```
+
+The tests cover actual localhost HTTP and WebSocket connections, explicit ack
+control, per-envelope retry metadata, clean `refresh_requested` reconnect with a
+new connection-open call, shutdown, surfaced 429 `Retry-After`, HTTP-200
+`missing_scope`, empty-page cursor continuation, binary uploadV2/thread targeting,
+and response-loss duplication with and without automatic SDK retries.
+All tokens are fake literals and every connected endpoint is localhost. No
+environment credentials are read.
+
+The SDK packages publish Node >=20 engines. The spike supports choosing Bun to
+match Toy Box, but does not establish an upstream Bun support promise or prove
+real Slack TLS/proxy/suspend behavior. The exact selected release comes from
+upstream commit `a98047a7f27149812664c78e2dccfe4155b0e145`.
+[Socket SDK package](https://www.npmjs.com/package/@slack/socket-mode/v/3.1.0),
+[Web API package](https://www.npmjs.com/package/@slack/web-api/v/8.2.0),
+[pinned WebSocket implementation](https://github.com/slackapi/node-slack-sdk/blob/a98047a7f27149812664c78e2dccfe4155b0e145/packages/socket-mode/src/SlackWebSocket.ts).
+
+**Reproduced SDK gap, not a passing production feature:** Slack documents
+`app_rate_limited` as a top-level payload with no inner `event`. The SDK 3.1.0
+`events_api` dispatcher dereferences `payload.event.type` unconditionally. Feeding
+the documented top-level shape into that dispatcher rejects with `TypeError`,
+which the spike records as a characterization test. Its async event-listener
+boundary does not turn that into a normal `slack_event` callback. We have not
+observed a real rate-limited Socket Mode delivery, so the precise production
+wrapping remains a live verification item. Before a production claim, add a
+bounded regression-tested receiver adapter for top-level controls or verify a
+supported SDK fix. Do not paper over this with a global unhandled-rejection
+handler or a false "all events processed" health signal.
+[Documented payload](https://docs.slack.dev/reference/events/app_rate_limited/),
+[dispatcher source](https://github.com/slackapi/node-slack-sdk/blob/a98047a7f27149812664c78e2dccfe4155b0e145/packages/socket-mode/src/SocketModeClient.ts).
+
+**Upstream corroboration:** this is already tracked in open
+[issue 2753](https://github.com/slackapi/node-slack-sdk/issues/2753)
+(October 1, 2026) and
+[issue 2167](https://github.com/slackapi/node-slack-sdk/issues/2167).
+An October 20, 2026
+[report includes the rate-limit payload inside a real `events_api` delivery](https://github.com/slackapi/node-slack-sdk/issues/2167#issuecomment-6287990645)
+and a
+[follow-up confirms 3.1.0 is affected](https://github.com/slackapi/node-slack-sdk/issues/2167#issuecomment-6288019493).
+That supports treating this as a real production failure, not merely a
+hypothetical schema mismatch. It is still an external report rather than our own
+live observation. No issue or comment was posted by this research.
+
+## 2. Canonical messages, threads, and read cursors
+
+### Identity and ordering
+
+Slack's message `ts` is an opaque string ID unique within a conversation, not a
+JavaScript number or Date. Store its exact bytes. If comparing time order, parse
+decimal components into integers/BigInt or use a tested normalized decimal
+comparator. Never round through floating point. Do not assume a `C` prefix means
+public or a `G` prefix means private.
+[Message identity](https://docs.slack.dev/messaging/retrieving-messages/#individual_messages),
+[channel-type caveat](https://docs.slack.dev/apis/slack-connect/#same-channel).
+
+Recommended primary key: `(installation_id, canonical_channel_id, message_ts)`.
+Keep aliases for Slack-provided channel-ID migrations. Record the original
+event wrapper, author ID, root `thread_ts`, edit/version time, subtype, source,
+and tombstone state only for configured and permitted observations.
+Keep a monotonically increasing **local change sequence** for newly discovered
+messages, meaningful edits, and tombstones. This local sequence, not maximum
+Slack `ts`, is the lead's consumption cursor.
+
+Use the outer `event_id` to dedupe live deliveries per installation, and the
+canonical message/version key to merge events with backfill. Do not assume
+arrival order: a delete can arrive before a delayed create, and history repair
+can race a newer edit. A tombstone must defeat an older create. Compare explicit
+edit/event version evidence and avoid letting a stale snapshot resurrect a
+deleted message. Changes only to reply counters, language detection, or other
+irrelevant metadata must not become a fresh executable request.
+[Events fields and extensibility](https://docs.slack.dev/apis/events-api/#event-type-structure),
+[language-detection edit caveat](https://docs.slack.dev/reference/events/message/message_changed/).
+
+### Normalization rules
+
+| Incoming shape | Canonical handling |
+| --- | --- |
+| Plain `message` with no subtype | New human message, subject to identity and policy checks. Empty text can still accompany a file. |
+| `thread_ts` absent | Root message, `root_ts = ts`. |
+| `thread_ts === ts` | Thread root, not a reply. This field can remain after every reply is deleted. |
+| `thread_ts !== ts` | Reply in that root's thread, even with no special subtype. |
+| `message_replied` / parent bookkeeping | Refresh thread metadata. Do not execute the root's old text as another request. |
+| `thread_broadcast` | A pointer/reference to a reply. Merge by channel+reply `ts`, hydrate real thread content when necessary, and never count both deliveries as separate questions. |
+| `message_changed` | Use nested `message.ts` as identity and nested content as the new version. Outer `ts` is not the edited message ID. |
+| `message_deleted` | Tombstone `deleted_ts`. Do not execute or re-import original text. |
+| `bot_message`, `bot_id`, `app_id`, self user | Ignore as executable requests. Other bots may be monitored as explicitly untrusted context only if enabled. |
+| `file_share` / `files` | Preserve file IDs and message context. Fetch authorized files asynchronously with bounds. |
+| Join/leave/topic/purpose/name/archive/privacy notices | Lifecycle metadata, not agent instructions. |
+| Unknown subtype / redaction / EKM denial | Preserve a minimal typed diagnostic if in scope. Do not assume it is a human request or substitute invented text. |
+
+Sources:
+[message catalog](https://docs.slack.dev/reference/events/message/),
+[thread detection and retrieval](https://docs.slack.dev/messaging/retrieving-messages/#finding_threads),
+[message_replied caveat](https://docs.slack.dev/reference/events/message/message_replied/),
+[broadcast](https://docs.slack.dev/reference/events/message/thread_broadcast/),
+[edit](https://docs.slack.dev/reference/events/message/message_changed/),
+[delete](https://docs.slack.dev/reference/events/message/message_deleted/).
+
+### Four checkpoints, not one
+
+| Checkpoint | Meaning |
+| --- | --- |
+| Durable event inbox | Slack delivery is safe to ack. It says nothing about agent processing. |
+| Recovery coverage | A specified channel/time range or thread has been enumerated to a known boundary. Root coverage is not thread coverage. |
+| Per-binding agent cursor | The lead has explicitly consumed/classified local change records through a contiguous sequence. |
+| Outbound ledger | A particular approved response/publication is pending, sent, failed, cancelled, or delivery-unknown. |
+
+Recommended read-tool contract: return an immutable bounded batch, `batch_id`,
+`from_seq`, `through_seq`, `has_more`, and completeness warnings. Store a lease
+so restarting a lead yields the same unfinished batch. A separate acknowledge
+operation advances the cursor only through a contiguous committed batch, using
+an expected cursor/version check. Reading a specific thread for context does
+not advance the unread cursor. Filtered items still receive a durable
+`ignored_by_policy` disposition so they do not recur forever.
+
+Persist response/action intent before acknowledging work as consumed. A crash
+after a read but before a reply must not lose the request, while a crash after a
+sent reply must not make the lead execute the same command again. Deduplicate
+external side effects by a stable action ID, not prompt text. A transport ack is
+never evidence that the lead actually read anything.
+
+Recommended agent tools, scoped by a bridge-issued binding capability:
+`read_unread`, `read_thread`, `ack_batch`, `reply_to_request`,
+`publish_update`, and `get_integration_status`. The agent should name a request
+or schedule occurrence, not invent a channel/user destination. These are design
+recommendations, not existing Toy Box API claims.
+
+## 3. Recovery after downtime and pagination
+
+`conversations.history` returns recent channel history newest first.
+`conversations.replies` returns a root followed by its replies, oldest first.
+Use the actual root timestamp when replying/fetching threads, not a reply's
+timestamp. Treat pagination cursors as short-lived page tokens, not durable read
+cursors. They expire and should not be persisted for hours/days. An empty or short
+page can still have `next_cursor`, so page size is never a completion test.
+The replies documentation's time-pagination prose is internally confusing about
+which boundary to move. Prefer its documented `next_cursor` with fixed
+`oldest`/`latest` bounds rather than copying that prose into custom paging logic.
+[History order](https://docs.slack.dev/reference/methods/conversations.history/#pagination-time),
+[replies order](https://docs.slack.dev/reference/methods/conversations.replies/#pagination-by-time),
+[cursor contract and expiry](https://docs.slack.dev/apis/web-api/pagination/).
+
+Recommended repair algorithm:
+
+1. Establish event ingestion first. Take a fixed repair upper bound and record
+   the last completed coverage interval. Use Slack timestamps where available
+   and account for local clock skew if deriving a wall-clock boundary.
+2. Read channel roots over `[previous coverage - overlap, repair upper bound]`,
+   with `inclusive=true` and cursor pagination. Persist each page before moving
+   on. Merge by canonical IDs and versions. Do not advance coverage until every
+   page succeeds. On `invalid_cursor`, restart that fixed interval, deduping.
+3. Inventory thread roots over the declared monitoring horizon, not just roots
+   created since disconnection. A new reply can belong to a years-old root, and
+   a previously unthreaded root can gain its first reply while the bridge is
+   offline. A per-channel maximum message timestamp will miss this.
+4. Re-read all known active/request threads and roots whose reply metadata
+   changed. For a strict retained-root coverage claim, enumerate roots across
+   all accessible retained history and reconcile relevant thread contents.
+   Partial metadata is a hint, not proof that replies are complete.
+5. To repair old edits/deletes, periodically compare complete in-scope snapshots
+   of roots **and** replies. `latest_reply` alone cannot reveal an edit to an old
+   reply. Do not mark missing records deleted after a partial scan or an access
+   failure.
+6. Merge concurrent live deliveries using message versions and overlap. Slack
+   does not provide a transactional cross-page snapshot here. Repeat the tail
+   as needed, then publish coverage/completeness status and wake the lead once
+   for new authorized work.
+
+**Honest guarantee:** events plus reconciliation can converge on accessible
+current state within an explicit horizon. They cannot reconstruct a message
+created and deleted entirely during downtime, an intermediate edit version,
+retention-expired content, or data the bot cannot access. Hidden edit/delete
+records are not returned by history.
+[Hidden events](https://docs.slack.dev/reference/events/message/#hidden_subtypes),
+[deleted messages disappear from history](https://docs.slack.dev/reference/events/message/message_deleted/),
+[history limits](https://docs.slack.dev/reference/methods/conversations.history/).
+
+Expose coverage such as `live_only`, `tracked_threads`, or
+`retained_roots_reconciled`, along with the time horizon, outstanding repairs,
+and retention/access gaps. A finite lookback is a product limitation, not an
+implementation of "all channel threads recovered." For v1, default to explicit
+live monitoring plus durable tracked threads and offer an initial retained-root
+inventory. Do not call it fully caught up until the selected inventory/repair
+has finished. Summaries and release notes must disclose material missing input.
+
+## 4. Rate limits and backpressure
+
+These are published allowances, not a plan to run continuously at the ceiling.
+Rate limits are per method, app, and workspace, not per token. Different bot
+tokens do not create extra quota. Slack does not publish a stable burst allowance.
+Use a workspace/method scheduler, plus a channel write queue.
+[Rate-limit model](https://docs.slack.dev/apis/web-api/rate-limits/).
+
+| Method / feature | Current published limit | Consequence |
+| --- | --- | --- |
+| [history](https://docs.slack.dev/reference/methods/conversations.history/), [replies](https://docs.slack.dev/reference/methods/conversations.replies/) | Tier 3, 50+/min for internal/Marketplace apps. Affected new commercial unlisted apps: 1/min, max/default 15 objects. | Event-first, bounded prioritized repair. Use 100-200 pages for the internal profile, 15 for restricted installations. |
+| [conversations.list](https://docs.slack.dev/reference/methods/conversations.list/) | Tier 2, 20+/min | Resolve at setup and cache, not before each message. |
+| [conversations.info](https://docs.slack.dev/reference/methods/conversations.info/) | Tier 3, 50+/min | Refresh configured channels adaptively and on lifecycle changes. |
+| [users.info](https://docs.slack.dev/reference/methods/users.info/) | Tier 4, 100+/min | Resolve IDs at configuration and cache bounded profile metadata. |
+| [chat.postMessage](https://docs.slack.dev/reference/methods/chat.postMessage/) | Generally 1 message/sec/channel plus a workspace limit of several hundred/min | Threads share their parent channel's write budget. Coalesce progress. |
+| [chat.update](https://docs.slack.dev/reference/methods/chat.update/) | Tier 3, 50+/min | Debounce edits. Slack's agent-design guidance suggests at most one update every 3 seconds. |
+| [reactions.add](https://docs.slack.dev/reference/methods/reactions.add/) | Tier 3, 50+/min | Do not let optional acknowledgement reactions starve actual responses. |
+| [files.info](https://docs.slack.dev/reference/methods/files.info/), [getUploadURLExternal](https://docs.slack.dev/reference/methods/files.getUploadURLExternal/), [completeUploadExternal](https://docs.slack.dev/reference/methods/files.completeUploadExternal/) | Tier 4, 100+/min each | Bound concurrent transfers and keep durable multi-stage upload state. |
+| [apps.connections.open](https://docs.slack.dev/reference/methods/apps.connections.open/) | Tier 3, 50+/min | Reconnect backoff, no busy loop. |
+| [chat.scheduleMessage](https://docs.slack.dev/reference/methods/chat.scheduleMessage/) | Tier 3, 50+/min | Not our reasoning scheduler. |
+| [chat.startStream](https://docs.slack.dev/reference/methods/chat.startStream/) | Tier 2, 20+/min | Optional future feature, not v1. |
+| [assistant.threads.setStatus](https://docs.slack.dev/reference/methods/assistant.threads.setStatus/) | Special, default 600/min/app/workspace | Refresh only as needed and clear on terminal states. |
+| Events API | 30,000 deliveries/hour/app/workspace | `app_rate_limited` means possible gaps that need explicit repair. |
+
+The general history page currently reports max 999/default 100, while the
+May 2025 FAQ describes 1,000 objects for internal apps. Neither justifies
+depending on a 1,000-item page. Request 100-200 for internal installs, follow
+returned cursors even if Slack caps pages, and persist the configured distribution
+profile. Re-evaluate the distribution classification before public/commercial
+release. A templated installation is not an exemption.
+[May 2025 FAQ](https://docs.slack.dev/changelog/2025/05/29/rate-limit-changes-for-non-marketplace-apps/).
+
+On HTTP 429, persist `next_attempt_at >= now + Retry-After`, with jitter added
+after the required delay. Cool down that workspace+method, not every workspace
+or unrelated method. Reads may retry transient failures with bounded exponential
+backoff. Authentication/scope/permission failures need intervention, not an
+infinite retry loop. Leave the cursor unchanged on an unfinished page.
+[429 behavior](https://docs.slack.dev/apis/web-api/rate-limits/#headers).
+
+Configure SDK Web API calls with explicit finite timeouts,
+`retryConfig: { retries: 0 }`, and `rejectRateLimitedCalls: true` when the durable
+scheduler owns retries. The SDK otherwise retries failed calls up to ten times
+over roughly thirty minutes and can pause its entire client queue on a 429.
+That is useful for simple bots but undermines durable method-specific scheduling
+and can duplicate a non-idempotent post after response loss. The spike reproduces
+both outcomes. Socket connection-opening retries should have their own bounded,
+observable policy instead of inheriting outbound-message retry semantics.
+[SDK retry controls](https://docs.slack.dev/tools/node-slack-sdk/web-api/#automatic-retries),
+[pinned queue/retry implementation](https://github.com/slackapi/node-slack-sdk/blob/a98047a7f27149812664c78e2dccfe4155b0e145/packages/web-api/src/WebClient.ts).
+
+## 5. Posting and publications
+
+### Threading, attribution, and delivery
+
+Use `thread_ts = original root ts` and `reply_broadcast=false` for answers.
+Publish daily/weekly summaries as one intentional root post unless the owner
+chooses a standing release-notes thread. Thread replies are visible to everyone
+who can see the channel, not only the allowlisted requester.
+[Thread posting](https://docs.slack.dev/reference/methods/chat.postMessage/#threads).
+
+Use one Toy Box bot identity and identify the channel lead in a small content
+label if needed. Do not request `chat:write.customize` for v1. That scope lets
+messages change username/avatar, Slack requires clear user permission and
+signposting for impersonation, and its delete semantics have limitations. It is
+not a way to turn local agents into actual Slack users.
+[Customized authorship](https://docs.slack.dev/reference/methods/chat.postMessage/#authorship).
+
+Persist a unique approved action key, target, request/schedule provenance,
+content hash, policy version, attempts, and returned channel/`ts` in an outbox.
+Recheck binding enabled state, requester allowlist, source version/deletion,
+channel membership, destination sharing/privacy, and content approval at send
+time. Keep `delivery_unknown` separate from retryable failure and from sent.
+Only a successful response or a positive own-message metadata match resolves
+the ambiguity. Do not claim that `client_msg_id` gives permanent exactly-once
+delivery: the current method argument table provides no such contract.
+[Method arguments and possible partial-success errors](https://docs.slack.dev/reference/methods/chat.postMessage/).
+
+### Formatting
+
+V1 should use conventional `section`/`context` blocks with Slack `mrkdwn` for
+structured cards and safe text for ordinary replies. CommonMark and Slack
+`mrkdwn` differ: `**bold**` is not Slack's `*bold*`, and Markdown links are not
+Slack's `<url|label>`. For LLM-authored standard Markdown, the newer `markdown`
+block lets Slack translate it and supports tables, lists, and code. Its combined
+limit is 12,000 characters, it is documented for AI-feature apps, and its
+`block_id` is not retained. Gate it behind a capability check instead of assuming
+the no-container app renders it identically everywhere.
+[Formatting](https://docs.slack.dev/messaging/formatting-message-text/),
+[Markdown block](https://docs.slack.dev/reference/block-kit/blocks/markdown-block/).
+
+Supply a top-level fallback `text` containing the important content for
+notifications and screen readers. Escape untrusted `&`, `<`, and `>` before
+inserting them into Slack-formatted text. Build any approved `<@USER>` mentions
+as separate typed elements after escaping, restricted to configured recipients.
+Neutralize `<!channel>`, `<!here>`, `<!everyone>`, and `<!subteam^...>` from model
+output and quoted Slack text. `parse=none`, `link_names=false`, and
+`verbatim=true` where supported reduce automatic parsing but do not neutralize
+explicit Slack mention syntax by themselves. Do not allow arbitrary model JSON
+to become Block Kit.
+[Escaping and mentions](https://docs.slack.dev/messaging/formatting-message-text/#escaping),
+[automatic parsing](https://docs.slack.dev/messaging/formatting-message-text/#automatic-parsing).
+
+Keep ordinary `text` near 4,000 characters. Slack truncates above 40,000.
+Section text has its own 3,000-character limit, and messages allow up to 50
+blocks. Split on safe paragraph/code boundaries with a stable segment index, or
+upload an explicitly approved report instead. Never silently truncate a request,
+approval, or answer without telling the user. Set `unfurl_links=false`,
+`unfurl_media=false`, and, where available, `unfurl_app_links=false` for internal
+or potentially sensitive links. Never post a private localhost Toy Box URL as if
+Slack recipients could open it, and never expose Toy Box just to make it work.
+[Text limits and unfurls](https://docs.slack.dev/reference/methods/chat.postMessage/),
+[section block](https://docs.slack.dev/reference/block-kit/blocks/section-block/),
+[block count](https://docs.slack.dev/reference/block-kit/blocks/).
+
+For progress edits, keep the same own message channel/`ts` and send complete
+`blocks` plus fallback `text` so `chat.update` retention rules cannot unexpectedly
+remove or preserve stale blocks. Ephemeral messages are not durable and cannot
+be edited with `chat.update`. They are unsuitable for request tracking.
+[Update semantics](https://docs.slack.dev/reference/methods/chat.update/).
+
+### Daily and weekly releases
+
+Use a durable local occurrence key such as `(binding, schedule, intended_time)`.
+Wake the lead, read the configured source range, produce a public-facing draft,
+and post through the normal authorized outbox. Define IANA time zone, DST
+behavior, catch-up policy, quiet hours, overlap prevention, and what happens if
+the previous run remains active. Prefer one summarized missed-run publication
+over flooding the channel after a long outage.
+
+`chat.scheduleMessage` only schedules an already composed message. Its current
+limits are 120 days into the future and no more than 30 messages per five-minute
+window in one channel. It also documents a bug where messages using `metadata`
+do not post. Avoid it for our correlated recurring output.
+[Scheduling contract and metadata bug](https://docs.slack.dev/reference/methods/chat.scheduleMessage/).
+
+## 6. Current agent UX, without adopting unnecessary surfaces
+
+Slack's June 30, 2026 Agent messaging experience uses `features.agent_view`.
+New apps cannot choose the older `assistant_view`. This is not a reason to add
+DMs to a channel-monitoring product. If we later offer an agent container,
+declare `agent_view`, add `assistant:write`, route DM conversations explicitly,
+and test the paid-plan features. Do not ship a new manifest copied from a 2025
+assistant tutorial.
+[Dated change](https://docs.slack.dev/changelog/2026/06/30/agent-messages-tab/),
+[current manifest](https://docs.slack.dev/reference/app-manifest/#features),
+[paid-plan qualification](https://docs.slack.dev/ai/developing-agents/).
+
+Current agent-session methods are `agents.sessions.setStatus` and
+`agents.sessions.rename`, replacing legacy `assistant.threads.*` methods through
+a compatibility bridge. Session lifecycle is `processing`, `active`,
+`suspended`, and `closed`. Only declared agent apps can create sessions.
+`processing` times out after one hour unless refreshed. A subscribed
+`agent_session_stopped` event enables the native stop button, but clicking it
+does not itself cancel Toy Box work or transition status: the integration must
+do that. Do not display a stop affordance until cancellation actually reaches
+the running worker and suppresses pending writes.
+[Sessions and cancellation](https://docs.slack.dev/ai/agent-sessions/),
+[status method](https://docs.slack.dev/reference/methods/agents.sessions.setStatus/).
+
+The current general design guide mentions `agents.sessions.create`, whereas the
+dedicated session guide and method reference recommend create-if-needed
+`agents.sessions.setStatus`. Use the latter specific documented contract rather
+than introducing a guessed method.
+[General design guide](https://docs.slack.dev/concepts/agent-design/).
+
+Recommended channel etiquette: acknowledge only accepted requests, answer in
+thread, keep progress brief and meaningful, cite Slack source permalinks,
+separate observation from action, and publish one useful final result. Default
+to explicit bot mentions from allowlisted users plus allowlisted follow-ups in
+an already owned request thread. A generic message elsewhere in a monitored
+channel is context, not a command. Offer broader question-answering modes as an
+explicit owner policy, not as unbounded model discretion.
+[Slack's transparency/data-boundary guidance](https://docs.slack.dev/concepts/agent-design/),
+[permalink method](https://docs.slack.dev/reference/methods/chat.getPermalink/).
+
+## 7. Installation identity, access, and policy
+
+Use a bound installation identity validated at startup, the immutable configured
+channel ID, and explicit Slack user IDs. Resolve display names only for UI.
+User IDs may use `U` or `W` prefixes. Never authorize by display name, email text
+inside a message, the person being quoted, or the `authorizations` array, which
+describes installation visibility rather than the speaker's permission to make
+requests. `users:read.email` is unnecessary for an ID allowlist.
+[User response example](https://docs.slack.dev/reference/methods/users.info/),
+[event authorizations](https://docs.slack.dev/apis/events-api/#callback-field).
+
+Separate these policy dimensions:
+
+| Permission | Recommended default |
+| --- | --- |
+| Channels whose content may be collected | Only configured bindings, never all channels the bot joins. |
+| Authors whose content may be observed | Explicit owner-configured monitoring scope. |
+| People who may issue requests | Explicit user-ID allowlist, denied by default. |
+| Recipients/destinations for answers and publications | The same bound Slack channel and request thread, or an explicitly configured publication destination. |
+| Actions authorized from Slack | Narrow approved action classes. Observation never grants shell/secret/network authority. |
+| Data allowed in output | Explicit public-facing response/draft, never all internal Toy Box messages. |
+
+The bot must be invited to each private channel. Do not request
+`chat:write.public` or `channels:join` just to avoid membership checks. Verify
+membership and channel type at setup and on reconnect. `not_in_channel`,
+`channel_not_found`, `missing_scope`, and `no_permission` are explicit degraded
+states, not empty history or a reason to widen scopes automatically.
+[Scope semantics](https://docs.slack.dev/reference/scopes/),
+[history token visibility](https://docs.slack.dev/reference/methods/conversations.history/#usage-info).
+
+**Slack Connect is off by default.** An installed workspace's event wrapper
+does not prove the author belongs to that workspace. External users can be
+visible in shared channels, names and privacy can differ on each side, channel
+IDs can migrate, and `is_stranger` only covers a particular class of external
+users. Use `conversations.info.is_ext_shared`, authoritative user/team fields,
+and explicit external-user consent. Detect a channel becoming shared and pause
+publication before the next write. A complete lack of fresh privacy metadata
+must block sensitive output, not preserve a stale "internal" assumption.
+[Slack Connect behavior and sharing warnings](https://docs.slack.dev/apis/slack-connect/),
+[ID migration](https://docs.slack.dev/reference/events/channel_id_changed/).
+
+On `tokens_revoked`, match revoked **user IDs** to installation credentials.
+The event does not contain token strings. On `app_uninstalled`, mark the
+installation inactive, stop collection/wakes/scheduled sends, cancel queued
+writes, and apply the data-deletion policy. These events can arrive in either
+order. Authentication failures may be the only signal if the Socket Mode token
+itself stops working, so monitor both event and API paths.
+[Revocation](https://docs.slack.dev/reference/events/tokens_revoked/),
+[uninstall ordering](https://docs.slack.dev/reference/events/app_uninstalled/).
+
+## 8. Files and images
+
+For inbound files, use IDs from an authorized message rather than fetching
+arbitrary URLs supplied by a user/model. Slack Connect can return partial file
+objects requiring `files.info`. Track unavailable/deleted/processing files as
+such and let text-only handling continue with an explicit attachment warning.
+Apply byte count, total attachment count, timeout, MIME/magic-byte checks,
+decompressed size, image dimension limits, and per-binding quotas before model
+ingestion. Filenames are untrusted metadata, never destination paths.
+[File object and partial access](https://docs.slack.dev/reference/objects/file-object/),
+[file info](https://docs.slack.dev/reference/methods/files.info/).
+
+For `file_deleted`, purge downloaded bytes and derived caches for that ID, and
+remove it from future context. Slack explicitly does not emit this event for
+files removed by retention policy. Local TTL/deletion jobs and periodic access
+reconciliation are therefore necessary; absence of a deletion event is not
+permission to retain the file indefinitely.
+[Deletion event and retention exception](https://docs.slack.dev/reference/events/file_deleted/).
+
+**Never attach a Slack token merely because a field is named `url_private`.**
+Remote-file integrations can supply arbitrary external URLs in that field.
+For Slack-hosted content, require HTTPS and an exact configured Slack file host,
+such as `files.slack.com`, before attaching `Authorization: Bearer ...`.
+Reject URL credentials, lookalike domains, unexpected ports and private-address
+targets. Disable redirects or validate each hop and strip credentials on any
+non-allowlisted target. Treat external files as external links and do not fetch
+them automatically. Do not pass token-bearing URLs to models, Slack blocks,
+browser rendering, or logs.
+[Slack's explicit download security guidance](https://docs.slack.dev/messaging/working-with-files/#download).
+
+`files.upload` sunset on November 12, 2025. The supported upload is:
+`files.getUploadURLExternal` -> binary POST to returned upload URL ->
+`files.completeUploadExternal`. `filesUploadV2` wraps these stages, and our
+runtime spike proves a binary/threaded round trip against a fake. Production
+recovery should retain file ID, stage, content hash and target so a crash does
+not restart the whole flow with a fresh duplicate file. Completion may be called
+only once. Its response loss needs reconciliation, not unlimited repeats.
+Without `channel_id` the upload remains private to the token holder.
+[Sunset](https://docs.slack.dev/reference/methods/files.upload/),
+[upload steps](https://docs.slack.dev/messaging/working-with-files/),
+[completion contract](https://docs.slack.dev/reference/methods/files.completeUploadExternal/).
+
+The SDK helper buffers file contents in memory. Keep v1 file-size/concurrency
+limits conservative and use an explicit staged transfer if resumability or
+larger files are needed. In 8.2.0 the upload request reuses the client's default
+Authorization headers. The helper also bypasses API-method URL derivation, so
+`allowAbsoluteUrls: false` does not validate its server-returned upload URL.
+Validate that HTTPS upload host, use a constrained fetch/transport, reject
+unexpected redirects, and never let an agent supply an upload URL or arbitrary
+SDK method. The pinned implementation uses `redirect: "error"`.
+[Pinned upload/request implementation](https://github.com/slackapi/node-slack-sdk/blob/a98047a7f27149812664c78e2dccfe4155b0e145/packages/web-api/src/WebClient.ts),
+[pinned buffering implementation](https://github.com/slackapi/node-slack-sdk/blob/a98047a7f27149812664c78e2dccfe4155b0e145/packages/web-api/src/file-upload.ts).
+
+For a Slack-hosted output image use:
+
+```json
+{
+  "type": "image",
+  "slack_file": { "id": "F..." },
+  "alt_text": "Meaningful description of the published image"
+}
+```
+
+Upload/share the image to the intended channel first and verify appropriate
+access. `slack_file` accepts exactly one of `id` or `url`, and currently supports
+PNG/JPG/JPEG/GIF. It avoids publishing a private authenticated URL as a public
+`image_url`. The file needs to be accessible to its poster, and a successfully
+uploaded file is not by itself proof that every intended recipient can view it.
+[Slack file composition object](https://docs.slack.dev/reference/block-kit/composition-objects/slack-file-object/).
+
+## 9. Security, data boundaries, and operations
+
+This is a threat model and implementation guidance, not an exploit audit of a
+finished bridge. Toy Box has shell-capable agents and no authentication, so a
+Slack message is an untrusted external input crossing a high-impact boundary.
+The bridge must not treat a quoted instruction or someone else's thread message
+as the Toy Box owner. Delimiters, provenance labels, and system-prompt wording
+help comprehension but are not an execution sandbox.
+
+Keep Slack credentials exclusively in the bridge process, outside artifacts and
+agent context. A gitignored `.env.local` is acceptable for local development
+with restrictive file permissions, no shell tracing, and redacted errors.
+Production should use a service-owned secret file or OS secret store.
+Redact tokens, refresh tokens, response URLs, connection tickets, request bodies,
+and file URLs from structured logs. Turn off SDK debug payload logging.
+Tests must inject credentials explicitly and refuse accidental live endpoints.
+Bun's test environment handling is useful defense in depth, not the sole
+barrier against test code using an inherited environment variable.
+[SDK debug logging](https://docs.slack.dev/tools/node-slack-sdk/web-api/#logging),
+[Socket SDK raw-message logger](https://github.com/slackapi/node-slack-sdk/blob/a98047a7f27149812664c78e2dccfe4155b0e145/packages/socket-mode/src/SocketModeClient.ts).
+
+Enforce binding capabilities in bridge tools and do not expose arbitrary Slack
+API method names, tokens, filesystem paths, or destinations. Bind local RPC to
+loopback or a Unix socket and require a capability even there. Keep the Toy Box
+API private. Validate configured Toy Box origins and all upload/download targets
+against SSRF/credential-forwarding risks. Do not turn a Slack URL into a
+network-fetch instruction or put raw text into a shell command.
+
+**Important residual risk:** if the agent runs under the same OS identity with
+unrestricted shell access, hiding tokens from its prompt is not a security
+boundary. It can read that identity's files/environment or reach unauthenticated
+local services. For stronger protection, run the bridge as a separate user and
+use a sandboxed/read-only monitoring worker with narrowly scoped tool
+capabilities. A generic owner-level Toy Box lead cannot safely become an
+unrestricted autonomous executor for arbitrary Slack users just because a
+prompt says "treat this as untrusted." Publish that limitation honestly.
+
+Never mirror every internal Toy Box response. The lead should intentionally
+compose Slack-safe replies, release notes, or discussion summaries through a
+dedicated publication action. Separate routine status from model reasoning,
+tool output, local paths, private repository content, other channels, and
+credentials. An allowlisted requester does not authorize disclosure to everyone
+else in a Slack channel or to Slack Connect partners.
+[Slack's data-boundary guidance](https://docs.slack.dev/concepts/agent-design/#how-agents-show-up),
+[external-channel warning](https://docs.slack.dev/apis/slack-connect/#design-considerations).
+
+The current Developer Policy requires appropriate consent for collecting,
+storing and using Slack data, prohibits training an LLM on it, requires strong
+encryption for stored/served data, and requires deletion of associated data
+within 14 business days after app deletion/discontinuation. Establish local
+retention, encrypted storage/backups, deletion procedures, and a clear notice of
+which agent providers process selected Slack content before live deployment.
+Do not assume the installer alone can waive workplace policy or authorize
+unrelated private data being sent to a model provider. This research makes no
+legal determination about a particular provider contract.
+[Developer Policy, effective December 10, 2024](https://docs.slack.dev/developer-policy/).
+
+The test manifest leaves token rotation off to avoid an unimplemented expiry
+path. For a production deployment consider rotation only after implementing
+atomic refresh-token replacement and single-flight refresh. Slack access tokens
+with rotation expire after 12 hours, refresh tokens rotate, and enabling rotation
+cannot simply be undone. The current guide also includes app-level token
+rotation, so do not assume the Socket Mode credential is permanently exempt.
+[Rotation contract](https://docs.slack.dev/authentication/using-token-rotation/).
+
+Recommended health states: `starting`, `connected`, `repairing`,
+`degraded_permissions`, `degraded_storage`, `rate_limited`, `delivery_unknown`,
+`paused_by_policy`, and `uninstalled`. Report last successful receive, last ack,
+oldest inbox age, repair coverage, agent unread age, queue sizes, pending
+publication age, method-specific cooldown, reconnect count, and last sanitized
+error. A connected socket is not evidence that monitoring is complete or that
+the lead is answering.
+
+### Operator actions
+
+| Condition | Runbook |
+| --- | --- |
+| First startup / credential replacement | Validate installation identity, granted scopes, configured channel membership and exact destinations. Keep publication paused until capability probes succeed. Never print tokens in diagnostics. |
+| Socket outage / long sleep | Inspect sanitized disconnect reason and reconnect age, repair the recorded gap, show selected recovery horizon, and avoid declaring the agent caught up while thread repair remains pending. |
+| Rate-limited repair | Respect method-specific persisted cooldowns, prioritize pending request threads over broad inventory, and show estimated coverage lag rather than increasing concurrency or tokens. |
+| Unknown post outcome | Pause that logical action, inspect app-authored metadata in its target, and let an operator link the found `ts`, cancel, or explicitly authorize a duplicate-risk resend. Never automatically republish the whole report. |
+| Membership/privacy/share change | Pause affected output, refresh channel flags, and require explicit owner reapproval for a wider destination. Do not relink by a reused channel name. |
+| Uninstall / revocation | Disable the installation, hold work, remove credentials and apply the deletion policy. A reinstall gets a newly validated identity/configuration, not an automatic replay of stale queued commands. |
+| Storage failure / restore | Preserve failed checkpoints, restore an encrypted backup, run deduping repair, and reconcile unknown writes before resuming the outbox. Test restore procedures, not only backup creation. |
+| Retention/deletion request | Purge source payloads, downloaded files, derived summaries/caches and applicable backups on the defined schedule while retaining only the minimum non-content audit state the policy permits. |
+
+## 10. Tests and live acceptance
+
+### Test layers
+
+| Layer | Required coverage |
+| --- | --- |
+| Pure unit | Timestamp comparison including equal/adjacent decimal IDs, subtype normalization, root/reply identity, mention escaping, allowlist/binding checks, policy changes, file-URL validation, cursor compare-and-swap, schedule DST/catch-up. |
+| Database integration | Crash before/after inbox commit and ack, duplicate event deliveries, stale creates after tombstones, lease expiry, concurrent readers, outbox uniqueness, response-loss unknown state, disk-full errors, checkpoint rollback. |
+| Slack protocol fake | Real WebSocket hello/ack/ping/pong/close/refresh, changed envelope IDs with same event ID, disordered events, top-level control payloads, forced close, missing heartbeat and reconnect. |
+| Web API fake | HTTP-200 `ok:false`, 429 and `Retry-After`, transport loss after accepted post, metadata rejected/missing, partial pages and expired cursors, old-root new replies, file processing/download/redirect failures, three-stage upload. |
+| Bridge end-to-end | Fake Slack + real bridge + isolated Toy Box or faithful Toy Box fake, wake/read-thread/reply/update/restart/publish path, and negative assertions that denied/unconfigured input never reaches an agent. |
+| Live, opt-in | Workspace capability probes, actual mention/status/rendering/thread behavior, private-channel permissions, tokens and recovery. No claims of live validation until run with explicit test credentials. |
+
+The checked-in spike supplies eight narrow SDK/protocol characterizations, not
+the whole bridge test suite. Its known-gap test succeeds by asserting the SDK
+rejects an unsupported shape. Do not report that as support for rate-limit
+notifications.
+
+Fake Slack must generate payloads from the official event shapes above, not
+from our normalizer's desired shape. Keep event identity separate from envelope
+identity and never make the fake `chat.postMessage` magically idempotent.
+Use ephemeral loopback ports, exact fake tokens, explicit API URLs, finite
+timeouts and cleanup hooks. The SDK exposes `slackApiUrl` specifically for test
+endpoints. Every fake method should reject unknown operations, not return a
+success-shaped default.
+[Custom SDK API URL](https://docs.slack.dev/tools/node-slack-sdk/web-api/#custom-api-url).
+
+### Live checklist
+
+1. Validate/install the manifest in a dedicated test workspace. Verify app and
+   bot installation identity, subscribed events, and each required granted scope.
+2. Invite the app to one public and one private test channel. Probe history and
+   replies with the bot token, including a root older than bridge startup and a
+   thread with enough replies to paginate.
+3. Verify that an invitation alone does not create a binding or retain content.
+   Configure an explicit binding and two test identities, one allowlisted and
+   one denied. Denied users must not wake the lead or trigger side effects.
+4. Send a mention, a non-mention observation, and thread follow-ups from both
+   identities. Check attribution and same-root threaded answers. Verify a bot
+   reply cannot cause another request loop.
+5. Probe `assistant.threads.setStatus` in a channel thread with the Messages tab
+   disabled and no AI declaration. Verify expiry/clear behavior and final reply.
+6. Post custom outbox metadata, recover it from both history and replies using
+   `include_all_metadata=true`, and verify matching by actual app/bot identity.
+   Simulate a dropped response only in a controlled transport harness.
+7. Edit/delete queued and already processed questions. Check no stale execution,
+   no resurrection, and explicit correction rather than pretend rollback.
+8. Disconnect/restart the bridge, create a root message and replies to old roots,
+   then verify the declared recovery horizon and cursors. Repeat across machine
+   sleep and a long-lived Socket Mode rotation.
+9. Rename/archive/unarchive the channels, remove/reinvite the bot, and convert
+   public/private where the workspace permits it. Confirm pause and explicit
+   recovery without auto-widening authorization.
+10. Send hosted and remote files, large/unsupported files, and an image. Confirm
+    private downloading, remote-host refusal, uploadV2 targeting and Slack-file
+    rendering without exposing authenticated URLs.
+11. Run one release-note schedule occurrence twice through a restart. Confirm a
+    single intended outbox action, truthful source coverage, no raw internal
+    transcript, and correct timezone behavior.
+12. Revoke test tokens/uninstall and verify stop/cleanup paths. Test Slack
+    Connect only in a separately authorized shared test channel before enabling
+    that feature. Record workspace plan, scopes, runtime/SDK versions, dates,
+    exact results, and remaining gaps.
+
+## 11. Failure matrix
+
+These are recommended treatments of the documented behaviors, not claims that
+an implementation already handles them.
+
+| Failure / edge case | Required handling |
+| --- | --- |
+| Duplicate delivery, changed envelope ID | Ack each envelope, unique event inbox, one logical request. |
+| Same message from events, backfill, broadcast, or mention subscription | Merge canonical message/version identity before classification. |
+| Out-of-order create/edit/delete | Version-aware upserts and tombstones, no resurrection. |
+| Malformed/unknown payload | Explicit sanitized diagnostic and bounded quarantine, no success-shaped parse defaults. |
+| Top-level `app_rate_limited` | Receiver gap must be resolved, mark recovery gap and throttle repair. |
+| Socket rotation, network partition, laptop sleep | Reconnect with fresh URL/backoff and repair declared coverage. |
+| Two bridge processes | Single writer/lease or shared transactional inbox/outbox, no independent cursors. |
+| Storage failure or full disk | Stop acking accepted-but-uncommitted input, surface unhealthy, preserve existing checkpoints. |
+| Agent busy or wake lost | Durable unread work, debounced level-triggered wake, retry until cursor advances. |
+| Lead crashes after reading | Stable batch lease and unconsumed action intents survive restart. |
+| Lead repeats a tool call | Stable action ID returns existing action status, not another send. |
+| Channel high-water advances past missed old-thread replies | Separate root inventory and thread repair coverage. |
+| Cursor expires, empty page, rate limit mid-page | Restart fixed interval on invalid cursor, follow next_cursor, do not advance unfinished coverage. |
+| Retention/free-plan/access limit | Mark partial coverage, do not invent messages or infer a completed full history. |
+| Edited queued request | Replace/reclassify latest version and invalidate stale action approval. |
+| Deleted queued request | Cancel uncommitted actions, retain minimal tombstone, do not claim to undo already executed work. |
+| Unauthorized user inside an authorized thread | Context only if permitted, never inherits the thread starter's execution authority. |
+| Other app/bot or self-post | No executable wake loop, opt-in observation only. |
+| Unconfigured channel, even if bot invited | Ack/drop without content persistence or model ingestion. |
+| Channel rename/privacy/share/ID change | Refresh authoritative metadata, migrate only Slack-confirmed aliases, pause widened/external disclosure. |
+| Bot kicked, channel deleted/archived, token revoked | Suspend binding/install as appropriate and surface intervention, do not silently poll empty results. |
+| 429 | Durable workspace/method cooldown from Retry-After, channel write pacing. |
+| 5xx/timeout after post | Possible partial success, `delivery_unknown`, own-metadata reconciliation. |
+| Metadata missing/rejected or message later deleted | Positive matches resolve delivery, absence does not authorize blind resend. |
+| Thread root deleted or thread locked | Report delivery failure, no automatic public root fallback. |
+| Overlong output or Block Kit rejection | Prevalidate limits, deterministic segmentation/report upload, disclose any truncation. |
+| File metadata incomplete/scanning/no access/deleted | Bounded retry only when transient, explicit unsupported/unavailable attachment state. |
+| Remote `url_private` or malicious redirect | No credential forwarding or automatic external fetch. |
+| Crash during file upload/completion | Durable file ID/stage, reconcile before restarting completion or allocating another file. |
+| Weekly schedule after long outage | Occurrence-key dedupe, defined catch-up policy, disclose coverage gaps. |
+| Model leaks paths, hidden reasoning, cross-channel data | Intentional publication boundary and output policy, never transcript mirroring. |
+| Allowlist/config changes while queued | Check current policy again at execution and send time, cancel revoked authority. |
+| Bridge healthy but model/provider unavailable | Visible pending/degraded status and bounded retry, never mark requests answered. |
+| Uninstall races token-revocation events | Idempotent installation disable/cleanup independent of ordering. |
+
+## 12. Open production gates
+
+1. Live bot-token history/replies and metadata round-trip capabilities under the
+   exact installed scopes, plus channel status with the app Messages tab off.
+2. SDK top-level control-payload handling, real network refresh/heartbeat/proxy
+   behavior, and longer Bun suspend/resume soak coverage.
+3. Product agreement on monitoring horizon and freshness, then prove old-root
+   repair at the chosen rate-limit profile rather than assuming it scales.
+4. An actual isolation boundary for untrusted Slack observations reaching a
+   shell-capable lead, plus provider/data consent and retention/deletion policy.
+5. Bridge-owned cursor, outbox, wake, cancellation and authorization tests
+   integrated with Toy Box's actual contracts. Those seams are being studied in
+   the separate Toy Box research document.
