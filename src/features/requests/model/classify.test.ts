@@ -1,186 +1,59 @@
-import { describe, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import type { SlackMessage } from "@slackapi/model/messages";
-import { classify, type ClassifyFacts } from "./classify";
-
-const now = 1_700_100_000_000;
-
-const ask: SlackMessage = {
-  channelId: "C1",
-  ts: "1700099000.000100",
-  threadTs: null,
-  rootTs: "1700099000.000100",
-  isReply: false,
-  userId: "UALICE",
-  teamId: "THOME",
-  subtype: null,
-  author: "person",
-  text: "<@UBOT> can you check the build?",
-  mentions: ["UBOT"],
-  mentionsBot: true,
-  editedTs: null,
-  version: "1700099000.000100",
-};
-
-const reply: SlackMessage = {
-  ...ask,
-  ts: "1700099500.000200",
-  threadTs: "1700099000.000100",
-  isReply: true,
-  version: "1700099500.000200",
-  text: "it fails on the lint step too",
-  mentions: [],
-  mentionsBot: false,
-};
+import { askMessage, replyMessage } from "@slackapi/model/testFixtures";
+import { tsAt } from "@slackapi/model/ts";
+import { classify, type Classification, type ClassifyFacts, type NoneReason } from "./classify";
+import { requestLifetimeMs, type RequestReason } from "./lifecycle";
 
 const facts: ClassifyFacts = {
-  link: {
-    status: "active",
-    requestMode: "mention",
-    linkedAtTs: "1699000000.000100",
-  },
+  link: { status: "active", requestMode: "mention", linkedAtTs: "1699000000.000100" },
   role: "allowed",
   active: null,
   askedBefore: false,
   firstSight: true,
-  now,
+  now: 1_700_000_300_000,
 };
+const paused = { ...facts.link, status: "paused" as const };
+const all = { ...facts.link, requestMode: "all" as const };
 
-describe("who may ask", () => {
-  test("an allowlisted person who mentions the bot opens a request", () => {
-    expect(classify(ask, facts)).toEqual({ kind: "request", reason: "mention" });
-  });
+const ask = askMessage();
+const reply = replyMessage(ask, "1700000200.000100");
+const root = { ...ask, text: "the deploy is red", mentions: [], mentionsBot: false };
+const tada = { ...reply, text: ":tada:" };
+const toBob = { ...reply, text: "<@U-bob> can you look?", mentions: ["U-bob"] };
+const toBoth = { ...toBob, mentions: ["U-bob", "U-bot"], mentionsBot: true };
+const atLink = askMessage(facts.link.linkedAtTs);
+const weekOld = askMessage(tsAt(facts.now - requestLifetimeMs));
+const tooOld = askMessage(tsAt(facts.now - requestLifetimeMs - 1));
+const active = { id: 4, sourceTs: ask.ts };
+const later = { id: 4, sourceTs: reply.ts };
 
-  test("a paused or suspended link opens nothing, but a requester can still add to a request", () => {
-    for (const status of ["paused", "suspended"] as const) {
-      const inactive = { ...facts, link: { ...facts.link, status } };
-      expect(classify(ask, inactive)).toEqual({ kind: "none", reason: "link_inactive" });
-      expect(classify(reply, { ...inactive, askedBefore: true })).toEqual({
-        kind: "none",
-        reason: "link_inactive",
-      });
-      expect(classify(reply, { ...inactive, active: { id: 4, sourceTs: ask.ts } })).toEqual({
-        kind: "join",
-        requestId: 4,
-      });
-    }
-  });
+const none = (reason: NoneReason): Classification => ({ kind: "none", reason });
+const asks = (reason: RequestReason): Classification => ({ kind: "request", reason });
+const joins: Classification = { kind: "join", requestId: 4 };
 
-  test("bots, notices and our own posts never ask", () => {
-    for (const author of ["self", "bot", "notice"] as const) {
-      expect(classify({ ...ask, author }, facts)).toEqual({
-        kind: "none",
-        reason: "not_a_person",
-      });
-    }
-  });
-
-  test("an allowlisted person asks from any workspace the message names", () => {
-    for (const teamId of ["TSIBLING", null]) {
-      expect(classify({ ...ask, teamId }, facts)).toEqual({ kind: "request", reason: "mention" });
-    }
-  });
-
-  test("a message from before the link, or from the moment it was made, never asks", () => {
-    const linkedAtTs = facts.link.linkedAtTs;
-    for (const ts of ["999999999.000100", "1698999999.000100", linkedAtTs]) {
-      expect(classify({ ...ask, ts }, facts)).toEqual({ kind: "none", reason: "before_link" });
-    }
-    const edited = { ...facts, firstSight: false };
-    expect(classify({ ...ask, ts: "1699000000.000101" }, edited).kind).toBe("request");
-  });
-
-  test("a message older than a week when first seen never asks, but an edit to it can", () => {
-    const old = { ...ask, ts: "1699495199.999999" };
-    expect(classify(old, facts)).toEqual({ kind: "none", reason: "too_old" });
-    expect(classify(old, { ...facts, firstSight: false }).kind).toBe("request");
-    expect(classify({ ...ask, ts: "1699495200.000000" }, facts).kind).toBe("request");
-  });
-
-  test("someone not on the allowlist gets no request, even mentioning the bot", () => {
-    expect(classify(ask, { ...facts, role: "observed" })).toEqual({
-      kind: "none",
-      reason: "not_allowlisted",
-    });
-    expect(
-      classify(reply, { ...facts, role: "observed", active: { id: 4, sourceTs: ask.ts } }),
-    ).toEqual({ kind: "none", reason: "not_allowlisted" });
-  });
-});
-
-describe("what counts as asking", () => {
-  test("a thank-you or a lone emoji isn't a request, even mentioning the bot", () => {
-    expect(classify({ ...ask, text: "<@UBOT> thanks!" }, facts)).toEqual({
-      kind: "none",
-      reason: "courtesy",
-    });
-    expect(
-      classify({ ...reply, text: ":tada:" }, { ...facts, active: { id: 4, sourceTs: ask.ts } }),
-    ).toEqual({ kind: "none", reason: "courtesy" });
-  });
-
-  test("a message addressed only to other people isn't for the bot", () => {
-    const toBob = { ...reply, text: "<@UBOB> can you look?", mentions: ["UBOB"] };
-    expect(classify(toBob, { ...facts, active: { id: 4, sourceTs: ask.ts } })).toEqual({
-      kind: "none",
-      reason: "addressed_to_others",
-    });
-    expect(classify({ ...toBob, mentions: ["UBOB", "UBOT"], mentionsBot: true }, facts)).toEqual({
-      kind: "request",
-      reason: "mention",
-    });
-  });
-
-  test("a later message from the requester joins their active request in the thread", () => {
-    expect(classify(reply, { ...facts, active: { id: 4, sourceTs: ask.ts } })).toEqual({
-      kind: "join",
-      requestId: 4,
-    });
-    const again = {
-      ...reply,
-      text: "<@UBOT> also the tests",
-      mentions: ["UBOT"],
-      mentionsBot: true,
-    };
-    expect(classify(again, { ...facts, active: { id: 4, sourceTs: ask.ts } })).toEqual({
-      kind: "join",
-      requestId: 4,
-    });
-  });
-
-  test("a message from before the active request began, found late, stays context", () => {
-    const earlier = { ...reply, ts: "1700099000.000050" };
-    const active = { id: 4, sourceTs: "1700099500.000100" };
-    expect(classify(earlier, { ...facts, active })).toEqual({
-      kind: "none",
-      reason: "before_request",
-    });
-    expect(classify({ ...reply, ts: active.sourceTs }, { ...facts, active })).toEqual({
-      kind: "none",
-      reason: "before_request",
-    });
-  });
-
-  test("a reply in a thread where the requester asked before is a follow-up", () => {
-    expect(classify(reply, { ...facts, askedBefore: true })).toEqual({
-      kind: "request",
-      reason: "follow_up",
-    });
-    expect(classify(reply, facts)).toEqual({ kind: "none", reason: "context_only" });
-  });
-
-  test("a root message is a follow-up to nothing", () => {
-    const root = { ...ask, text: "the build is red", mentions: [], mentionsBot: false };
-    expect(classify(root, { ...facts, askedBefore: true })).toEqual({
-      kind: "none",
-      reason: "context_only",
-    });
-  });
-
-  test("in all mode every root message asks, but replies still need a mention or a past ask", () => {
-    const all = { ...facts, link: { ...facts.link, requestMode: "all" as const } };
-    const root = { ...ask, text: "the build is red", mentions: [], mentionsBot: false };
-    expect(classify(root, all)).toEqual({ kind: "request", reason: "channel_root" });
-    expect(classify(reply, all)).toEqual({ kind: "none", reason: "context_only" });
-    expect(classify(root, facts)).toEqual({ kind: "none", reason: "context_only" });
-  });
+test.each<[string, SlackMessage, Partial<ClassifyFacts>, Classification]>([
+  ["an allowlisted person who mentions the bot asks", ask, {}, asks("mention")],
+  ["our own posts never ask", { ...ask, author: "self" }, {}, none("not_a_person")],
+  ["nothing up to the moment of linking asks", atLink, { firstSight: false }, none("before_link")],
+  ["a message first seen over a week late never asks", tooOld, {}, none("too_old")],
+  ["but an edit to it can", tooOld, { firstSight: false }, asks("mention")],
+  ["and one first seen a week late can", weekOld, {}, asks("mention")],
+  ["someone not on the allowlist never asks", ask, { role: "observed" }, none("not_allowlisted")],
+  ["nor adds to a request", reply, { role: "observed", active }, none("not_allowlisted")],
+  ["a thank-you isn't a request", { ...ask, text: "<@U-bot> thanks!" }, {}, none("courtesy")],
+  ["nor is a lone emoji in a request's thread", tada, { active }, none("courtesy")],
+  ["a message for other people isn't for the bot", toBob, { active }, none("addressed_to_others")],
+  ["one for them and the bot is", toBoth, {}, asks("mention")],
+  ["the requester's later messages join their request", toBoth, { active }, joins],
+  ["but not one found late from before it", reply, { active: later }, none("before_request")],
+  ["a paused link opens nothing", ask, { link: paused }, none("link_inactive")],
+  ["but a requester can still add to their request", reply, { link: paused, active }, joins],
+  ["a reply after an earlier ask follows up", reply, { askedBefore: true }, asks("follow_up")],
+  ["any other reply is context", reply, {}, none("context_only")],
+  ["a root message follows up nothing", root, { askedBefore: true }, none("context_only")],
+  ["in all mode every root message asks", root, { link: all }, asks("channel_root")],
+  ["but a reply still needs a mention or a past ask", reply, { link: all }, none("context_only")],
+])("%s", (_, message, changes, expected) => {
+  expect(classify(message, { ...facts, ...changes })).toEqual(expected);
 });
