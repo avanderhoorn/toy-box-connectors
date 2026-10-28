@@ -28,12 +28,7 @@ export type RequestReason = "mention" | "follow_up" | "channel_root";
 export type RequestAttention = "updated" | "reply_failed";
 
 /** Why a request was cancelled. */
-export type CancelReason =
-  | "source_deleted"
-  | "mention_removed"
-  | "requester_denied"
-  | "link_removed"
-  | "toybox_channel_deleted";
+export type CancelReason = "source_deleted" | "mention_removed" | "requester_denied";
 
 const transitions: Record<RequestState, readonly RequestState[]> = {
   open: ["seen", "cancelled", "expired"],
@@ -148,7 +143,7 @@ export function dismissRequest<T extends Request>(request: T, reason: string): T
   return move(request, "dismissed", closing(reason));
 }
 
-/** Closes a request whose source, mention, requester, link or channel went away. */
+/** Closes a request whose source, mention or requester went away. */
 export function cancelRequest<T extends Request>(request: T, reason: CancelReason): T {
   return move(request, "cancelled", closing(reason));
 }

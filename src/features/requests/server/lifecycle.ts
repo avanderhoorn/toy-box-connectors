@@ -5,12 +5,7 @@ import {
   expireRequest,
   type CancelReason,
 } from "@requests/model/lifecycle";
-import {
-  readActiveRequests,
-  readOverdueRequests,
-  saveRequest,
-  type StoredRequest,
-} from "./database";
+import { readOverdueRequests, saveRequest, type StoredRequest } from "./database";
 
 // The request lifecycle on stored requests.
 //
@@ -38,18 +33,6 @@ export async function cancelStoredRequest(
 ): Promise<void> {
   await saveRequest(transaction, cancelRequest(request, reason));
   await cancelQueuedRequestItems(transaction, request.id, now);
-}
-
-/** Cancels every active request of a link. Returns whether there were any. */
-export async function cancelLinkRequests(
-  transaction: Bun.SQL,
-  linkId: string,
-  reason: CancelReason,
-  now: number,
-): Promise<boolean> {
-  const requests = await readActiveRequests(transaction, linkId);
-  for (const request of requests) await cancelStoredRequest(transaction, request, reason, now);
-  return requests.length > 0;
 }
 
 /**

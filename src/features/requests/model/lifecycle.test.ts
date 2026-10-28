@@ -92,6 +92,6 @@ test("answered, dismissed, cancelled and expired requests never reopen", () => {
     expect(isActive(finished.state)).toBe(false);
     expect(changeRequest(finished, 99)).toBe(finished);
     expect(() => beginAnswer(serveRequest(finished, 99), 99)).toThrow("can't be answered");
-    expect(() => cancelRequest(finished, "link_removed")).toThrow("can't become cancelled");
+    expect(() => cancelRequest(finished, "requester_denied")).toThrow("can't become cancelled");
   }
 });
