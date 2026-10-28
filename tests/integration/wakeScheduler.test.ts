@@ -70,7 +70,7 @@ async function linkFakeChannel({
   const errors: unknown[] = [];
 
   /** Follows the channel, then starts the scheduler, as the bridge does. */
-  async function startWaking() {
+  async function startWaking(slackUsable = () => true) {
     let scheduler: WakeScheduler | undefined;
     const client = startToyBoxClient(database, {
       origin: new URL(toyBox.url),
@@ -84,6 +84,7 @@ async function linkFakeChannel({
     await client.followLinks();
     await waitFor(() => expect(client.view(channelId).connected).toBe(true));
     scheduler = startWakeScheduler(database, client, {
+      slackUsable,
       onError: (error) => errors.push(error),
       now,
       timings,
@@ -389,6 +390,27 @@ test("a run Toy Box fails is retried, and a Toy Box that went away is woken once
 
   toyBox.start();
   await waitFor(() => expect(toyBox.runs).toHaveLength(2));
+});
+
+test("a lead isn't woken while the bridge can't use Slack, and is woken once it can", async () => {
+  const { toyBox, database, now, startWaking } = await linkFakeChannel({
+    timings: { ...TIMINGS, ...UNHURRIED },
+  });
+  let slackUsable = false;
+  const { scheduler } = await startWaking(() => slackUsable);
+  await storeRequest(database, now());
+  scheduler.reconsider();
+
+  // The pass that would have run the routine decides to wait instead.
+  await waitFor(() => expect(scheduler.decision("link")).toEqual({ kind: "wait", until: "slack" }));
+  expect(toyBox.runs).toEqual([]);
+
+  slackUsable = true;
+  scheduler.reconsider();
+  await waitFor(async () =>
+    expect(await readOutcomes(database)).toEqual([{ kind: "requests", outcome: "ran" }]),
+  );
+  expect(toyBox.runs).toHaveLength(1);
 });
 
 test("a deleted Toy Box channel's link wakes nothing more", async () => {

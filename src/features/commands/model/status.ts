@@ -23,7 +23,7 @@ const wakeSchema = z
     z
       .object({
         kind: z.literal("wait"),
-        until: z.union([z.number().int(), z.enum(["lead_idle", "toy_box"])]),
+        until: z.union([z.number().int(), z.enum(["lead_idle", "toy_box", "slack"])]),
       })
       .strict(),
     z.object({ kind: z.literal("idle") }).strict(),
@@ -176,6 +176,7 @@ function presentWake(wake: NonNullable<LinkStatus["wake"]>, at: number): string 
     case "wait":
       if (wake.until === "lead_idle") return "waiting for the lead's turn to end.";
       if (wake.until === "toy_box") return "waiting for the channel's Toy Box stream.";
+      if (wake.until === "slack") return "waiting until the bridge can use Slack.";
       return `next wake in about ${Math.max(Math.ceil((wake.until - at) / 60_000), 1)} min.`;
     case "idle":
       return "nothing is waiting for the lead.";

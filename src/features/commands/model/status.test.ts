@@ -87,6 +87,12 @@ describe("presenting status", () => {
     expect(wake({ kind: "wait", until: "lead_idle" })).toBe(
       "- Wakes: waiting for the lead's turn to end.",
     );
+    expect(wake({ kind: "wait", until: "toy_box" })).toBe(
+      "- Wakes: waiting for the channel's Toy Box stream.",
+    );
+    expect(wake({ kind: "wait", until: "slack" })).toBe(
+      "- Wakes: waiting until the bridge can use Slack.",
+    );
     expect(wake({ kind: "stalled" })).toStartWith("- Wakes: stalled. The lead was woken");
     expect(wake({ kind: "blocked", reason: "link_inactive" })).toBe(
       "- Wakes: off while the link isn't active.",

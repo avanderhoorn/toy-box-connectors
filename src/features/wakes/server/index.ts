@@ -5,7 +5,8 @@
 // outcome with what it changes. A pass follows any change to what a decision reads, the end of the
 // earliest wait, and at least every minute, so a new publication period or a Mac that slept is
 // noticed. Passes run one at a time, and a channel whose run is in flight or just landed isn't
-// woken again until its turn can show in presence.
+// woken again until its turn can show in presence. Nobody is woken while the bridge can't use
+// Slack.
 
 import type { BridgeDatabase } from "@bridge/server/database";
 import { expireRequests } from "@requests/server/lifecycle";
@@ -25,6 +26,8 @@ export interface WakeScheduler {
 }
 
 export type WakeSchedulerOptions = {
+  /** Whether the bridge can use Slack now. Call `reconsider` when it changes. */
+  slackUsable: () => boolean;
   /** Called when the scheduler stops on an error that deciding again can't fix. */
   onError?: (error: unknown) => void;
   now?: () => number;
@@ -44,7 +47,12 @@ const unwoken: Record<Exclude<RoutineRunOutcome, "ran">, string> = {
 export function startWakeScheduler(
   database: BridgeDatabase,
   toyBox: Pick<ToyBoxClient, "view" | "runRoutine">,
-  { onError = () => {}, now = Date.now, timings = defaultWakeTimings }: WakeSchedulerOptions = {},
+  {
+    slackUsable,
+    onError = () => {},
+    now = Date.now,
+    timings = defaultWakeTimings,
+  }: WakeSchedulerOptions,
 ): WakeScheduler {
   // Infinity while a channel's run is in flight, then when its turn should show in presence.
   const busyUntil = new Map<string, number>();
@@ -82,7 +90,7 @@ export function startWakeScheduler(
     const pass = await database.read((sql) => readWakePass(sql, at));
     if (stopped) return;
     for (const [channelId, until] of busyUntil) if (until <= at) busyUntil.delete(channelId);
-    const plan = planWakes(at, pass, toyBox.view, busyUntil, timings);
+    const plan = planWakes(at, pass, slackUsable(), toyBox.view, busyUntil, timings);
     // A link whose channel is busy keeps the decision that started the run.
     const previous = decisions;
     decisions = new Map();

@@ -72,10 +72,12 @@ function planPass(
   pass: Pass,
   toyBox: (channelId: string) => ToyBoxView = idle,
   busyUntil: ReadonlyMap<string, number> = notBusy,
+  slackUsable = true,
 ) {
   return planWakes(
     now,
     { links: pass.links ?? [], proposals: pass.proposals ?? [], ran: pass.ran ?? [] },
+    slackUsable,
     toyBox,
     busyUntil,
   );
@@ -197,6 +199,51 @@ describe("planning a pass", () => {
       "link-1": { kind: "wake", reason: "requests" },
       "link-2": { kind: "wait", until: seconds(6) },
       "link-3": { kind: "stalled" },
+    });
+  });
+
+  describe("wakes nobody while the bridge can't use Slack, since a woken lead couldn't act", () => {
+    test("so each wake waits for Slack instead", () => {
+      const due = scheduled({ requests: [request()] });
+      const owed = scheduled({ id: "link-2", channelId: "channel-2", catchUps: [catchUp()] });
+      const pass = { links: [due, owed], proposals: [proposal()] };
+      expect(plan(pass).wakes.map(({ kind }) => kind)).toEqual(["requests", "catch_up", "setup"]);
+
+      const { wakes, decisions, decideAt } = planPass(pass, idle, notBusy, false);
+      expect({ wakes, decideAt }).toEqual({ wakes: [], decideAt: null });
+      expect(Object.fromEntries(decisions)).toEqual({
+        "link-1": { kind: "wait", until: "slack" },
+        "link-2": { kind: "idle" },
+      });
+    });
+
+    test("and every other decision stands, deciding again when a wait ends", () => {
+      const debounced = scheduled({ requests: [request({ changedAt: seconds(-4) })] });
+      const stalled = scheduled({
+        id: "link-2",
+        channelId: "channel-2",
+        requests: [request({ changedAt: minutes(-60) })],
+        lastWakeAt: minutes(-30),
+        wakesSinceInbox: 4,
+      });
+      const paused = scheduled({
+        id: "link-3",
+        channelId: "channel-3",
+        status: "paused",
+        requests: [request()],
+      });
+      const { decisions, decideAt } = planPass(
+        { links: [debounced, stalled, paused] },
+        idle,
+        notBusy,
+        false,
+      );
+      expect(Object.fromEntries(decisions)).toEqual({
+        "link-1": { kind: "wait", until: seconds(6) },
+        "link-2": { kind: "stalled" },
+        "link-3": { kind: "blocked", reason: "link_inactive" },
+      });
+      expect(decideAt).toBe(seconds(6));
     });
   });
 

@@ -3,7 +3,8 @@
 // A pass decides each link's wake, then the catch-ups a link without one owes, then the setup
 // wakes for proposals that never became a link. A Toy Box channel runs at most one routine per
 // pass, and none while a run is in flight or just landed, because the turn a run starts shows in
-// presence only after Toy Box answers the run.
+// presence only after Toy Box answers the run. While the bridge can't use Slack, every wake waits
+// for it instead, because a lead woken then couldn't act.
 
 import type { RoutineState } from "@toybox/model";
 import { wakeBudget, type RanWake } from "./budget";
@@ -80,6 +81,7 @@ export type WakePlan = {
 export function planWakes(
   now: number,
   pass: WakePass,
+  slackUsable: boolean,
   toyBox: (channelId: string) => ToyBoxView,
   busyUntil: ReadonlyMap<string, number>,
   timings = defaultWakeTimings,
@@ -98,10 +100,12 @@ export function planWakes(
     if (until !== Infinity) decideBy(until);
     return false;
   };
-  const wakeNow = (decision: WakeDecision) => {
+  const settle = (decision: WakeDecision): WakeDecision => {
+    if (decision.kind === "wake" && !slackUsable) return { kind: "wait", until: "slack" };
     if (decision.kind === "wait" && typeof decision.until === "number") decideBy(decision.until);
-    return decision.kind === "wake" ? decision.reason : null;
+    return decision;
   };
+  const wakeNow = (decision: WakeDecision) => settle(decision).kind === "wake";
   const start = (wake: Wake) => {
     wakes.push(wake);
     ran.push({ linkId: wake.linkId, at: now });
@@ -110,16 +114,15 @@ export function planWakes(
   for (const link of pass.links) {
     if (!free(link.channelId)) continue;
     const view = toyBox(link.channelId);
-    const decision = decideWake(now, link, view, wakeBudget(ran), timings);
+    const decision = settle(decideWake(now, link, view, wakeBudget(ran), timings));
     decisions.set(link.id, decision);
-    const reason = wakeNow(decision);
-    if (reason) {
+    if (decision.kind === "wake") {
       start({
-        kind: reason,
+        kind: decision.reason,
         channelId: link.channelId,
         routineId: link.routineId,
         linkId: link.id,
-        approvalId: reason === "setup" ? link.setup[0]!.approvalId : null,
+        approvalId: decision.reason === "setup" ? link.setup[0]!.approvalId : null,
         catchUp: null,
         reminded: view.leadWorking ? [] : dueReminders(now, link.requests, timings).map(byId),
       });

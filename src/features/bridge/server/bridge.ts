@@ -91,6 +91,8 @@ export async function startBridge(
       timings: settings.wakeTimings,
     });
     scheduler = startWakeScheduler(database, toyBox, {
+      // Until the receiver reports its connection, leads are woken as if Slack were usable.
+      slackUsable: () => true,
       onError: failure.resolve,
       timings: settings.wakeTimings,
     });

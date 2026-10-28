@@ -26,12 +26,12 @@ export type WakeBlock = "link_inactive" | "routine_missing" | "provider" | "refu
 
 /**
  * What to do about a link's lead now. A wait names when to decide again, or that the decision
- * waits for the lead to go idle or for the channel's stream to connect. A stalled link stays so
- * until something new arrives.
+ * waits for the lead to go idle, for the channel's stream to connect or for the bridge to be able
+ * to use Slack. A stalled link stays so until something new arrives.
  */
 export type WakeDecision =
   | { kind: "wake"; reason: WakeKind }
-  | { kind: "wait"; until: number | "lead_idle" | "toy_box" }
+  | { kind: "wait"; until: number | "lead_idle" | "toy_box" | "slack" }
   | { kind: "idle" }
   | { kind: "blocked"; reason: WakeBlock }
   | { kind: "stalled" };
