@@ -18,3 +18,5 @@ A change that widens access is a proposal. `server/setup.ts` reads fresh facts f
 - A proposal allows at most 20 people, so its card shows every name it asks the owner to approve.
 - Members can read settings but never change them, and the operator can never reply or publish.
 - Unlinking purges everything the link owned.
+- Uninstalling purges every row but the installation and records the purge. Resetting purges the installation and its owner too, but keeps the audit log, so what led to a reset can still be read. `server/purge.ts` gives each table its fate in a map a test holds to the schema, so a new table has to choose one.
+- No purge touches SQLite's own tables, so outbox items, approvals and gaps go on numbering after every one there has been, and a number the lead or a card still holds never names another.

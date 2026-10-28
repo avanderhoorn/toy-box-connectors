@@ -1,16 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { createStoredMessage } from "@activity/server/testFixtures";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { privateAudience } from "@links/model/testFixtures";
 import { createStoredOutboxItem } from "@outbox/server/testFixtures";
-import { createStoredRequest } from "@requests/server/testFixtures";
-import { askMessage, channelFacts } from "@slackapi/model/testFixtures";
+import { channelFacts } from "@slackapi/model/testFixtures";
 import { readChannelInfo, writeChannelInfo } from "@slackapi/server/channels";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
-import { audit } from "./audit";
 import { changeChannelId, recordUninstall, suspendChannelLinks } from "./lifecycle";
-import { createStoredApproval, createStoredLink } from "./testFixtures";
+import { countRows, createStoredApproval, createStoredLink, fillEveryTable } from "./testFixtures";
 
 type LinkRow = {
   id: string;
@@ -207,75 +204,6 @@ describe("a channel's new ID", () => {
     expect(await database.read((sql) => sql`SELECT * FROM channel_aliases`)).toEqual([]);
   });
 });
-
-/** Stores a row in every table, so a purge can be checked against the whole schema. */
-async function fillEveryTable(database: BridgeDatabase): Promise<void> {
-  await createStoredInstallation(database);
-  await createStoredLink(database);
-  await createStoredApproval(database);
-  await createStoredMessage(database, askMessage());
-  await createStoredRequest(database);
-  await createStoredOutboxItem(database, 1);
-  await database.write(async (transaction) => {
-    await writeChannelInfo(transaction, channelFacts(), 1_000);
-    await audit(transaction, { actor: "owner", action: "approve", subject: "U-owner" }, 1_000);
-    await transaction`
-      INSERT INTO receipts (key, type, received_at, disposition)
-      VALUES ('Ev-1', 'events_api', 0, 'applied')
-    `;
-    await transaction`INSERT INTO rate_limits (method, next_attempt_at) VALUES ('chat.postMessage', 0)`;
-    await transaction`INSERT INTO outbox_channels (channel_id, next_post_at) VALUES ('C-link', 1000)`;
-    await transaction`INSERT INTO channel_aliases VALUES ('C-old', 'C-link', 0)`;
-    await transaction`INSERT INTO users (user_id) VALUES ('U-carol')`;
-    await transaction`INSERT INTO user_aliases VALUES ('W-carol', 'U-carol')`;
-    await transaction`
-      INSERT INTO claims (code_hash, state, created_at, expires_at, posted_by, posted_channel_id,
-        posted_ts, posted_at, decided_at)
-      VALUES ('hash', 'confirmed', 0, 600_000, 'U-owner', 'D-owner', '1000.000200', 0, 0)
-    `;
-    await transaction`
-      INSERT INTO link_routines VALUES ('link', 'release-notes', 'routine-notes', 'present', 'week',
-        '0 9 * * 1', 0)
-    `;
-    await transaction`INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-carol', 0)`;
-    await transaction`
-      INSERT INTO threads (channel_id, thread_ts, tracked_reason)
-      VALUES ('C-link', '1700000100.000100', 'request')
-    `;
-    await transaction`
-      INSERT INTO coverage (link_id, channel_id, scope, oldest_ts, latest_ts, state, reason, opened_at)
-      VALUES ('link', 'C-link', 'channel', '1700000000.000100', '1700000100.000100', 'open',
-        'startup', 0)
-    `;
-    await transaction`INSERT INTO cursors (link_id) VALUES ('link')`;
-    await transaction`
-      INSERT INTO files (file_id, channel_id, ts, state, local_path, fetched_at) VALUES
-        ('F-kept', 'C-link', '1700000100.000100', 'fetched', 'F-kept/report.pdf', 0),
-        ('F-indexed', 'C-link', '1700000100.000100', 'indexed', NULL, NULL)
-    `;
-    await transaction`INSERT INTO wake_state (link_id) VALUES ('link')`;
-    await transaction`INSERT INTO wakes (link_id, at, kind, outcome) VALUES ('link', 0, 'requests', 'ran')`;
-    await transaction`
-      INSERT INTO request_messages (request_id, channel_id, ts)
-      VALUES (1, 'C-link', '1700000100.000200')
-    `;
-    await transaction`INSERT INTO toybox_streams (toybox_channel_id) VALUES ('toybox-link')`;
-  });
-}
-
-async function countRows(database: BridgeDatabase): Promise<Record<string, number>> {
-  return database.read(async (sql) => {
-    const tables = await sql<{ name: string }[]>`
-      SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name
-    `;
-    const counts: Record<string, number> = {};
-    for (const { name } of tables) {
-      const [row] = await sql.unsafe<{ count: number }[]>(`SELECT count(*) AS count FROM ${name}`);
-      counts[name] = row!.count;
-    }
-    return counts;
-  });
-}
 
 describe("uninstalling the app", () => {
   test("purges every row but the installation and the record of the purge", async () => {

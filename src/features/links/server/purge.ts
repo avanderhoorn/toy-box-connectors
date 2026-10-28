@@ -54,13 +54,47 @@ export const uninstallPurge = {
  * copies of the files it forgot.
  */
 export async function purgeForUninstall(transaction: Bun.SQL, now: number): Promise<string[]> {
+  const copies = await purgeTables(transaction, uninstallPurge);
+  await audit(transaction, { actor: "bridge", action: "purge", subject: "uninstalled" }, now);
+  return copies;
+}
+
+/**
+ * What resetting does to each table: everything uninstalling deletes, and the installation with
+ * its owner, so the next start stores whatever installation its tokens name and someone claims it
+ * again. Nothing allowed or queued under the old owner outlives it. The audit log stays, holding
+ * IDs and reasons only, so what led to the reset can still be read.
+ */
+export const resetPurge = {
+  ...uninstallPurge,
+  installation: "delete",
+  audit: "keep",
+} as const satisfies Record<string, TablePurge>;
+
+/**
+ * Deletes everything resetting purges and records that the operator reset the bridge. Returns the
+ * local copies of the files it forgot.
+ */
+export async function purgeForReset(transaction: Bun.SQL, now: number): Promise<string[]> {
+  const copies = await purgeTables(transaction, resetPurge);
+  await audit(transaction, { actor: "operator", action: "reset" }, now);
+  return copies;
+}
+
+/**
+ * Deletes every table `purges` marks, in order, and returns the local copies of the files it
+ * forgot. It never touches SQLite's own tables, so numbers keep counting from where they were.
+ */
+async function purgeTables(
+  transaction: Bun.SQL,
+  purges: Record<string, TablePurge>,
+): Promise<string[]> {
   const copies = await transaction<{ local_path: string | null }[]>`
     SELECT local_path FROM files WHERE local_path IS NOT NULL
   `;
-  for (const [table, purge] of Object.entries(uninstallPurge)) {
+  for (const [table, purge] of Object.entries(purges)) {
     if (purge === "delete") await transaction.unsafe(`DELETE FROM ${table}`);
   }
-  await audit(transaction, { actor: "bridge", action: "purge", subject: "uninstalled" }, now);
   return copies.flatMap((copy) => (copy.local_path === null ? [] : [copy.local_path]));
 }
 
