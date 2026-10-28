@@ -2,7 +2,7 @@
 
 Tests prove the bridge's contracts at the layer that can observe them. Unit tests sit next to their source files and cover pure policy: classification, the request lifecycle, wake decisions, rendering and secret checks, `ts` comparison, caller resolution, presenters, and publication periods. The suites here cover what only a running bridge can show.
 
-- `integration/` runs the bridge against protocol fakes of Socket Mode, the Slack Web API, and Toy Box, with no network, ephemeral ports, and short temp folders. A suite spawns the real bridge process when it proves startup, shutdown or wiring, and drives the bridge's server modules in-process when it injects a clock or short timings. `bun test` runs it with the unit tests.
+- `integration/` runs the bridge against protocol fakes of Socket Mode, the Slack Web API, and Toy Box, with no network, ephemeral ports, and short temp folders. A suite spawns the real bridge process when it proves startup, shutdown or wiring, and drives the bridge's server modules in-process when it injects a clock or short timings. A spawned bridge finds the fake Toy Box through `TOY_BOX_URL` and takes shorter waits from `TOY_BOX_SLACK_WAKE_TIMINGS`, a JSON object of the wake timings to change, in milliseconds. `bun test` runs it with the unit tests.
 - `e2e/` runs the built Toy Box with a real Copilot lead on claude-sonnet-5, the real bridge and CLI, and fake Slack. Every run spends model credits, so it runs only with `TOY_BOX_SLACK_E2E=1`, and one run at a time, because Toy Box takes port 3199.
 - `fakes/` holds the protocol-faithful fakes both suites share. A fake reproduces what the real service does on the wire, including its failures, and nothing more.
 

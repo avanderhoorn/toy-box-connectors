@@ -1,46 +1,8 @@
-import { expect, onTestFinished, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { createTestFolder } from "@bridge/server/testFixtures";
-
-const REPOSITORY = join(import.meta.dir, "..", "..");
-
-/** Run `toy-box-slack serve` with `home` as its home folder, collecting what it writes to stderr. */
-function spawnBridge(home: string) {
-  const child = Bun.spawn([process.execPath, "cli/index.ts", "serve"], {
-    cwd: REPOSITORY,
-    env: { PATH: process.env.PATH, HOME: home, TOY_BOX_SLACK_HOME: join(home, ".toy-box-slack") },
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "pipe",
-  });
-  onTestFinished(() => child.kill("SIGKILL"));
-
-  let stderr = "";
-  const decoder = new TextDecoder();
-  const drained = (async () => {
-    for await (const chunk of child.stderr) stderr += decoder.decode(chunk, { stream: true });
-  })();
-
-  return {
-    child,
-    /** Resolves once the bridge says it's running, and rejects if it exits or takes too long. */
-    async running() {
-      const deadline = Date.now() + 10_000;
-      while (!stderr.includes("toy-box-slack is running")) {
-        if (child.exitCode !== null || Date.now() > deadline) {
-          throw new Error(`The bridge didn't start:\n${stderr}`);
-        }
-        await Bun.sleep(10);
-      }
-    },
-    async exit() {
-      const code = await child.exited;
-      await drained;
-      return { code, stderr };
-    },
-  };
-}
+import { spawnBridge } from "./bridgeProcess";
 
 /** Describe every entry in `folder` closely enough to notice any change to it. */
 function snapshot(folder: string) {

@@ -11,3 +11,5 @@ The catalog maps Toy Box sessions to the channels they lead or belong to. Each l
 - Never post into Toy Box. The lead decides what reaches the Toy Box channel.
 - Only talk to a Toy Box on loopback. A non-loopback `TOY_BOX_URL` is refused at startup.
 - When Toy Box is unreachable, wakes wait and retry while Slack ingestion continues.
+- A follower commits each frame, with everything it changes, before it reads the next. The owner speaking releases the holds a link's requests took before, and a deleted channel suspends its link and cancels its active requests.
+- A storage error stops the bridge instead of retrying, so launchd restarts it.

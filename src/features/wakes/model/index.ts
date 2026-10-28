@@ -5,6 +5,7 @@
 // running a routine: the link's requests routine, or a publication series' routine to catch up a
 // period the lead missed.
 
+import { z } from "zod";
 import {
   currentPeriod,
   type PublicationSeries,
@@ -67,29 +68,33 @@ export type LinkWakeState = {
 /** What the bridge knows of a link's Toy Box channel from its stream. */
 export type ToyBoxView = { connected: boolean; provider: string | null; leadWorking: boolean };
 
+const duration = z.number().int().nonnegative();
+
 /** How long the wake policy waits, in milliseconds. */
-export type WakeTimings = {
-  /** A burst settles this long after its latest change, */
-  debounce: number;
-  /** but no longer than this after its oldest. */
-  debounceLimit: number;
-  /** A working lead gets this long before a wake steers into its turn. */
-  steerAfter: number;
-  /** A run that landed holds its channel this long, so the turn it started can show as working. */
-  settle: number;
-  /** The waits after the first, second and third wakes inbox didn't follow. */
-  backoff: readonly [number, number, number];
-  /** A seen request that made no progress this long gets a reminder. */
-  remindSeen: number;
-  /** An in-progress request that stayed quiet this long gets a reminder. */
-  remindInProgress: number;
-  /** A failed run retries after this, doubling each time, */
-  retry: number;
-  /** up to this. */
-  retryLimit: number;
-  /** A publication still missing this long after its scheduled run is caught up. */
-  catchUpAfter: number;
-};
+export const wakeTimingsSchema = z
+  .object({
+    debounce: duration.describe("How long a burst settles after its latest change."),
+    debounceLimit: duration.describe("The longest a burst's oldest change waits for its wake."),
+    steerAfter: duration.describe("How long a working lead gets before a wake steers into it."),
+    settle: duration.describe(
+      "How long a run that landed holds its channel, so the turn it started can show as working.",
+    ),
+    backoff: z
+      .tuple([duration, duration, duration])
+      .readonly()
+      .describe("The waits after the first, second and third wakes inbox didn't follow."),
+    remindSeen: duration.describe("How long a seen request makes no progress before a reminder."),
+    remindInProgress: duration.describe(
+      "How long a request in progress stays quiet before a reminder.",
+    ),
+    retry: duration.describe("The wait after a failed run, doubling with each failure in a row."),
+    retryLimit: duration.describe("The longest wait after a failed run."),
+    catchUpAfter: duration.describe(
+      "How long a publication may be missing after its scheduled run before it's caught up.",
+    ),
+  })
+  .strict();
+export type WakeTimings = z.output<typeof wakeTimingsSchema>;
 
 const MINUTE = 60_000;
 
