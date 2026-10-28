@@ -581,6 +581,28 @@ describe("the tokens", () => {
     expect(waits[2]).toBeGreaterThanOrEqual(195);
   });
 
+  test("confirming the tokens starts the waits over, even for a rejection that arrives with the answer", async () => {
+    silenceLog();
+    const link = await linkFakeSlack();
+    for (let count = 0; count < 3; count++) link.fake.failNext("auth.test", { status: 503 });
+    const { supervisor } = link.supervise({
+      timings: { ...defaultWakeTimings, retry: 50, retryLimit: 10_000 },
+    });
+    // Each failure reads the clock as auth.test is called and as its wait is set, and the answer
+    // that confirms is read before bots.info is called.
+    for (let read = 0; read < 3 * 2 + 2; read++) await link.nextRead();
+    expect(called(link.fake, "auth.test")).toBe(4);
+    supervisor.botRejected("invalid_auth");
+    link.fake.failNext("auth.test", { status: 503 });
+
+    await waitFor(() => expect(called(link.fake, "auth.test")).toBe(5));
+    const failedAt = performance.now();
+    await waitFor(() => expect(called(link.fake, "auth.test")).toBe(6));
+    // Counting on from the three failures before the confirmation would wait 400ms.
+    expect(performance.now() - failedAt).toBeLessThan(300);
+    await waitFor(() => expect(supervisor.state()).toEqual(connected));
+  });
+
   test("Slack holding back auth.test is asked again only once the time it named is up", async () => {
     silenceLog();
     const link = await linkFakeSlack();
