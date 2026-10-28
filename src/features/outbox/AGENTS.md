@@ -12,6 +12,23 @@ An item becomes `sending` in a committed transaction before the call is made, so
 
 A rate limit pauses only the method Slack limited, until the time Slack named.
 
+## Text
+
+`model/rendering.ts` owns Markdown conversion. It uses the pinned Markdown lexer, supplies
+mrkdwn section blocks and an escaped plain fallback, disables automatic parsing and unfurls,
+and neutralizes mentions. A section is at most 3,000 UTF-16 code units. An oversized block
+breaks only between lines, closing and reopening formatting, never inside a link, entity, or
+surrogate pair. A line that cannot fit is refused. The rendered sections and the fallback
+must each fit 12,000 code units, and a message has at most 50 blocks.
+Size refusals name the actual count and its limit. A long-line refusal also gives the
+rendered line number and a short preview, so the lead can repair it without guessing.
+
+`model/safety.ts` owns content-free secret refusals and clickable-link checks. The renderer
+allows only HTTP(S) links without credentials, local hostnames, or private IP literals.
+Private URLs inside code stay plain text and are allowed. Password-bearing URLs are
+secrets even in code. These are shape checks, not complete DLP or DNS-based network
+classification.
+
 ## Boundaries and invariants
 
 - Never retry a post blindly, and keep SDK retries off.
