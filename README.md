@@ -2,7 +2,7 @@
 
 One local bridge lets a [Toy Box](https://github.com/lostintangent/toy-box) channel's Copilot lead answer allowed people in one Slack channel, publish scheduled release notes there, and bring useful activity back to Toy Box.
 
-The four v1 guarantees are: only allowlisted people can open requests, only the owner widens access, uncertain posts are never resent, and events survive acknowledgement with gaps recovered or reported. Rare channel or policy changes pause the link until the owner resumes it. **Prototype:** owner setup, history catch-up and retention are still being completed on main.
+The four v1 guarantees are: only allowlisted people can open requests, only the owner widens access, uncertain posts are never resent, and events survive acknowledgement with gaps recovered or reported. Rare channel or policy changes pause the link until the owner resumes it. **Prototype:** history catch-up and ledger retention are still being completed on main.
 
 No DMs, attachments, Slack Connect, org-wide installs, rotating tokens or non-Copilot leads. Slack text the lead reads reaches Copilot and its selected model provider. Obtain company approval first and read the [reviewer guide](docs/security-review.md).
 
@@ -26,7 +26,7 @@ Run `copilot`, use `/login` to sign in, then exit. Start Toy Box **from this PAT
 toy-box --host 127.0.0.1
 ```
 
-Open <http://127.0.0.1:3000> and create a channel with a Copilot lead. Toy Box has no authentication. Never expose it publicly or through a tunnel.
+Open <http://127.0.0.1:3000> and create a channel with a Copilot lead (tested with `claude-sonnet-5`). Toy Box has no authentication. Never expose it publicly or through a tunnel.
 
 ## Create the Slack app
 
@@ -52,13 +52,25 @@ SLACK_APP_TOKEN=xapp-...
 TOY_BOX_URL=http://127.0.0.1:3000
 ```
 
-The bridge reads this file, not a checkout `.env`; environment variables override it. These instructions use the default data folder. `TOY_BOX_SLACK_HOME` can select another.
+The bridge reads this file, not a checkout `.env`; token and URL environment variables override it. These instructions use the default data folder. `TOY_BOX_SLACK_HOME` can select another.
 
 Invite the app into the Slack channel with `/invite` and select **Toy Box**, then run `toy-box-slack serve` in the foreground. Keep it running while configuring the link.
 
 ## Link the channels
 
-Owner commands have not landed on main yet. This section will use their actual help once available. Do not seed `bridge.db` as a setup shortcut.
+At your terminal, run `toy-box-slack passphrase` and type a strong, unique passphrase twice. It adds only `OWNER_PASSPHRASE_HASH` to the credential file. Never put the passphrase in Toy Box or Slack. Changing it needs the old one and takes effect without restarting.
+
+Copy the Slack channel ID from the bottom of its details and the allowed people's member IDs from their profiles. In Toy Box, ask the lead to set up Slack for those IDs, create its inbox routine, and print the exact `link` and `allow` commands. Run them yourself at a terminal. Their forms are:
+
+```sh
+toy-box-slack link --channel TOYBOX_ID --slack-channel SLACK_ID
+toy-box-slack allow --channel TOYBOX_ID USER_ID
+toy-box-slack status --channel TOYBOX_ID
+```
+
+Replace the IDs with the lead's commands. Review each preview before entering the passphrase. Defaults are `--requests mention --observe requesters`; `--requests all` accepts any allowed person's top-level post, and `--observe channel` lets a digest read other people's text too. Ask the lead for opt-in digest or release-note routines if wanted.
+
+Send a **new** mention by selecting the app in Slack's mention menu. An allowed person's question should get eyes and one threaded answer within minutes. If it does not, check `status` and the [operations guide](docs/operations.md).
 
 ## Start the bridge at login
 
@@ -91,6 +103,8 @@ Stop with `launchctl bootout "gui/$(id -u)/local.toy-box-slack"`. After changing
 
 ## Commands and development
 
-`toy-box-slack --help` lists commands, and `<command> --help` gives their flags. See [operations](docs/operations.md) for status, pauses, uncertain posts and deletion, [AGENTS.md](AGENTS.md) for architecture, and [research](docs/research) for evidence.
+**Lead:** `inbox`, `reply`, `dismiss`, `activity`, `mark-read`, `publish`, `retract`. **Owner:** `passphrase`, `link`, `allow`, `resume`. **Lead or terminal:** `status`, `deny`, `pause`, `unlink`. **Operator:** `serve`, `install-skill`.
+
+`toy-box-slack <command> --help` gives flags. See [operations](docs/operations.md) for status, pauses, uncertain posts and deletion, [AGENTS.md](AGENTS.md) for architecture, and [research](docs/research) for evidence.
 
 Run `bun run check` and `bun test`. `bun install` enables the pre-commit hook in `.githooks`.

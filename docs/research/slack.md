@@ -20,6 +20,11 @@ Secret-shaped output is refused both at rendering and at the send boundary.
 Method cooldowns are shared by the bridge's one Slack client in memory. Restart
 may encounter another 429, but never releases an ambiguous post's reservation.
 
+The 30-day cleanup being added in t5 applies to message-ledger rows, measured
+from their latest posted or edited version, not all bridge text. Queued and
+sent outbox payloads remain until unlink or uninstall. Content-free `changes`
+records remain too. Reviewers must approve retained output separately.
+
 ### Smaller v1: live Markdown probe
 
 On 2026-10-28, Slack Expert posted one `markdown` block in the approved

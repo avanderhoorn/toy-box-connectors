@@ -6,7 +6,7 @@ publishes opt-in scheduled updates in that same channel. A Copilot lead reads
 the bridge's ledger and queues posts through a CLI.
 
 **Review status:** this is a reviewer guide, not a compliance attestation or
-deployment approval. Owner setup, history catch-up and automatic retention are
+deployment approval. History catch-up and automatic ledger retention are
 still being completed on main. The checks below must pass against the landed
 code. Real Enterprise payloads and the company's private app and AI-processing
 policies still need approval. [Platform research](research/slack.md#enterprise-deployment-verified-2026-10-28)
@@ -39,7 +39,7 @@ Discovery, search or `chat:write.public` scope.
 to linked channels or allowlisted authors. The bridge discards unlinked message
 content before storage, but that does not restrict a stolen token.
 
-The default `--observe requests` retains text from allowed people, our bot and
+The default `--observe requesters` retains text from allowed people, our bot and
 any person posting in a request thread. Other messages become content-free
 markers. Opt-in `--observe channel` retains other people's channel text too.
 Other bots' text is not retained. The allowlist controls who opens requests,
@@ -76,17 +76,22 @@ open requests. Normally they mention the bot or follow up in their request
 thread. `--requests all` also accepts their top-level posts without a mention.
 Bots, apps and messages from before the link never open requests.
 
-**Owner setup is pending on main.** Its admission policy requires fresh account
-facts and refuses guests, bots, deactivated accounts and people outside the
-installation's workspace or Enterprise org. This is an admission-time check,
+Admission requires fresh account facts and refuses guests, bots, deactivated
+accounts and people outside the installation's workspace or Enterprise org.
+This is an admission-time check,
 not an hourly account monitor. A later guest conversion does not automatically
 remove someone, so the owner must review the allowlist. Scheduled digests and
 publications are opt-in routines, not arbitrary authors' requests.
 
-The owner's widening commands must show the proposed change and check a
-passphrase against an argon2id hash in the bridge. Do not put that passphrase
-in Toy Box or Slack. Caller roles alone cannot authorize widening. There are
-no Slack approval cards or buttons.
+`link` and `resume`, and `allow` when adding people, show the proposed change
+before asking for the owner's passphrase. The bridge checks it against the
+argon2id hash in `credentials.env`, read afresh at every check, and recomputes
+the preview inside its write transaction. A changed preview is refused.
+Every `link` asks, including a narrowing change. There is no lockout.
+`passphrase` changes the hash locally, with the old passphrase, while the
+bridge may keep running. A forgotten one requires removing its hash line and
+setting it again. Never put the passphrase in Toy Box or Slack. Caller roles
+alone cannot authorize widening, and there are no Slack approval buttons.
 
 Only a linked channel's lead can reply or publish. A terminal can inspect
 status but cannot answer as the lead. Member sessions are refused, including
@@ -96,7 +101,8 @@ work is a prompt rule, not an execution sandbox.
 Channels shared within the pinned Enterprise org are eligible only with a
 known, approved workspace audience. A fresh channel check at startup and
 before every post compares against what the owner approved, not the last
-refresh. External sharing, a widened audience, private-to-public conversion,
+refresh. Link and resume refuse archived channels. External sharing, a widened
+audience, private-to-public conversion,
 archive, a new channel ID, bot removal or an applicable policy refusal pauses
 the link. A failed fresh read does not authorize sending. These checks cannot
 make a send atomic with Slack's next channel change.
@@ -106,8 +112,9 @@ make a send atomic with Slack's next channel change.
 One owner on one Mac is the trust model. The data folder must be 0700,
 `credentials.env` must not be group/world accessible (use 0600), and the socket
 is 0600. The database, WAL and lock need not individually be 0600 because
-the folder protects them. Environment variables override the credential file;
-checkout `.env` files are not loaded.
+the folder protects them. Token and URL environment variables override the
+credential file; the owner hash is read only from that file. Checkout `.env`
+files are not loaded.
 
 Tokens stay in the bridge's normal control flow, not CLI output or prompts.
 The bridge opens no TCP listener and accepts only loopback HTTP for Toy Box.
@@ -130,14 +137,21 @@ DLP and does not constrain the lead's other shell tools.
 
 ## Retention and deletion
 
-Automatic 30-day text retention is pending on main. Until it lands, do not
-assume message or outbox text expires automatically. There are no downloaded
-files, coverage records or durable event receipts to retain.
+Automatic ledger cleanup is pending on main. The t5 change will delete
+`messages` rows at startup and hourly once their latest posted or edited
+version is over 30 days old, including content-free markers and tombstones.
+`changes` rows contain only identifiers, timestamps and kinds, and remain.
+
+**That job does not prune outbox payloads.** Queued and sent replies and
+publications keep their text until unlink or uninstall. Approve this longer
+output retention separately. There are no downloaded files, coverage records
+or durable event receipts to retain.
 
 Unlink removes a link's owned bridge data. Observed app uninstall, or token
 revocation naming our bot, empties all other tables and leaves the installation
 marked uninstalled. Other credential errors stop work but retain data for
-repair. An offline bridge cannot detect uninstall immediately.
+repair. The credential file and service logs remain and need separate
+offboarding cleanup. An offline bridge cannot detect uninstall immediately.
 
 When observed, Slack deletion, a tombstone or EKM/DLP withdrawal redacts the
 ledger's message and can cancel a pending request and its queued answer.
@@ -163,8 +177,8 @@ Ambiguous posts are checked for matching metadata about one and five minutes
 later, then remain unknown and reserved. They are never automatically resent,
 and no human-resolution command releases the reservation.
 
-Catch-up is pending on main. Its planned history read cannot recover every
-old-thread reply or an unseen edit/delete to an older stored message. Successful
+Catch-up is pending on main. Its planned history read cannot guarantee every
+old-thread reply or unseen edit/delete to an older stored message. Successful
 API access is not proof of complete history or approval for AI processing.
 
 v1 refuses Slack Connect, pending external shares, org-wide installs, rotating
