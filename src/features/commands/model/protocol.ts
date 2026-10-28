@@ -13,6 +13,13 @@ import { callerFactsSchema } from "./callers";
 /** The protocol version every answer carries. A CLI refuses an answer of another. */
 export const PROTOCOL_VERSION = 1;
 
+/**
+ * How long the CLI waits for the bridge to answer a call, in milliseconds. A command may still
+ * finish after that, but its caller has been told it may or may not have run, so every command
+ * answers well within it.
+ */
+export const COMMAND_TIMEOUT = 60_000;
+
 const COMMANDS_PATH = "/v1/commands/";
 
 /** The path a command's calls are posted to. */

@@ -1,18 +1,20 @@
-import { expect, onTestFinished, test } from "bun:test";
+import { expect, onTestFinished, spyOn, test } from "bun:test";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTestFolder } from "./testFixtures";
-import { listenForCommands } from "./socket";
+import { listenForCommands, type CommandSocketOptions } from "./socket";
 
-function ask(path: string): Promise<string> {
-  return fetch("http://bridge/", { unix: path }).then(
+function ask(path: string, timeout?: number): Promise<string> {
+  const signal = timeout === undefined ? undefined : AbortSignal.timeout(timeout);
+  return fetch("http://bridge/", { unix: path, signal }).then(
     (response) => response.text(),
-    (error: { code?: string }) => `refused: ${error.code}`,
+    (error: { name?: string; code?: string }) =>
+      error.name === "TimeoutError" ? "timed out" : `refused: ${error.code}`,
   );
 }
 
-function listen(path: string, answer: () => Promise<Response>, grace?: number) {
-  const socket = listenForCommands(path, answer, { grace });
+function listen(path: string, answer: () => Promise<Response>, options?: CommandSocketOptions) {
+  const socket = listenForCommands(path, answer, options);
   onTestFinished(() => socket.stop());
   return socket;
 }
@@ -55,7 +57,7 @@ test("stopping waits for calls in flight, and cuts them off after the grace peri
     return new Response("finished");
   });
   const finished = ask(join(folder, "finishing.sock"));
-  const hung = listen(join(folder, "hung.sock"), () => new Promise(() => {}), 50);
+  const hung = listen(join(folder, "hung.sock"), () => new Promise(() => {}), { grace: 50 });
   const cutOff = ask(join(folder, "hung.sock"));
   await Bun.sleep(20);
 
@@ -70,4 +72,23 @@ test("stopping waits for calls in flight, and cuts them off after the grace peri
 
   await hung.stop();
   expect(await cutOff).toBe("refused: ECONNRESET");
+});
+
+// Bun looks for idle calls every 4 seconds, so it drops one up to 4 seconds after its idle timeout,
+// and its own default of 10 seconds drops one after 8 to 12.
+test("drops a call that goes unanswered past its idle timeout", async () => {
+  const path = join(createTestFolder(), "bridge.sock");
+  listen(path, () => new Promise(() => {}), { idleTimeout: 1_000, grace: 50 });
+
+  expect(await ask(path, 6_000)).toBe("refused: ECONNRESET");
+}, 10_000);
+
+test("keeps a call open for twice as long as the CLI waits for its answer", async () => {
+  const serve = spyOn(Bun, "serve");
+  onTestFinished(() => serve.mockRestore());
+  const path = join(createTestFolder(), "bridge.sock");
+  listen(path, async () => new Response("answered"));
+
+  expect(serve.mock.calls[0]?.[0]).toMatchObject({ unix: path, idleTimeout: 120 });
+  expect(await ask(path)).toBe("answered");
 });

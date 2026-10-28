@@ -6,6 +6,7 @@
 // what each call says about its caller.
 
 import { rmSync } from "node:fs";
+import { COMMAND_TIMEOUT } from "@commands/model/protocol";
 
 export interface CommandSocket {
   /** Stops taking calls, and waits for those in flight until the grace period cuts them off. */
@@ -15,6 +16,11 @@ export interface CommandSocket {
 export type CommandSocketOptions = {
   /** How long calls in flight may take to finish once the bridge stops. */
   grace?: number;
+  /**
+   * How long a call may wait for its answer before the socket drops it. Bun's own default of 10
+   * seconds would drop a slow command, such as claim's wait, while the CLI still waits for it.
+   */
+  idleTimeout?: number;
 };
 
 /**
@@ -24,7 +30,7 @@ export type CommandSocketOptions = {
 export function listenForCommands(
   path: string,
   answer: (request: Request) => Promise<Response>,
-  { grace = 15_000 }: CommandSocketOptions = {},
+  { grace = 15_000, idleTimeout = 2 * COMMAND_TIMEOUT }: CommandSocketOptions = {},
 ): CommandSocket {
   rmSync(path, { force: true });
   // The socket file takes its mode from the umask, so nobody else can connect even for a moment.
@@ -34,6 +40,7 @@ export function listenForCommands(
     server = Bun.serve({
       unix: path,
       development: false,
+      ...idleSeconds(idleTimeout),
       fetch: answer,
       error(error) {
         console.error("Couldn't answer a call on the bridge's socket:", error);
@@ -56,4 +63,10 @@ export function listenForCommands(
       }
     },
   };
+}
+
+// Bun counts whole seconds. Its types offer idleTimeout only with a port, but Bun applies it to a
+// Unix socket too, as socket.test.ts proves.
+function idleSeconds(idleTimeout: number): object {
+  return { idleTimeout: Math.ceil(idleTimeout / 1_000) };
 }
