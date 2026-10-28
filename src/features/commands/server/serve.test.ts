@@ -1,6 +1,6 @@
 import { expect, onTestFinished, spyOn, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import { commandPath, CommandRefusedError } from "@commands/model/protocol";
+import { COMMANDS_PATH, CommandRefusedError } from "@commands/model/protocol";
 import { createStoredLink } from "@links/server/testFixtures";
 import { serveCommands } from "./serve";
 
@@ -23,7 +23,7 @@ async function call(name: string, body: unknown) {
     },
     () => 1_000,
   );
-  const request = new Request(`http://bridge${commandPath(name)}`, {
+  const request = new Request(`http://bridge${COMMANDS_PATH}${name}`, {
     method: "POST",
     body: JSON.stringify(body),
   });

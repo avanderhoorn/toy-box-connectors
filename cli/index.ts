@@ -6,7 +6,7 @@
 
 import { defineCommand, runMain } from "citty";
 import { socketCommands } from "@commands/client/cli";
-import { installBundledSkill } from "@commands/client/skill";
+import { installSkill } from "@commands/client/skill";
 
 import { version } from "../package.json";
 
@@ -19,13 +19,13 @@ const serve = defineCommand({
   },
 });
 
-const installSkill = defineCommand({
+const install = defineCommand({
   meta: {
     name: "install-skill",
     description: "Install the toy-box-slack skill where Copilot leads find it",
   },
   async run() {
-    process.exitCode = await installBundledSkill();
+    console.log(await installSkill());
   },
 });
 
@@ -35,7 +35,7 @@ const main = defineCommand({
     version,
     description: "Let a Toy Box channel's lead watch and answer a Slack channel",
   },
-  subCommands: { ...socketCommands(), serve, "install-skill": installSkill },
+  subCommands: { ...socketCommands(), serve, "install-skill": install },
 });
 
 await runMain(main);

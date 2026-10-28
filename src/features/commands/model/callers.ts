@@ -1,27 +1,17 @@
-// Who is calling the bridge.
-//
-// Copilot sets COPILOT_AGENT_SESSION_ID to the Toy Box session it runs, which for a lead is its
-// channel's ID, so a session that's a linked channel's ID is that channel's lead. A caller with no
-// session is someone at a terminal, who names the channel with --channel. Every other session, such
+// Copilot sets COPILOT_AGENT_SESSION_ID to the Toy Box session it runs, and a lead's session ID is
+// its channel's ID. A caller with no session is someone at a terminal, and every other session, such
 // as a channel member's, is refused. Any local process can set or unset the variable, so roles stop
-// mistakes rather than attacks, and the passphrase is what stops widening.
-//
-// Refusals say who may run a command and never how to become someone else, because an agent told
-// which variable to unset would unset it.
+// mistakes rather than attacks. Refusals never say how to become someone else, because an agent
+// told which variable to unset would unset it.
 
 import { z } from "zod";
 
 // Toy Box's durable IDs, as in toy-box's src/features/channels/model/index.ts.
 const toyBoxIdSchema = z.string().trim().min(1).max(255);
 
-/** What the CLI forwards about whoever runs it. */
+/** COPILOT_AGENT_SESSION_ID and the channel --channel names, as the CLI read them. */
 export const callerFactsSchema = z
-  .object({
-    sessionId: toyBoxIdSchema
-      .nullable()
-      .describe("COPILOT_AGENT_SESSION_ID, or null outside a Copilot session"),
-    channelId: toyBoxIdSchema.nullable().describe("The Toy Box channel --channel names, or null"),
-  })
+  .object({ sessionId: toyBoxIdSchema.nullable(), channelId: toyBoxIdSchema.nullable() })
   .strict();
 export type CallerFacts = z.output<typeof callerFactsSchema>;
 
@@ -38,14 +28,6 @@ export type Caller = { role: CallerRole; channelId: string | null };
 export type CallerResolution =
   | { kind: "caller"; caller: Caller }
   | { kind: "refused"; message: string };
-
-/** What `env` says about whoever runs the CLI, with the channel --channel named. */
-export function readCallerFacts(
-  env: Record<string, string | undefined>,
-  channelId: string | null,
-): CallerFacts {
-  return { sessionId: env.COPILOT_AGENT_SESSION_ID?.trim() || null, channelId };
-}
 
 /** Who `facts` describe, when `linked` holds every linked Toy Box channel, if they may run `name`. */
 export function resolveCaller(

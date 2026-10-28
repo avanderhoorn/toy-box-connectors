@@ -1,8 +1,5 @@
-// The dismiss command.
-//
-// Dismiss ends a request that needs no answer, and the request keeps the lead's reason. The
-// lifecycle refuses a request the lead hasn't read as it stands, so none ends over text the lead
-// didn't see.
+// The lifecycle refuses to dismiss a request the lead hasn't read as it stands, so none ends over
+// text the lead didn't see.
 
 import type { BridgeDatabase } from "@bridge/server/database";
 import { CommandRefusedError } from "@commands/model/protocol";

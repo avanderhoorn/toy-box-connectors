@@ -4,26 +4,21 @@ import {
   oneLine,
   personName,
   renderSlackText,
-  slackReferences,
+  mentionedUsers,
   type SlackNames,
 } from "./slackText";
 
-const names: SlackNames = {
-  people: new Map([
-    ["U0ALICE", "Alice Chen"],
-    ["U0BOT", "toy-box"],
-  ]),
-  channels: new Map([["C0DEPLOYS", "deploys"]]),
-};
+const names: SlackNames = new Map([
+  ["U0ALICE", "Alice Chen"],
+  ["U0BOT", "toy-box"],
+]);
 
 // What follows an @ that Toy Box would otherwise read as a mention.
 const ZWSP = "\u200b";
 
 describe("rendering Slack text", () => {
-  test("shows people and channels by the names the bridge stored", () => {
-    expect(renderSlackText("<@U0BOT> ask <@U0ALICE> about <#C0DEPLOYS>", names)).toBe(
-      "{toy-box} ask {Alice Chen} about #deploys",
-    );
+  test("shows people by the names the bridge stored", () => {
+    expect(renderSlackText("<@U0BOT> ask <@U0ALICE>", names)).toBe("{toy-box} ask {Alice Chen}");
   });
 
   test("falls back to the label Slack sent, then to the ID", () => {
@@ -100,11 +95,11 @@ describe("rendering Slack text", () => {
   });
 });
 
-test("slackReferences collects the people and channels a text names, once each", () => {
-  expect(slackReferences("<@U1> <@U2|bob> <#C1|x> <@U1> <!here> <https://x.dev> <#C2>")).toEqual({
-    people: ["U1", "U2"],
-    channels: ["C1", "C2"],
-  });
+test("mentionedUsers collects the people a text mentions", () => {
+  expect(mentionedUsers("<@U1> <@U2|bob> <#C1|x> <!here> <https://x.dev> <#C2>")).toEqual([
+    "U1",
+    "U2",
+  ]);
 });
 
 describe("personName", () => {

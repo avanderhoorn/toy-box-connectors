@@ -64,7 +64,7 @@ test.each([
     fallback: "@decorator",
   },
 ])("an inbox quote restores handles in both Slack surfaces: $source", ({ source, fallback }) => {
-  const inbox = renderSlackText(source, { people: new Map(), channels: new Map() });
+  const inbox = renderSlackText(source, new Map());
   expect(inbox).toContain("@\u200b");
   const message = rendered(inbox);
   expect(message.text).toBe(fallback);
@@ -75,7 +75,7 @@ test.each([
   ["<!here> <!channel> <!everyone>", "@\u200bhere @\u200bchannel @\u200beveryone"],
   ["@here @CHANNEL @Everyone", "@\u200bhere @\u200bCHANNEL @\u200bEveryone"],
 ])("an inbox quote keeps broadcasts neutralized: %s", (source, expected) => {
-  const inbox = renderSlackText(source, { people: new Map(), channels: new Map() });
+  const inbox = renderSlackText(source, new Map());
   const message = rendered(inbox);
   expect(message.text).toBe(expected);
   expect(message.blocks.map((block) => block.text.text)).toEqual([expected]);

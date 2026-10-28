@@ -1,20 +1,9 @@
-// How commands word counts, spans of time and lists.
-//
-// Every command counts the same way and gives time to the minute, so a span reads alike wherever
-// the lead meets it, whenever the CLI prints it.
+// Every command gives time to the minute, so a span reads alike whenever the CLI prints it.
 
-/** "1 message" or "3 messages". */
 export function count(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
-/** "Alice", "Alice and Bob", or "Alice, Bob, and Carol". Empty for nobody. */
-export function joinNames(names: readonly string[]): string {
-  if (names.length <= 2) return names.join(" and ");
-  return `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`;
-}
-
-/** How long ago something happened, to the minute. */
 export function ago(milliseconds: number): string {
   return milliseconds < 60_000 ? "just now" : `${duration(milliseconds)} ago`;
 }

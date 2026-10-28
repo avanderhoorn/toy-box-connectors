@@ -1,15 +1,11 @@
-// The commands the bridge serves.
-//
-// Each command declares who may run it and the input it takes. The CLI offers each input field as
-// an option named for it in kebab case, or as an argument when it's positional, and forwards the
-// text it read. The bridge parses that text with the same schema before the command runs, so a
+// The commands the bridge serves. The CLI offers each input field as a kebab-case option, or an
+// argument when it's positional, and the bridge parses the text it read with the same schema, so a
 // command can't mean one thing to the lead and another to the bridge.
 
 import { z } from "zod";
 import type { CallerRole } from "./callers";
 
 export type CommandSpec = {
-  /** One line for --help. */
   description: string;
   callers: readonly CallerRole[];
   /** A strict object whose fields parse the text the CLI read. */
