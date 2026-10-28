@@ -510,6 +510,9 @@ describe("the tokens", () => {
       expect.objectContaining({ reason: "auth_failed" }),
     );
     expect(logged(log, problem)).toBe(1);
+    // Stopping waits for Slack's answer to any connection it was asked for, so one more shows by now.
+    await supervisor.stop();
+    expect(called(link.fake, "apps.connections.open")).toBe(1);
   });
 
   test("a rejection while Slack is asked about the tokens outlasts the answer already on its way", async () => {
