@@ -1,3 +1,6 @@
+import { APPROVE_ACTION_ID, REJECT_ACTION_ID } from "@links/model/approvals";
+import type { CardMessage } from "@links/model/cards";
+import { slackTsSchema, type SlackTs } from "@slackapi/model/ts";
 import { z } from "zod";
 import type { RenderedMessage } from "./rendering";
 import { linkProblem, outputProblem, type OutputProblem } from "./safety";
@@ -93,5 +96,19 @@ export function checkCardPayload(
     ? { kind: "valid", message: parsed.data }
     : { kind: "refused", problem: "invalid_snapshot" };
 }
-import { APPROVE_ACTION_ID, REJECT_ACTION_ID } from "@links/model/approvals";
-import type { CardMessage } from "@links/model/cards";
+
+const cardUpdateSchema = cardMessageSchema
+  .omit({ unfurl_links: true, unfurl_media: true })
+  .extend({ ts: slackTsSchema })
+  .refine((message) => message.blocks.every((block) => block.type !== "actions"));
+
+export function checkCardUpdatePayload(
+  payload: unknown,
+):
+  | { kind: "valid"; message: Pick<CardMessage, "text" | "blocks" | "parse"> & { ts: SlackTs } }
+  | { kind: "refused"; problem: "invalid_snapshot" } {
+  const parsed = cardUpdateSchema.safeParse(payload);
+  return parsed.success
+    ? { kind: "valid", message: parsed.data }
+    : { kind: "refused", problem: "invalid_snapshot" };
+}

@@ -2,7 +2,8 @@
 
 Evidence checked: 2026-10-28. This document distinguishes Slack's published
 contract from recommendations and items that need a live workspace to verify.
-No Slack credentials or live workspace have been used.
+The author has used no Slack credentials or live workspace. Later live probes
+reported by the Lead are attributed explicitly.
 
 ## Recommendations that affect the architecture
 
@@ -637,9 +638,10 @@ to become Block Kit.
 
 Keep ordinary `text` near 4,000 characters. Slack truncates above 40,000.
 Section text has its own 3,000-character limit, and messages allow up to 50
-blocks. Split on safe paragraph/code boundaries with a stable segment index, or
-upload an explicitly approved report instead. Never silently truncate a request,
-approval, or answer without telling the user. Set `unfurl_links=false`,
+blocks. The adopted v1 renderer limits the fallback and combined section text
+to 12,000 characters and refuses oversized output rather than splitting or
+truncating it. A larger report needs an explicitly approved delivery form.
+Set `unfurl_links=false`,
 `unfurl_media=false`, and, where available, `unfurl_app_links=false` for internal
 or potentially sensitive links. Never post a private localhost Toy Box URL as if
 Slack recipients could open it, and never expose Toy Box just to make it work.
@@ -652,6 +654,36 @@ For progress edits, keep the same own message channel/`ts` and send complete
 remove or preserve stale blocks. Ephemeral messages are not durable and cannot
 be edited with `chat.update`. They are unsuitable for request tracking.
 [Update semantics](https://docs.slack.dev/reference/methods/chat.update/).
+
+### Approval card edits: a different wire contract
+
+The current `chat.update` argument table supports `channel`, `ts`, `text`,
+`blocks`, `parse`, and `metadata`, but does not list the post-only
+`unfurl_links`, `unfurl_media`, or top-level `mrkdwn` controls. Do not copy a
+post payload wholesale into an edit. Always send `parse=none`: its documented
+default differs from posting and overwrites the message's previous setting.
+The documented successful response has a top-level `ts` but no
+`message.ts`. Confirm the known target from top-level channel and ts, and reject
+contradictory nested fields without requiring that optional echo.
+[Arguments, parsing, and response](https://docs.slack.dev/reference/methods/chat.update/).
+
+The argument table provides no conditional version or compare-and-set option.
+Treat a timed-out edit as potentially still executing remotely, not cancelled.
+Our policy serializes edits per approval, renders its current state for every
+attempt, and supersedes older queued or unknown updates. Only a card's first
+post may contain decision buttons. Every update follows a decision and its
+snapshot decoder rejects actions blocks, so a late older update can restore
+an older decision label but not approval controls. This limits the damage
+without promising remote ordering Slack has not documented.
+[Timeout/partial-success contract](https://docs.slack.dev/reference/methods/chat.update/#errors),
+[credential-free delivery cases](../../src/features/outbox/server/posts.test.ts),
+[snapshot boundary cases](../../src/features/outbox/model/payload.test.ts).
+
+On 2026-10-28 the Lead reported six live-message probes with no unfurls on
+edits to messages initially posted with unfurls disabled, including adding
+links. This is attributed workspace evidence from channel message 203, not
+an independent live verification by this author or a published Slack
+guarantee about inherited unfurl settings.
 
 ### Daily and weekly releases
 

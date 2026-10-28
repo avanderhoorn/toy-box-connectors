@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { checkLeadPayload } from "./payload";
+import { renderCard } from "@links/model/cards";
+import { pendingApproval } from "@links/model/testFixtures";
+import { checkCardPayload, checkCardUpdatePayload, checkLeadPayload } from "./payload";
 import { renderMarkdown } from "./rendering";
 
 function message(markdown = "A safe **answer** with [docs](https://example.com/a?a=1&b=2).") {
@@ -76,4 +78,46 @@ test("12,000 section characters fit and 12,001 do not", () => {
   expect(checkLeadPayload(original).kind).toBe("valid");
   original.blocks.push({ type: "section", text: { type: "mrkdwn", text: "a", verbatim: true } });
   expect(checkLeadPayload(original)).toEqual({ kind: "refused", problem: "message_too_long" });
+});
+
+function cardUpdate() {
+  const { text, blocks, parse } = renderCard(
+    pendingApproval({ state: "approved", decidedBy: "U-owner", decidedAt: 1 }),
+    {},
+  );
+  return { text, blocks, parse, ts: "1.1" };
+}
+
+test("card posts preserve trusted controls but edits snapshot only their actual arguments", () => {
+  const post = renderCard(pendingApproval(), {});
+  expect(checkCardPayload(post)).toEqual({ kind: "valid", message: post });
+  const update = cardUpdate();
+  expect(checkCardUpdatePayload(update)).toEqual({ kind: "valid", message: update });
+});
+
+test("an edit cannot restore pending approval buttons", () => {
+  const pending = renderCard(pendingApproval(), {});
+  expect(
+    checkCardUpdatePayload({
+      text: pending.text,
+      blocks: pending.blocks,
+      parse: pending.parse,
+      ts: "1.1",
+    }),
+  ).toEqual({ kind: "refused", problem: "invalid_snapshot" });
+});
+
+test.each([
+  { ts: null },
+  { ts: undefined },
+  { ts: "not-a-ts" },
+  { parse: "full" },
+  { unfurl_links: false },
+  { unfurl_media: false },
+  { metadata: {} },
+])("an edit snapshot refuses missing proof or unsupported arguments: %j", (change) => {
+  expect(checkCardUpdatePayload({ ...cardUpdate(), ...change })).toEqual({
+    kind: "refused",
+    problem: "invalid_snapshot",
+  });
 });

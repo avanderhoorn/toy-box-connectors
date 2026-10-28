@@ -18,8 +18,16 @@ import {
 } from "@slackapi/server/channels";
 import { readInstallation } from "@slackapi/server/installation";
 import { ZodError } from "zod";
-import { nextReconciliation, outboxMetadata, postReceipt, writeOutcome } from "../model/delivery";
-import { checkCardPayload, checkLeadPayload } from "../model/payload";
+import {
+  nextReconciliation,
+  outboxMetadata,
+  postReceipt,
+  updateReceipt,
+  writeOutcome,
+  type PostReceipt,
+  type WriteOutcome,
+} from "../model/delivery";
+import { checkCardPayload, checkCardUpdatePayload, checkLeadPayload } from "../model/payload";
 import { postingPermission, type PostingLink } from "../model/posting";
 import { settleRequestAnswer } from "./answers";
 import {
@@ -42,8 +50,8 @@ type Preparation =
   | { kind: "started"; item: OutboxItem; identity: Pick<Installation, "appId" | "botId"> };
 
 /**
- * New finals, follow-ups, publications and approval cards. Progress, edits, cleanup and feedback
- * have separate handlers. Every network call is outside the database's serial transaction queue.
+ * New finals, follow-ups, publications and approval cards, and updates to those cards. Progress,
+ * cleanup and feedback have separate handlers. No network call runs inside a write.
  */
 export function createPostDelivery(
   database: BridgeDatabase,
@@ -81,15 +89,66 @@ export function createPostDelivery(
         }),
       ),
     );
+    return finish(
+      item,
+      outcome.kind === "accepted"
+        ? {
+            kind: "accepted",
+            result: postReceipt(outcome.result, { ...item, text: payload.message.text }, identity),
+          }
+        : outcome,
+      attemptAt,
+    );
+  }
+
+  async function updateCard(id: string): Promise<PostStep> {
+    const cooldown = await bot.cooldown("chat.update");
+    if (cooldown !== null) return defer(id, "rate_limited", cooldown);
+    const prepared = await database.write((tx) => prepare(tx, id, now(), "chat.update"));
+    if (prepared.kind === "refresh")
+      throw new Error("An approval card cannot require an audience refresh.");
+    if (prepared.kind !== "started") return prepared;
+    const item = prepared.item;
+    const attemptAt = item.attemptStartedAt;
+    if (attemptAt === null) throw new Error("A committed card update has no attempt time.");
+    const payload = checkCardUpdatePayload(item.payload);
+    if (payload.kind !== "valid")
+      throw new Error("A committed card update has an invalid snapshot.");
+    const outcome = writeOutcome(
+      await bot.call("chat.update", (client) =>
+        client.chat.update({
+          ...payload.message,
+          channel: item.channelId,
+          metadata: outboxMetadata(item),
+        }),
+      ),
+    );
+    return finish(
+      item,
+      outcome.kind === "accepted"
+        ? {
+            kind: "accepted",
+            result: updateReceipt(
+              outcome.result,
+              { ...item, text: payload.message.text, ts: payload.message.ts },
+              prepared.identity,
+            ),
+          }
+        : outcome,
+      attemptAt,
+    );
+  }
+
+  async function finish(
+    item: OutboxItem,
+    outcome: WriteOutcome<PostReceipt>,
+    attemptAt: number,
+  ): Promise<PostStep> {
     return database.write(async (tx) => {
       const at = now();
       let settlement: OutboxSettlement;
       if (outcome.kind === "accepted") {
-        const receipt = postReceipt(
-          outcome.result,
-          { ...item, text: payload.message.text },
-          identity,
-        );
+        const receipt = outcome.result;
         settlement =
           receipt.kind === "confirmed"
             ? {
@@ -132,7 +191,12 @@ export function createPostDelivery(
       if (outcome.kind === "failed" && outcome.suspend !== null) {
         await suspendChannel(tx, item.channelId, outcome.suspend, at);
       }
-      if (settled.state === "sent" && item.kind === "card" && item.approvalId !== null) {
+      if (
+        settled.state === "sent" &&
+        item.kind === "card" &&
+        item.phase === "post" &&
+        item.approvalId !== null
+      ) {
         if (settled.slackTs === null) throw new Error("A confirmed card has no Slack timestamp.");
         await recordCardPosted(tx, item.approvalId, settled.slackTs);
       }
@@ -155,15 +219,22 @@ export function createPostDelivery(
     });
   }
 
-  async function prepare(tx: Bun.SQL, id: string, at: number): Promise<Preparation> {
+  async function prepare(
+    tx: Bun.SQL,
+    id: string,
+    at: number,
+    method: "chat.postMessage" | "chat.update" = "chat.postMessage",
+  ): Promise<Preparation> {
     const item = await readOutboxItem(tx, id);
     if (!item || item.state !== "queued") return { kind: "changed" };
-    if (
-      item.kind !== "reply" &&
-      item.kind !== "publication" &&
-      !(item.kind === "card" && item.phase === "post")
-    ) {
-      throw new Error(`Outbox o${item.number} is not a new final, follow-up, publication or card.`);
+    const supported =
+      method === "chat.update"
+        ? item.kind === "card" && item.phase === "update"
+        : item.kind === "reply" ||
+          item.kind === "publication" ||
+          (item.kind === "card" && item.phase === "post");
+    if (!supported) {
+      throw new Error(`Outbox o${item.number} cannot use ${method}.`);
     }
     if (item.nextAttemptAt !== null && item.nextAttemptAt > at) {
       return { kind: "waiting", reason: "retry_after", until: item.nextAttemptAt };
@@ -179,12 +250,20 @@ export function createPostDelivery(
       if (item.channelId !== approval.card.channelId || item.threadTs !== null) {
         return finishQueued(tx, item, "failed", "destination_changed", at);
       }
-      if (approval.card.ts !== null) {
+      if (method === "chat.postMessage" && approval.card.ts !== null) {
         return finishQueued(tx, item, "dropped", "card_already_posted", at);
+      }
+      if (method === "chat.update" && approval.card.ts === null) {
+        return { kind: "waiting", reason: "card_not_posted", until: null };
+      }
+      if (method === "chat.update" && approval.state === "pending") {
+        return finishQueued(tx, item, "failed", "approval_pending", at);
       }
       const card = await readApprovalCard(tx, approval.id);
       if (!card) throw new Error("An approval disappeared within its transaction.");
-      payload = { ...card.message };
+      const { text, blocks, parse } = card.message;
+      payload =
+        method === "chat.update" ? { text, blocks, parse, ts: card.ts } : { ...card.message };
     } else {
       const link = await readPostingLink(tx, item.linkId);
       const request = item.requestId === null ? null : await readRequest(tx, item.requestId);
@@ -218,13 +297,18 @@ export function createPostDelivery(
         return { kind: "waiting", reason: permission.reason, until: null };
       }
     }
-    const checked = item.kind === "card" ? checkCardPayload(payload) : checkLeadPayload(payload);
+    const checked =
+      method === "chat.update"
+        ? checkCardUpdatePayload(payload)
+        : item.kind === "card"
+          ? checkCardPayload(payload)
+          : checkLeadPayload(payload);
     if (checked.kind === "refused") return finishQueued(tx, item, "failed", checked.problem, at);
-    const started = await startOutboxAttempt(tx, item, payload, "chat.postMessage", at);
+    const started = await startOutboxAttempt(tx, item, payload, method, at);
     return started.kind === "started"
       ? { ...started, identity: { appId: installation.appId, botId: installation.botId } }
       : started.kind === "waiting"
-        ? { ...started, reason: "post_slot" }
+        ? { ...started, reason: method === "chat.update" ? "card_in_flight" : "post_slot" }
         : started;
   }
 
@@ -278,7 +362,7 @@ export function createPostDelivery(
     });
   }
 
-  return { post };
+  return { post, updateCard };
 }
 
 async function finishQueued(

@@ -4,6 +4,7 @@ import {
   nextReconciliation,
   outboxMetadata,
   postReceipt,
+  updateReceipt,
   writeOutcome,
   type OutboxPost,
 } from "./delivery";
@@ -173,6 +174,90 @@ test("a metadata-drop warning is visible without calling an accepted post a fail
   expect(postReceipt(response({}, { warning: "missing_charset" }), post, identity)).toMatchObject({
     metadataOk: true,
   });
+});
+
+test("an edit's documented receipt need not repeat ts inside message", () => {
+  const edit = { ...post, ts: "200.000001" };
+  for (const receipt of [
+    { ok: true, channel: post.channelId, ts: edit.ts, message: { text: post.text, user: "UBOT" } },
+    { ok: true, channel: post.channelId, ts: edit.ts },
+  ]) {
+    expect(updateReceipt(receipt, edit, identity)).toEqual({
+      kind: "confirmed",
+      ts: edit.ts,
+      metadataOk: false,
+    });
+  }
+});
+
+test("an edit's full echo confirms its metadata without requiring it", () => {
+  const edit = { ...post, ts: "200.000001" };
+  expect(updateReceipt(response(), edit, identity)).toEqual({
+    kind: "confirmed",
+    ts: edit.ts,
+    metadataOk: true,
+  });
+  expect(
+    updateReceipt(response({}, { warning: "invalid_metadata_schema" }), edit, identity),
+  ).toEqual({
+    kind: "confirmed",
+    ts: edit.ts,
+    metadataOk: false,
+  });
+});
+
+test("an edit receipt must name the exact channel and existing message", () => {
+  const edit = { ...post, ts: "200.000001" };
+  for (const receipt of [
+    response({}, { ts: "300.000001" }),
+    response({ ts: "300.000001" }),
+    response({}, { ts: undefined }),
+    response({}, { ok: false }),
+  ]) {
+    expect(updateReceipt(receipt, edit, identity)).toEqual({
+      kind: "unverified",
+      reason: "invalid_response",
+    });
+  }
+  for (const receipt of [response({}, { channel: "COTHER" }), response({ channel: "COTHER" })]) {
+    expect(updateReceipt(receipt, edit, identity)).toEqual({
+      kind: "unverified",
+      reason: "wrong_channel",
+    });
+  }
+});
+
+test("an edit's contradictory author or thread never becomes a delete instruction", () => {
+  const edit = { ...post, ts: "200.000001" };
+  expect(updateReceipt(response({ bot_id: "BOTHER" }), edit, identity)).toEqual({
+    kind: "unverified",
+    reason: "wrong_author",
+  });
+  for (const change of [{ thread_ts: "300.000001" }, { subtype: "tombstone" }]) {
+    expect(updateReceipt(response(change), edit, identity)).toEqual({
+      kind: "unverified",
+      reason: "invalid_response",
+    });
+  }
+});
+
+test("withdrawn content is not receipt or read proof, even with our identity and metadata", () => {
+  for (const change of [
+    { subtype: "ekm_access_denied" },
+    { user: "UREVOKEDU" },
+    { hidden: true },
+  ]) {
+    expect(postReceipt(response(change), post, identity)).toEqual({
+      kind: "unverified",
+      reason: "invalid_response",
+    });
+    expect(updateReceipt(response(change), { ...post, ts: "200.000001" }, identity)).toEqual({
+      kind: "unverified",
+      reason: "invalid_response",
+    });
+    expect(messageEvidence(message(change), post.channelId, post, identity)).toBeNull();
+    expect(messageEvidence(message(change), post.channelId, post, identity, true)).toBeNull();
+  }
 });
 
 test("a full matching message proves metadata delivery, even with additive Slack fields", () => {

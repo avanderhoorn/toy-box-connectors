@@ -1,7 +1,7 @@
 import type { ChannelSuspendReason } from "@links/model/audience";
 import { channelFailureReason } from "@slackapi/model/errors";
 import type { Installation } from "@slackapi/model/installation";
-import { slackMessageSchema } from "@slackapi/model/messages";
+import { isWithdrawn, slackMessageSchema } from "@slackapi/model/messages";
 import { compareTs, slackTsSchema, type SlackTs } from "@slackapi/model/ts";
 import type { SlackCall } from "@slackapi/server/botClient";
 import { z } from "zod";
@@ -82,6 +82,10 @@ const receiptSchema = z.object({
   response_metadata: z.object({ warnings: z.array(z.string()).nullish() }).nullish(),
 });
 
+const updateReceiptSchema = receiptSchema.extend({
+  message: deliveryMessageSchema.extend({ ts: slackTsSchema.optional() }).optional(),
+});
+
 export type PostReceipt =
   | { kind: "confirmed"; ts: SlackTs; metadataOk: boolean }
   | { kind: "misplaced"; ts: SlackTs; metadataOk: boolean }
@@ -104,14 +108,48 @@ export function postReceipt(result: unknown, post: OutboxPost, identity: BotIden
   if (conflictingIdentity(receipt.message, identity)) {
     return { kind: "unverified", reason: "wrong_author" };
   }
-  const warnings = [receipt.warning ?? "", ...(receipt.response_metadata?.warnings ?? [])];
-  const metadataOk =
-    matchesMetadata(receipt.message.metadata, post) &&
-    !warnings.some((warning) => warning.toLowerCase().includes("metadata"));
   return {
     kind: correctThread(receipt.message, post.threadTs) ? "confirmed" : "misplaced",
     ts: receipt.ts,
-    metadataOk,
+    metadataOk: receiptMetadataOk(receipt, post),
+  };
+}
+
+/** An edit's target was already proved; Slack need not echo its ts inside message. */
+export function updateReceipt(
+  result: unknown,
+  post: OutboxPost & { ts: SlackTs },
+  identity: BotIdentity,
+): Exclude<PostReceipt, { kind: "misplaced" }> {
+  const parsed = updateReceiptSchema.safeParse(result);
+  if (!parsed.success) return { kind: "unverified", reason: "invalid_response" };
+  const receipt = parsed.data;
+  if (
+    receipt.channel !== post.channelId ||
+    (receipt.message?.channel != null && receipt.message.channel !== post.channelId)
+  ) {
+    return { kind: "unverified", reason: "wrong_channel" };
+  }
+  if (compareTs(receipt.ts, post.ts) !== 0) {
+    return { kind: "unverified", reason: "invalid_response" };
+  }
+  if (receipt.message) {
+    const message = { ...receipt.message, ts: receipt.message.ts ?? post.ts };
+    if (
+      compareTs(message.ts, post.ts) !== 0 ||
+      !currentMessage(message) ||
+      (message.thread_ts != null && !correctThread(message, post.threadTs))
+    ) {
+      return { kind: "unverified", reason: "invalid_response" };
+    }
+    if (conflictingIdentity(message, identity)) {
+      return { kind: "unverified", reason: "wrong_author" };
+    }
+  }
+  return {
+    kind: "confirmed",
+    ts: receipt.ts,
+    metadataOk: receiptMetadataOk(receipt, post),
   };
 }
 
@@ -155,6 +193,17 @@ export function nextReconciliation(attemptAt: number, completedPasses: number): 
   return delay === undefined ? null : attemptAt + delay;
 }
 
+function receiptMetadataOk(
+  receipt: z.output<typeof updateReceiptSchema>,
+  post: Pick<OutboxPost, "id" | "payloadHash">,
+): boolean {
+  const warnings = [receipt.warning ?? "", ...(receipt.response_metadata?.warnings ?? [])];
+  return (
+    matchesMetadata(receipt.message?.metadata, post) &&
+    !warnings.some((warning) => warning.toLowerCase().includes("metadata"))
+  );
+}
+
 function matchesMetadata(metadata: unknown, post: Pick<OutboxPost, "id" | "payloadHash">): boolean {
   const parsed = metadataSchema.safeParse(metadata);
   return (
@@ -174,8 +223,11 @@ function correctThread(message: DeliveryMessage, threadTs: SlackTs | null): bool
 }
 
 function currentMessage(message: DeliveryMessage): boolean {
-  return !["tombstone", "message_changed", "message_deleted", "message_replied"].includes(
-    message.subtype ?? "",
+  return (
+    !isWithdrawn(message) &&
+    !["tombstone", "message_changed", "message_deleted", "message_replied"].includes(
+      message.subtype ?? "",
+    )
   );
 }
 

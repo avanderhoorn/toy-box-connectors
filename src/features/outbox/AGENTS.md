@@ -18,12 +18,17 @@ payload hash. Manual resolution may use exact sent text only when metadata is ab
 never when metadata identifies another item. A receipt that shows a reply at the root
 requires withdrawal, not confirmation.
 
-`server/posts.ts` posts finals, follow-ups, publications and new approval cards through the shared
-bot client, never from inside a write. It refreshes missing or stale channel facts before checking
+`server/posts.ts` posts finals, follow-ups, publications and new approval cards, and updates cards
+through the shared bot client, never from inside a write. It refreshes missing or stale channel facts before checking
 all authority again, commits sending, then builds metadata from the committed snapshot. Receipt
 proof and request settlement share a transaction. A misplaced receipt stores stray and queues its
 withdrawal together. Cards bypass a link's audience gate so a suspended link can receive its resume
 card, but still require an active installation and the approval's current target.
+An update snapshots only its actual arguments, including the proved card ts, and keeps parse none
+without post-only flags or actions blocks. It follows a decision, never a pending card, so a timed-out older update
+can show an older outcome but cannot restore buttons. An edit receipt must match its known target;
+Slack need not repeat ts inside message. Withdrawn snapshots never prove a receipt or a read,
+even when they retain our identity and metadata.
 
 `model/posting.ts` checks the current installation, link, destination, requester and request
 revision. Only explicit follow-ups reach answered, dismissed or expired requests, and none
