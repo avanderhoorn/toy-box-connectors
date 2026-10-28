@@ -72,4 +72,12 @@ describe("sweeping the files folder", () => {
 
     await sweepFiles(database, join(createTestFolder(), "files"));
   });
+
+  test("a files folder that can't be read rejects", async () => {
+    const database = await openTestDatabase();
+    const folder = join(createTestFolder(), "files");
+    writeFileSync(folder, "not a folder");
+
+    await expect(sweepFiles(database, folder)).rejects.toThrow("ENOTDIR");
+  });
 });
