@@ -8,8 +8,9 @@ import type { SlackPerson } from "@slackapi/model/users";
 // Slackbot, and in the installation's workspace or, in an Enterprise org, the installation's org.
 // The workspace a message names for its author is never the test, because an Enterprise coworker
 // can post from a sibling workspace. A response that leaves out whether they're a bot or a guest,
-// or their workspace or org, refuses rather than guesses. The people admitted are rechecked the
-// same way.
+// or their workspace or org, refuses rather than guesses. Allow asks when it shows the owner whom
+// it adds and again when they confirm. Nothing rechecks people once they're allowed, so the owner
+// denies someone Slack later makes a guest.
 
 /** Why the bridge won't admit someone. */
 export type AdmissionProblem =
@@ -33,7 +34,7 @@ const SLACKBOT_USER_ID = "USLACKBOT";
 /**
  * Why `userId` can't be admitted, given what users.info returned for them, or null when they can.
  * `person` is null when Slack doesn't know them. A definite problem comes before a flag Slack left
- * out, so a recheck that only removes people for a definite answer still removes them.
+ * out, so the refusal names it.
  */
 export function admissionProblem(
   userId: string,

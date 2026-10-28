@@ -12,7 +12,7 @@ import type { ChannelSuspendReason } from "./audience";
 export type SuspendReason =
   /** Its Toy Box channel was deleted, which nothing but unlink ends. */
   | "toybox_channel_deleted"
-  /** Slack gave its channel a new ID, as it can when it's shared, which linking it again ends. */
+  /** Slack gave its channel a new ID, as it can when shared, which unlink and a new link end. */
   | "channel_id_changed"
   | ChannelSuspendReason;
 
