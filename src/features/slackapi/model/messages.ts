@@ -11,6 +11,7 @@ const slackIdSchema = z.string().min(1);
 const slackFileSchema = z
   .object({
     id: slackIdSchema.describe("The file's ID"),
+    mode: z.string().nullish().describe("How Slack holds the file, tombstone once it's deleted"),
     name: z.string().nullish().describe("The file's name, absent for a deleted or hidden file"),
     mimetype: z.string().nullish().describe("The file's MIME type"),
     size: z.number().int().nonnegative().nullish().describe("The file's size in bytes"),
@@ -217,12 +218,15 @@ function fromSnapshot(
       subtype: payload.subtype ?? null,
       author: messageAuthor(payload, context),
       text,
-      files: (payload.files ?? []).map((file) => ({
-        id: file.id,
-        name: file.name ?? null,
-        mimetype: file.mimetype ?? null,
-        size: file.size ?? null,
-      })),
+      // A deleted file stays in its message as a tombstone, which must never be indexed again.
+      files: (payload.files ?? [])
+        .filter((file) => file.mode !== "tombstone")
+        .map((file) => ({
+          id: file.id,
+          name: file.name ?? null,
+          mimetype: file.mimetype ?? null,
+          size: file.size ?? null,
+        })),
       mentions,
       mentionsBot: mentions.includes(context.botUserId),
       editedTs: payload.edited?.ts ?? null,

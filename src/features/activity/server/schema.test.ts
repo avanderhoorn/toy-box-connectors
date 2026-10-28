@@ -81,6 +81,17 @@ test("a message keeps its text, files and content hash together or none of them"
   ).rejects.toThrow("CHECK constraint failed: (files IS NULL) = (text IS NULL)");
 });
 
+test("only a message whose text the ledger keeps remembers mentioning the bot", async () => {
+  const database = await openTestDatabase();
+  const marker = { text: null, files: null, content_hash: null };
+
+  await insertMessage(database, { ts: "1700000100.000100", mentions_bot: 1 });
+  await insertMessage(database, { ts: "1700000100.000200", ...marker });
+  await expect(
+    insertMessage(database, { ts: "1700000100.000300", ...marker, mentions_bot: 1 }),
+  ).rejects.toThrow("CHECK constraint failed: text IS NOT NULL OR mentions_bot = 0");
+});
+
 test("a deleted message, and one that no person or the bridge wrote, keeps no content", async () => {
   const database = await openTestDatabase();
   const marker = { text: null, files: null, content_hash: null };
@@ -104,7 +115,7 @@ test("a deleted message, and one that no person or the bridge wrote, keeps no co
 
 test("a file has a local copy and a fetch time exactly when it was fetched", async () => {
   const database = await openTestDatabase();
-  const fetched = { state: "fetched", local_path: "files/F0123.png", fetched_at: 1 };
+  const fetched = { state: "fetched", local_path: "F0123.png", fetched_at: 1 };
 
   await insertFile(database, { file_id: "F0001" });
   await insertFile(database, { file_id: "F0002", ...fetched });
@@ -114,7 +125,7 @@ test("a file has a local copy and a fetch time exactly when it was fetched", asy
   await expect(insertFile(database, { ...fetched, fetched_at: null })).rejects.toThrow(
     "CHECK constraint failed: (fetched_at IS NOT NULL) = (state = 'fetched')",
   );
-  await expect(insertFile(database, { local_path: "files/F0123.png" })).rejects.toThrow(
+  await expect(insertFile(database, { local_path: "F0123.png" })).rejects.toThrow(
     "CHECK constraint failed: (local_path IS NOT NULL) = (state = 'fetched')",
   );
 });

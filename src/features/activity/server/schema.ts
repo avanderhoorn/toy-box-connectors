@@ -2,7 +2,8 @@
 export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
   await db.unsafe(`
     -- A kept message has text, files and a content hash, and a content-free marker or a tombstone
-    -- has none of them. eligible marks a person's message, the only kind that can start a request.
+    -- has none of them, nor any trace that it mentioned the bot. eligible marks a person's
+    -- message, the only kind that can start a request.
     CREATE TABLE messages (
       channel_id   TEXT NOT NULL,
       ts           TEXT NOT NULL,
@@ -25,6 +26,7 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       CHECK (eligible = (author_role IN ('owner', 'allowed', 'observed'))),
       CHECK ((content_hash IS NULL) = (text IS NULL)),
       CHECK ((files IS NULL) = (text IS NULL)),
+      CHECK (text IS NOT NULL OR mentions_bot = 0),
       CHECK (text IS NULL OR (deleted = 0 AND author_role <> 'other'))
     );
 
@@ -73,7 +75,8 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       CHECK (through_seq <= served_through_seq)
     );
 
-    -- Only a kept message's files are indexed. size and mime are what Slack reported.
+    -- Only a kept message's files are indexed, and a file's row follows the message that last
+    -- shared it. size and mime are what Slack reported. local_path is relative to the files folder.
     CREATE TABLE files (
       file_id    TEXT PRIMARY KEY,
       channel_id TEXT NOT NULL,

@@ -189,7 +189,7 @@ describe("normalizing Slack messages", () => {
       text: undefined,
       files: [
         { id: "F1", name: "notes.txt", mimetype: "text/plain", size: 12, url_private: "https://x" },
-        { id: "F2", mode: "tombstone" },
+        { id: "F2", mode: "hidden_by_limit" },
       ],
     });
     expect(shared).toMatchObject({ author: "person", text: "" });
@@ -198,6 +198,25 @@ describe("normalizing Slack messages", () => {
       { id: "F2", name: null, mimetype: null, size: null },
     ]);
     expect(message({ ...plain, subtype: "me_message" }).author).toBe("person");
+  });
+
+  test("a deleted file drops out of its message, so a later edit never indexes it again", () => {
+    const edited = normalize({
+      type: "message",
+      subtype: "message_changed",
+      channel: "C1",
+      message: {
+        ...plain,
+        edited: { ts: "1700000001.000100" },
+        files: [
+          { id: "F1", mode: "hosted", name: "notes.txt" },
+          { id: "F2", mode: "tombstone" },
+        ],
+      },
+    });
+    expect(edited.kind === "message" && edited.message.files).toEqual([
+      { id: "F1", name: "notes.txt", mimetype: null, size: null },
+    ]);
   });
 
   test("our bot's own messages are self", () => {
