@@ -19,6 +19,8 @@ export type CommandContract<
   description: string;
   roles: readonly CallerRole[];
   scope: Scope;
+  /** Whether the bridge serves it while it can't use Slack. Only status and doctor do. */
+  withoutSlack?: boolean;
   /** A strict object. The CLI offers each field as an option named for it in kebab case. */
   input: Input;
   /** The input fields the CLI takes as arguments instead, in order. Only the last may be a list. */
@@ -58,6 +60,11 @@ export type CommandHandler<Contract extends CommandContract> = (
   input: z.output<Contract["input"]>,
   call: CommandCall<Contract["scope"]>,
 ) => Promise<z.input<Contract["result"]>>;
+
+/** One handler for each of `Contracts`, typed by its contract. */
+export type CommandHandlersFor<Contracts extends Record<string, CommandContract>> = {
+  [Name in keyof Contracts]: CommandHandler<Contracts[Name]>;
+};
 
 /**
  * A handler's refusal. The caller sees its message, which says what happened and what to do

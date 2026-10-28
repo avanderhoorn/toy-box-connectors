@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { prepareDataFolder } from "@bridge/server/dataFolder";
 import { acquireBridgeLock } from "@bridge/server/lock";
@@ -14,9 +14,13 @@ function snapshot(folder: string) {
       .sort()
       .map((name) => {
         const path = join(folder, name);
-        const { size, mode, mtimeMs } = statSync(path);
-        const sha256 = new Bun.CryptoHasher("sha256").update(readFileSync(path)).digest("hex");
-        return { name, size, mode, modified: mtimeMs, sha256 };
+        const stats = statSync(path);
+        // A socket can't be read, but one put in its place has another inode.
+        const sha256 = stats.isSocket()
+          ? null
+          : new Bun.CryptoHasher("sha256").update(readFileSync(path)).digest("hex");
+        const { size, mode, ino, mtimeMs } = stats;
+        return { name, size, mode, inode: ino, modified: mtimeMs, sha256 };
       }),
   };
 }
@@ -60,12 +64,13 @@ test("a bridge that finds the lock taken stops before it creates bridge.db", asy
   expect(snapshot(dataFolder)).toEqual(before);
 }, 15_000);
 
-test("a bridge that was killed leaves no lock behind", async () => {
+test("a bridge that was killed leaves no lock or socket in the next one's way", async () => {
   const home = createTestFolder();
   const killed = spawnBridge(home);
   await killed.running();
   killed.child.kill("SIGKILL");
   await killed.exit();
+  expect(existsSync(join(home, ".toy-box-slack", "bridge.sock"))).toBe(true);
 
   const next = spawnBridge(home);
   await next.running();

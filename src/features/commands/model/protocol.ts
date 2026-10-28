@@ -13,16 +13,25 @@ import { callerFactsSchema } from "./callers";
 /** The protocol version every answer carries. A CLI refuses an answer of another. */
 export const PROTOCOL_VERSION = 1;
 
+const COMMANDS_PATH = "/v1/commands/";
+
 /** The path a command's calls are posted to. */
 export function commandPath(name: string): string {
-  return `/v1/commands/${name}`;
+  return `${COMMANDS_PATH}${name}`;
 }
 
-/** One call, as the CLI posts it. The input stays unknown until the command's contract parses it. */
+/** The command a call to `path` names, or null when the path names none. */
+export function commandAt(path: string): string | null {
+  if (!path.startsWith(COMMANDS_PATH)) return null;
+  const name = path.slice(COMMANDS_PATH.length);
+  return /^[a-z][a-z-]*$/.test(name) ? name : null;
+}
+
+/** One call, as the CLI posts it. The input stays unchecked until the command's contract parses it. */
 export const commandRequestSchema = z
   .object({
     caller: callerFactsSchema,
-    input: z.unknown(),
+    input: z.record(z.string(), z.unknown()).describe("The values the CLI read, by field"),
   })
   .strict();
 export type CommandRequest = z.output<typeof commandRequestSchema>;

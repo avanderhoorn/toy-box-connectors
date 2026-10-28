@@ -7,7 +7,8 @@
 // status.
 
 import { z } from "zod";
-import { publishCommand, REQUESTS_COMMAND } from "@toybox/model";
+import { suspensions, type SuspendReason, type Suspension } from "@links/model/status";
+import { publishCommand, REQUESTS_COMMAND, type RoutineState } from "@toybox/model";
 
 /** The Slack connection as every caller sees it. */
 export const slackConnectionSchema = z
@@ -42,6 +43,14 @@ export type BannerPost = z.output<typeof postSchema>;
 
 /** Something that needs a person, named in every banner until it's fixed. */
 export const bannerWarningSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("link_inactive"),
+      status: z.enum(["paused", "suspended"]),
+      reason: z.string().nullable().describe("Why the bridge suspended the link, as it stored it"),
+    })
+    .strict()
+    .describe("The link opens no new requests, and its posts wait until it's active again"),
   z
     .object({ kind: z.literal("routine_missing"), series: seriesSchema })
     .strict()
@@ -88,6 +97,66 @@ export const bannerSchema = z
   .strict();
 export type Banner = z.output<typeof bannerSchema>;
 
+/** What the banner reads of one link in view. */
+export type LinkHealth = {
+  status: "active" | "paused" | "suspended";
+  statusReason: string | null;
+  coverage: Coverage;
+  /** Null for the link's requests routine and the series for a publication's. */
+  routines: readonly { series: string | null; state: RoutineState }[];
+};
+
+/** A post only a person can settle, because the bridge never resends or deletes it on its own. */
+export type UnsettledPost = BannerPost & { state: "delivery_unknown" | "stray" };
+
+/**
+ * The banner for the links in view. A warning that reads the same for two links is named once,
+ * because the operator's banner covers every link and status says which.
+ */
+export function composeBanner({
+  slack,
+  links,
+  posts,
+  restore,
+}: {
+  slack: SlackConnection;
+  links: readonly LinkHealth[];
+  posts: readonly UnsettledPost[];
+  restore: Restore | null;
+}): Banner {
+  const warnings: BannerWarning[] = [];
+  for (const link of links) {
+    if (link.status !== "active") {
+      const reason = link.status === "suspended" ? link.statusReason : null;
+      warnings.push({ kind: "link_inactive", status: link.status, reason });
+    }
+    for (const { series, state } of link.routines) {
+      if (state === "missing") warnings.push({ kind: "routine_missing", series });
+      if (state === "drifted") warnings.push({ kind: "routine_drifted", series });
+    }
+  }
+  for (const state of ["delivery_unknown", "stray"] as const) {
+    const unsettled = posts.filter((post) => post.state === state);
+    if (unsettled.length === 0) continue;
+    warnings.push({ kind: state, posts: unsettled.map(({ item, kind }) => ({ item, kind })) });
+  }
+  return {
+    slack,
+    coverage: links.length === 0 ? null : worstCoverage(links.map((link) => link.coverage)),
+    warnings: warnings.filter(
+      (warning, index) =>
+        warnings.findIndex((other) => JSON.stringify(other) === JSON.stringify(warning)) === index,
+    ),
+    restore,
+  };
+}
+
+// A repair under way comes first, because whatever it finds may still change the answer.
+function worstCoverage(coverages: readonly Coverage[]): Coverage {
+  if (coverages.includes("repairing")) return "repairing";
+  return coverages.includes("partial") ? "partial" : "complete";
+}
+
 /** The banner as a Markdown quote. */
 export function presentBanner(banner: Banner): string {
   const health = [
@@ -115,6 +184,10 @@ const slackPhrases: Record<SlackConnection, string> = {
 
 function presentWarning(warning: BannerWarning): string {
   switch (warning.kind) {
+    case "link_inactive":
+      return warning.status === "paused"
+        ? "link paused, its posts wait until it's resumed"
+        : `link suspended ${describeSuspension(warning.reason).because}, its posts wait`;
     case "routine_missing":
       return warning.series === null
         ? "the requests routine is gone, register a new one with `toy-box-slack routine --requests <id>`"
@@ -128,6 +201,20 @@ function presentWarning(warning: BannerWarning): string {
     case "stray":
       return `${presentPosts(warning.posts)} outside ${warning.posts.length === 1 ? "its thread" : "their threads"} (${itemList(warning.posts)})`;
   }
+}
+
+/**
+ * Why the bridge suspended a link and what ends it, even for a reason this version doesn't know,
+ * such as one a newer bridge stored.
+ */
+export function describeSuspension(reason: string | null): Suspension {
+  if (reason !== null && Object.hasOwn(suspensions, reason)) {
+    return suspensions[reason as SuspendReason];
+  }
+  return {
+    because: reason === null ? "for a reason it didn't record" : `(${reason})`,
+    fix: "Fix what suspended it, then run `toy-box-slack resume` for the owner to approve in Slack.",
+  };
 }
 
 const postNouns: Record<BannerPost["kind"], [string, string]> = {

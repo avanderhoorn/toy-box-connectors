@@ -3,14 +3,19 @@
 // The bridge prepares its data folder, reads its settings, takes the
 // single-bridge lock, and only then opens `bridge.db`, so a second bridge stops
 // before it opens anything.
-// Then it starts its work: following each linked Toy Box channel and waking
-// leads. It lets go of everything in the reverse order.
+// Then it starts its work: answering commands on its socket, following each
+// linked Toy Box channel and waking leads. It lets go of everything in the
+// reverse order, so it stops taking commands before anything they use stops.
 //
 // A part that fails in a way retrying can't fix, such as a storage error,
 // reports it through one fatal path, and the bridge exits so launchd restarts
 // it.
 
 import { join } from "node:path";
+import { commandContracts } from "@commands/model";
+import { unconfiguredSlack, type SlackState } from "@commands/model/status";
+import { serveCommands } from "@commands/server/serve";
+import { statusCommand } from "@commands/server/status";
 import { startToyBoxClient, type ToyBoxClient } from "@toybox/server";
 import { startWakeScheduler, type WakeScheduler } from "@wakes/server";
 import { prepareDataFolder, resolveDataFolder } from "./dataFolder";
@@ -18,6 +23,7 @@ import { openBridgeDatabase, type BridgeDatabase } from "./database";
 import { readCredentialsFile, resolveBridgeSettings } from "./environment";
 import { acquireBridgeLock } from "./lock";
 import { BridgeRefusedError } from "./refusal";
+import { listenForCommands, type CommandSocket } from "./socket";
 
 export interface Bridge {
   /** Resolves with the first error that stopped part of the bridge, after which it must stop. */
@@ -58,9 +64,11 @@ export async function startBridge(
   let database: BridgeDatabase | undefined;
   let toyBox: ToyBoxClient | undefined;
   let scheduler: WakeScheduler | undefined;
+  let socket: CommandSocket | undefined;
 
   async function stop() {
     try {
+      await socket?.stop();
       await scheduler?.stop();
       await toyBox?.stop();
       await database?.close();
@@ -81,6 +89,23 @@ export async function startBridge(
       onError: failure.resolve,
       timings: settings.wakeTimings,
     });
+    // Until the receiver reports its connection, Slack is on its way whenever both tokens are set.
+    const slack = (): SlackState =>
+      unconfiguredSlack(settings) ?? { connection: "connecting", problem: null };
+    const origin = settings.toyBoxOrigin;
+    socket = listenForCommands(
+      join(dataFolder, "bridge.sock"),
+      serveCommands({
+        contracts: commandContracts,
+        handlers: {
+          status: statusCommand({ database, origin, slack, toyBox, wakes: scheduler }),
+        },
+        database,
+        origin,
+        toyBox,
+        slack,
+      }),
+    );
     await toyBox.followLinks();
     return { failed: failure.promise, stop };
   } catch (error) {

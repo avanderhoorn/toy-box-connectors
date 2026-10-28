@@ -14,7 +14,7 @@ The wake policy is a pure decision over a link's durable request state, the lead
 
 ## The CLI contract
 
-The lead answers through `toy-box-slack`, which sends versioned JSON over the bridge's Unix socket. Each command has zod input and output schemas, a pure Markdown presenter, and a documented exit code, and `--json` prints the same result as data. Output opens with a health banner and ends with the next step. The bridge resolves who is calling: the linked channel's lead may run everything, a member may only read, and any other session is refused. With no session, the caller is the operator, who may read and run setup but never reply or publish. The CLI never talks to Slack or Toy Box itself and keeps no state of its own.
+The lead answers through `toy-box-slack`, which sends versioned JSON over the bridge's Unix socket. Each command has zod input and output schemas, a pure Markdown presenter, and a documented exit code, and `--json` prints the same result as data. Output opens with a health banner and ends with the next step. The bridge resolves who is calling: the linked channel's lead may run everything, a member may only read, and any other session is refused. With no session, the caller is the operator, who may read and run setup but never reply or publish. While the bridge can't use Slack, because a token is missing, rejected or refused, it runs only `status` and `doctor`, which say why. The CLI never talks to Slack or Toy Box itself and keeps no state of its own.
 
 ## Boundaries and invariants
 

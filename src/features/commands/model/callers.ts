@@ -48,7 +48,9 @@ export type CallerFacts = z.output<typeof callerFactsSchema>;
  * Who the bridge acts for. A lead or member always acts for its own channel, and the operator
  * for the channel it names, if any.
  */
-export type Caller = { role: CallerRole; channelId: string | null; sessionId: string | null };
+export type Caller =
+  | { role: "lead" | "member"; channelId: string; sessionId: string }
+  | { role: "operator"; channelId: string | null; sessionId: null };
 
 /** A caller acting for one Toy Box channel. */
 export type ChannelCaller = Caller & { channelId: string };
@@ -56,6 +58,7 @@ export type ChannelCaller = Caller & { channelId: string };
 /** The rule that refused a caller. */
 export type CallerRule =
   | "toy_box_port"
+  | "toy_box_unreachable"
   | "unknown_session"
   | "channel_mismatch"
   | "role"
@@ -145,7 +148,7 @@ const roleLimits: Record<CallerRole, string> = {
 function findSession(
   catalog: ToyBoxCatalog,
   sessionId: string,
-): { role: CallerRole; channelId: string } | undefined {
+): { role: "lead" | "member"; channelId: string } | undefined {
   if (catalog.channels.some((channel) => channel.id === sessionId)) {
     return { role: "lead", channelId: sessionId };
   }
