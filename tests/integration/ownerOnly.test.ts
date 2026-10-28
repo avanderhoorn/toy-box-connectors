@@ -190,6 +190,15 @@ test("a change that's no longer what the owner was shown is refused", async () =
   );
 });
 
+test("link won't move a link to another Slack channel until the owner unlinks it", async () => {
+  const { slack, as } = await ownedBridge();
+  slack.addChannel({ id: "C0OTHER", name: "general" });
+  expect(await as("a terminal", "link", { slackChannel: "C0OTHER" })).toMatchObject({
+    exitCode: 1,
+    text: "This Toy Box channel is linked to #C0LINK. Run `toy-box-slack unlink` before you link it to another channel.",
+  });
+});
+
 test("allow refuses a guest when shown or confirmed, and deny takes either of someone's IDs", async () => {
   const { slack, as, link } = await ownedBridge();
   const guest = { ...MALLORY_USER, is_restricted: true };
