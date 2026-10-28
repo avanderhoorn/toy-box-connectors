@@ -2,7 +2,7 @@ import { expect, onTestFinished, spyOn, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { COMMANDS_PATH, CommandRefusedError } from "@commands/model/protocol";
 import { createStoredLink } from "@links/server/testFixtures";
-import { serveCommands } from "./serve";
+import { serveCommands, type CommandHandlers } from "./serve";
 
 const LEAD = { sessionId: "toybox-link", channelId: null };
 
@@ -10,19 +10,17 @@ const LEAD = { sessionId: "toybox-link", channelId: null };
 async function call(name: string, body: unknown) {
   const database = await openTestDatabase();
   await createStoredLink(database);
-  const serve = serveCommands(
-    database,
-    {
-      status: async (_, context) => ({ result: context, text: "Linked." }),
-      inbox: async () => {
-        throw new CommandRefusedError("Run it later.");
-      },
-      dismiss: async () => {
-        throw new Error("The disk is full.");
-      },
+  const handlers: Partial<CommandHandlers> = {
+    status: async (_, context) => ({ result: context, text: "Linked." }),
+    inbox: async () => {
+      throw new CommandRefusedError("Run it later.");
     },
-    () => 1_000,
-  );
+    dismiss: async () => {
+      throw new Error("The disk is full.");
+    },
+  };
+  // The tests call no other command.
+  const serve = serveCommands(database, handlers as CommandHandlers, () => 1_000);
   const request = new Request(`http://bridge${COMMANDS_PATH}${name}`, {
     method: "POST",
     body: JSON.stringify(body),

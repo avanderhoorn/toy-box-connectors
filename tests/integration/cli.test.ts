@@ -11,12 +11,13 @@ const SKILL = join(import.meta.dir, "..", "..", "skills", "toy-box-slack", "SKIL
 
 /**
  * Runs `toy-box-slack <args>` with `env` and `PATH` as its whole environment, and a home folder
- * of its own unless `env` names one. Resolves once it exits, with what it printed.
+ * of its own unless `env` names one. It reads `stdin`, or nothing as in an agent's shell. Resolves
+ * once it exits, with what it printed.
  */
-async function runToyBoxSlack(args: string[], env: Record<string, string> = {}) {
+async function runToyBoxSlack(args: string[], env: Record<string, string> = {}, stdin?: string) {
   const child = Bun.spawn([process.execPath, "--no-env-file", CLI, ...args], {
     env: { PATH: process.env.PATH, HOME: createTestFolder(), ...env },
-    stdin: "ignore",
+    stdin: stdin === undefined ? "ignore" : new Blob([stdin]),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -82,8 +83,29 @@ test("prints the lead's inbox on stdout with exit 0, or its result with --json",
   expect(text).toMatchObject({ exitCode: 0, stderr: "" });
   expect(text.stdout).toStartWith("1 request in #C-link waits on you.\n\n### r1 · U-owner asked ");
   expect(text.stdout).toEndWith(
-    'End a request that needs no answer with `toy-box-slack dismiss r1 --reason "<why>"`.\n',
+    'Answer each in its thread by piping your Markdown to `toy-box-slack reply r1`, or end one that needs no answer with `toy-box-slack dismiss r1 --reason "<why>"`.\n',
   );
+}, 15_000);
+
+test("reply reads its text from stdin, and says to write it there when there's none", async () => {
+  const { channelId, home, inbox } = await startLinkedBridge({
+    allowed: ["U-owner"],
+    prepare: storeNewRequest,
+  });
+  const lead = { HOME: home, COPILOT_AGENT_SESSION_ID: channelId };
+  await inbox();
+
+  expect(await runToyBoxSlack(["reply", "r1"], lead)).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr:
+      "`reply` didn't run. --text: Write the text on stdin, such as with a heredoc. Run `toy-box-slack reply --help` to see what it takes.\n",
+  });
+  expect(await runToyBoxSlack(["reply", "r1"], lead, "It's **fixed**.\n")).toEqual({
+    exitCode: 0,
+    stdout: "Queued o1 to answer r1 in its thread. If it can't post, inbox shows r1 again.\n",
+    stderr: "",
+  });
 }, 15_000);
 
 test("refuses a session that doesn't lead a linked channel, with exit 1", async () => {

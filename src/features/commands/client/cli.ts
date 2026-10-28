@@ -1,6 +1,6 @@
 // The CLI forwards the text it read and what its environment says about the caller to the bridge,
 // and prints the answer. It exits 0 when the command ran, 1 when it didn't or may not have, and 2
-// when no bridge is running.
+// when no bridge is running. A command that posts reads its text from stdin unless --text gives it.
 
 import { homedir } from "node:os";
 import { defineCommand, type ArgsDef, type CommandDef } from "citty";
@@ -98,7 +98,13 @@ function socketCommand(name: string, spec: CommandSpec): CommandDef {
     meta: { name, description: spec.description },
     args,
     async run({ args: read }) {
-      const input = Object.fromEntries(fields.map(([field]) => [field, read[optionName(field)]]));
+      const input: Record<string, unknown> = Object.fromEntries(
+        fields.map(([field]) => [field, read[optionName(field)]]),
+      );
+      // A terminal isn't kept waiting for text, since only a lead may post.
+      if (Object.hasOwn(input, "text") && input.text === undefined && !process.stdin.isTTY) {
+        input.text = await Bun.stdin.text();
+      }
       const channelId = typeof read.channel === "string" ? read.channel : null;
       const { exitCode, text, json } = await callBridge(name, input, { channelId });
       if (read.json === true) process.stdout.write(`${JSON.stringify(json, null, 2)}\n`);

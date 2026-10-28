@@ -4,6 +4,7 @@
 // ChannelEvent). They require only what the bridge acts on and strip the rest, so a Toy Box that
 // adds fields still parses.
 
+import { CronExpressionParser } from "cron-parser";
 import { z } from "zod";
 
 const routineSchema = z.object({
@@ -27,6 +28,9 @@ export const firstFrameSchema = z.discriminatedUnion("type", [
 /** The command the routine that wakes a lead runs. */
 export const REQUESTS_COMMAND = "toy-box-slack inbox";
 
+/** The command a routine that publishes runs, followed by the name of what it publishes. */
+export const PUBLISH_COMMAND = "toy-box-slack publish --series";
+
 /** The first of `routines` whose prompt runs `command`, which is the routine the bridge runs. */
 export function findRoutine<Routine extends { prompt: string }>(
   routines: readonly Routine[],
@@ -36,6 +40,17 @@ export function findRoutine<Routine extends { prompt: string }>(
   const words = command.split(" ").map((word) => RegExp.escape(word));
   const pattern = new RegExp(`(?<![\\w-])${words.join("\\s+")}(?![\\w-])`);
   return routines.find(({ prompt }) => pattern.test(prompt));
+}
+
+/**
+ * The latest time at or before `now` that `schedule` runs. Toy Box reads schedules in local time
+ * (src/shared/cron.ts in the toy-box repo), so this does too.
+ */
+export function latestScheduledRun(schedule: string, now: number): number {
+  // prev() looks strictly before its start, so starting just after now includes a run at now.
+  return CronExpressionParser.parse(schedule, { currentDate: new Date(now + 1) })
+    .prev()
+    .getTime();
 }
 
 /**

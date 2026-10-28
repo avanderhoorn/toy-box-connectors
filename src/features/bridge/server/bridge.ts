@@ -15,10 +15,12 @@ import { join } from "node:path";
 import { unconfiguredSlack, type SlackState } from "@commands/model/status";
 import { dismissCommand } from "@commands/server/dismiss";
 import { inboxCommand } from "@commands/server/inbox";
+import { publishCommand, replyCommand, retractCommand } from "@commands/server/posts";
 import { serveCommands } from "@commands/server/serve";
 import { statusCommand } from "@commands/server/status";
-import { createBotClient } from "@slackapi/server/botClient";
+import { createBotClient, type BotClient } from "@slackapi/server/botClient";
 import { wakeLead } from "@toybox/server";
+import { readToyBoxRoutines } from "@toybox/server/api";
 import { startWakeScheduler, type WakeScheduler } from "@wakes/server";
 import { prepareDataFolder, resolveDataFolder } from "./dataFolder";
 import { openBridgeDatabase, type BridgeDatabase } from "./database";
@@ -87,8 +89,9 @@ export async function startBridge(
     // Slack is supervised exactly when both tokens are set.
     const slackState = (): SlackState => unconfiguredSlack(settings) ?? slack!.state();
     const { botToken, appToken, slackApiUrl } = settings;
+    let bot: BotClient | null = null;
     if (botToken && appToken) {
-      const bot = createBotClient(database, botToken, {
+      bot = createBotClient(database, botToken, {
         slackApiUrl,
         onAuthFailed: (error) => slack?.botRejected(error),
       });
@@ -114,6 +117,12 @@ export async function startBridge(
           workspaceUrl: () => slack?.workspaceUrl() ?? null,
         }),
         dismiss: dismissCommand({ database, wakes: scheduler }),
+        reply: replyCommand({ database, wakes: scheduler }),
+        publish: publishCommand({
+          database,
+          routines: (channelId) => readToyBoxRoutines(origin, channelId),
+        }),
+        retract: retractCommand({ database, bot }),
         status: statusCommand({ database, slack: slackState, timings: settings.wakeTimings }),
       }),
     );

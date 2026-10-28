@@ -21,6 +21,19 @@ export const requestReferenceSchema = z
   .transform((reference) => Number(reference.slice(1)))
   .describe("The request, such as r14");
 
+/** A post as reply or publish names it, such as o31, which the bridge reads as its number. */
+export const postReferenceSchema = z
+  .string()
+  .regex(/^o[1-9][0-9]{0,14}$/, "Write it as reply or publish showed it, such as o31")
+  .transform((reference) => Number(reference.slice(1)))
+  .describe("The post, such as o31");
+
+/** The CLI reads a post's text from stdin, so a lead can pass Markdown without quoting it. */
+const postTextSchema = z
+  .string()
+  .refine((text) => text.trim() !== "", "Write the text on stdin, such as with a heredoc")
+  .describe("The Markdown to post, read from stdin unless given here");
+
 export const commands = {
   inbox: {
     description: "Read the requests waiting on you, with their threads so far, and mark them seen",
@@ -52,6 +65,31 @@ export const commands = {
       })
       .strict(),
     positionals: ["request"],
+  },
+  reply: {
+    description: "Answer a request in its Slack thread, once",
+    callers: ["lead"],
+    input: z.object({ request: requestReferenceSchema, text: postTextSchema }).strict(),
+    positionals: ["request"],
+  },
+  publish: {
+    description:
+      "Post in the Slack channel once for the latest scheduled run of the routine whose prompt runs this command",
+    callers: ["lead"],
+    input: z
+      .object({
+        series: z
+          .string()
+          .describe("What the posts are, as the routine's prompt names it, such as release-notes"),
+        text: postTextSchema,
+      })
+      .strict(),
+  },
+  retract: {
+    description: "Delete one of your confirmed posts from Slack. Its request or run stays used",
+    callers: ["lead"],
+    input: z.object({ post: postReferenceSchema }).strict(),
+    positionals: ["post"],
   },
   status: {
     description: "Show the link, Slack's connection, the requests and the wakes",

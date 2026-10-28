@@ -17,3 +17,15 @@ export function duration(milliseconds: number): string {
   if (hours < 48) return count(hours, "hour");
   return count(Math.floor(hours / 24), "day");
 }
+
+/** A time by the bridge's clock, to the minute, such as Fri, Oct 30 at 16:00. */
+export function clockTime(at: number): string {
+  return new Date(at).toLocaleString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+}

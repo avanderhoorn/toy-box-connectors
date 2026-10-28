@@ -1,0 +1,113 @@
+// The commands that post to Slack or take a post back. Each goes through the outbox, which reserves
+// every post before sending it, so a second reply or publish for the same request or run is refused
+// and names the first, and a deleted post's reservation stays. The outbox's refusals reach the lead
+// as the command's, after what didn't happen.
+
+import type { BridgeDatabase } from "@bridge/server/database";
+import { CommandRefusedError } from "@commands/model/protocol";
+import { clockTime } from "@commands/model/wording";
+import { OutboxRefusedError, queuePublication, queueReply } from "@outbox/server/database";
+import { retractPost } from "@outbox/server/retract";
+import type { BotClient } from "@slackapi/server/botClient";
+import {
+  findRoutine,
+  latestScheduledRun,
+  PUBLISH_COMMAND,
+  type ToyBoxRoutine,
+} from "@toybox/model";
+import type { WakeScheduler } from "@wakes/server";
+import { readCallerLink, readLinkRequest, SEE_INBOX } from "./link";
+import type { CommandHandler } from "./serve";
+
+export type ReplyCommandOptions = {
+  database: BridgeDatabase;
+  wakes: Pick<WakeScheduler, "reconsider">;
+};
+
+/** Queues the answer to a request in its thread. Only Slack's confirmation answers it. */
+export function replyCommand({ database, wakes }: ReplyCommandOptions): CommandHandler<"reply"> {
+  return async ({ request: id, text }, { caller, at }) => {
+    const post = await database.write(async (transaction) => {
+      const link = await readCallerLink(transaction, caller);
+      await readLinkRequest(transaction, link, id);
+      return outboxRefusal(`r${id} wasn't answered.`, SEE_INBOX, () =>
+        queueReply(transaction, { requestId: id, text }, at),
+      );
+    });
+    wakes.reconsider();
+    return {
+      result: { request: `r${id}`, post: `o${post.number}`, state: post.state },
+      text: `Queued o${post.number} to answer r${id} in its thread. If it can't post, inbox shows r${id} again.`,
+    };
+  };
+}
+
+export type PublishCommandOptions = {
+  database: BridgeDatabase;
+  /** The Toy Box channel's routines, or null when Toy Box has no such channel. */
+  routines: (channelId: string) => Promise<readonly ToyBoxRoutine[] | null>;
+};
+
+/** Queues a post in the watched channel for the latest scheduled run of the routine that runs it. */
+export function publishCommand({
+  database,
+  routines,
+}: PublishCommandOptions): CommandHandler<"publish"> {
+  return async ({ series, text }, { caller, at }) => {
+    const link = await database.read((sql) => readCallerLink(sql, caller));
+    const command = `${PUBLISH_COMMAND} ${series}`;
+    const routine = findRoutine((await routines(link.toyboxChannelId)) ?? [], command);
+    if (!routine) {
+      throw new CommandRefusedError(
+        `Nothing posted, because no routine in this channel runs \`${command}\`. Publish posts once for each scheduled run of that routine, so create it first.`,
+      );
+    }
+    const scheduledAt = latestScheduledRun(routine.schedule, at);
+    const run = `the run of "${routine.title}" scheduled ${clockTime(scheduledAt)}`;
+    const post = await database.write((transaction) =>
+      outboxRefusal(`Nothing posted for ${run}.`, "", () =>
+        queuePublication(transaction, { linkId: link.id, series, scheduledAt, text }, at),
+      ),
+    );
+    return {
+      result: { post: `o${post.number}`, series, scheduledAt, state: post.state },
+      text: `Queued o${post.number} in ${link.channel} for ${run}.`,
+    };
+  };
+}
+
+export type RetractCommandOptions = {
+  database: BridgeDatabase;
+  /** Slack's Web API, or null when the bridge has no Slack tokens. */
+  bot: BotClient | null;
+};
+
+/** Deletes one of the link's confirmed posts from Slack, keeping what it answered used. */
+export function retractCommand({
+  database,
+  bot,
+}: RetractCommandOptions): CommandHandler<"retract"> {
+  return async ({ post: number }, { caller, at }) => {
+    const link = await database.read((sql) => readCallerLink(sql, caller));
+    const didnt = `o${number} wasn't deleted.`;
+    if (bot === null) throw new CommandRefusedError(`${didnt} Slack isn't active.`);
+    await outboxRefusal(didnt, "", () => retractPost(database, bot, link.id, number, at));
+    return {
+      result: { post: `o${number}`, state: "retracted" },
+      text: `Deleted o${number} from Slack. Its request or run stays used, so nothing posts in its place.`,
+    };
+  };
+}
+
+async function outboxRefusal<Result>(
+  didnt: string,
+  next: string,
+  act: () => Promise<Result>,
+): Promise<Result> {
+  try {
+    return await act();
+  } catch (error) {
+    if (!(error instanceof OutboxRefusedError)) throw error;
+    throw new CommandRefusedError([didnt, error.message, next].filter(Boolean).join(" "));
+  }
+}

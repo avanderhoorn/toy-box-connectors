@@ -63,8 +63,12 @@ export function presentInbox({ channel, linkStatus, requests, more }: Inbox, at:
   sections.push(`${count(waiting, "request")} in ${channel} ${waits(waiting)} on you.`);
   sections.push(...requests.map((request) => presentRequest(request, at)));
   if (more > 0) sections.push(`${count(more, "more request")} ${waits(more)} after these.`);
+  const { id } = requests[0]!;
+  const dismiss = `\`toy-box-slack dismiss r${id} --reason "<why>"\``;
   sections.push(
-    `End a request that needs no answer with \`toy-box-slack dismiss r${requests[0]!.id} --reason "<why>"\`.`,
+    linkStatus === "active"
+      ? `Answer each in its thread by piping your Markdown to \`toy-box-slack reply r${id}\`, or end one that needs no answer with ${dismiss}.`
+      : `End a request that needs no answer with ${dismiss}.`,
   );
   return sections.join("\n\n");
 }

@@ -1,11 +1,11 @@
 import { expect, mock, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import { CommandRefusedError } from "@commands/model/protocol";
 import { createStoredLink } from "@links/server/testFixtures";
 import { serveRequest } from "@requests/model/lifecycle";
 import { readRequest, saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { dismissCommand } from "./dismiss";
+import { refusal } from "./testFixtures";
 
 const LEAD = { caller: { role: "lead", channelId: "toybox-link" }, at: 1_000 } as const;
 
@@ -21,12 +21,6 @@ async function startDismissing() {
   });
   const wakes = { reconsider: mock(() => {}) };
   return { database, wakes, dismiss: dismissCommand({ database, wakes }) };
-}
-
-async function refusal(answer: Promise<unknown>): Promise<string> {
-  const error = await answer.catch((error: unknown) => error);
-  expect(error).toBeInstanceOf(CommandRefusedError);
-  return (error as Error).message;
 }
 
 test("ends a request the lead read, which keeps the lead's reason", async () => {
