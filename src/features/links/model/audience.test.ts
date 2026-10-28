@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { ChannelFacts } from "@slackapi/model/channels";
 import { channelFacts } from "@slackapi/model/testFixtures";
-import { audienceOf, audienceProblem, judgeChannel, type Audience } from "./audience";
+import {
+  approvableAudience,
+  audienceOf,
+  audienceProblem,
+  judgeChannel,
+  type Audience,
+} from "./audience";
 import { privateAudience } from "./testFixtures";
 
 const home = { teamId: "T-home", enterpriseId: null };
@@ -76,6 +82,12 @@ describe("which audiences a link can have", () => {
       audience({ workspaces: ["T-other"] }),
       home,
     ],
+    [
+      "one in another workspace as well, without being shared across an org",
+      "channel_other_workspace",
+      audience({ workspaces: ["T-home", "T-other"] }),
+      home,
+    ],
   ] as const)("%s is refused as %s", (_, problem, candidate, installation) => {
     expect(audienceProblem(candidate, installation)).toBe(problem);
   });
@@ -137,5 +149,29 @@ describe("judging a fresh read of a linked channel", () => {
     ],
   ] as const)("%s suspends the link as %s", (_, reason, approved, facts: ChannelFacts | null) => {
     expect(judgeChannel(approved, facts, home)).toEqual({ kind: "suspended", reason });
+  });
+});
+
+describe("linking a channel or resuming its link", () => {
+  test("approves its audience as Slack describes it now", () => {
+    expect(approvableAudience(channelFacts({ kind: "public" }), home)).toEqual(
+      audience({ kind: "public" }),
+    );
+  });
+
+  test.each([
+    ["a channel Slack can't find", "channel_not_found", null],
+    ["a direct message", "not_a_channel", channelFacts({ kind: "im" })],
+    ["a group direct message", "not_a_channel", channelFacts({ kind: "mpim" })],
+    ["an archived channel", "channel_archived", channelFacts({ isArchived: true })],
+    ["a channel without the bot", "bot_removed", channelFacts({ isMember: false })],
+    ["Slack Connect", "channel_external", channelFacts({ isExtShared: true })],
+    [
+      "another workspace's channel",
+      "channel_other_workspace",
+      channelFacts({ contextTeamId: "T-b", sharedTeamIds: ["T-b"] }),
+    ],
+  ] as const)("refuses %s as %s", (_, problem, facts: ChannelFacts | null) => {
+    expect(approvableAudience(facts, home)).toBe(problem);
   });
 });

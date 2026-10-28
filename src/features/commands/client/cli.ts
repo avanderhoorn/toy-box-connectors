@@ -4,6 +4,7 @@
 
 import { homedir } from "node:os";
 import { defineCommand, type ArgsDef, type CommandDef } from "citty";
+import { z } from "zod";
 import { resolveDataFolder } from "@bridge/server/dataFolder";
 import { commandSocketPath } from "@bridge/server/socket";
 import { commands, optionName, type CommandSpec } from "@commands/model";
@@ -14,14 +15,16 @@ import {
   commandErrorSchema,
   type CommandCall,
 } from "@commands/model/protocol";
+import { passphraseReader } from "./passphrase";
 
 /** How a call went: its exit code, the Markdown to print, and what --json prints instead. */
-export type CallOutcome = { exitCode: 0 | 1 | 2; text: string; json: unknown };
+export type CallOutcome = { exitCode: 0 | 1 | 2; text: string; json: unknown; confirm?: string };
 
 export type CallOptions = {
   channelId?: string | null;
   env?: Record<string, string | undefined>;
   home?: string;
+  owner?: CommandCall["owner"];
 };
 
 const sharedArgs = {
@@ -45,11 +48,11 @@ export function socketCommands(): Record<string, CommandDef> {
 export async function callBridge(
   name: string,
   input: Record<string, unknown>,
-  { channelId = null, env = process.env, home = homedir() }: CallOptions = {},
+  { channelId = null, env = process.env, home = homedir(), owner }: CallOptions = {},
 ): Promise<CallOutcome> {
   const dataFolder = resolveDataFolder(env, home);
   const sessionId = env.COPILOT_AGENT_SESSION_ID?.trim() || null;
-  const call: CommandCall = { caller: { sessionId, channelId }, input };
+  const call: CommandCall = { caller: { sessionId, channelId }, input, owner };
   let response: Response;
   try {
     response = await fetch(`http://localhost${COMMANDS_PATH}${name}`, {
@@ -72,7 +75,8 @@ export async function callBridge(
   const body: unknown = await response.json().catch(() => undefined);
   const answer = commandAnswerSchema.safeParse(body);
   if (response.ok && answer.success) {
-    return { exitCode: 0, text: answer.data.text, json: answer.data.result };
+    const { result, text, confirm } = answer.data;
+    return { exitCode: 0, text, json: result, confirm };
   }
   const error = commandErrorSchema.safeParse(body);
   return failed(1, error.success ? error.data.error : unanswered(name));
@@ -92,14 +96,30 @@ function socketCommand(name: string, spec: CommandSpec): CommandDef {
     args,
     async run({ args: read }) {
       const input: Record<string, unknown> = Object.fromEntries(
-        fields.map(([field]) => [field, read[optionName(field)]]),
+        fields.map(([field, schema]) => {
+          const position = spec.positionals?.indexOf(field) ?? -1;
+          // citty gives a positional only its first argument, so a list takes the rest itself.
+          const list = position >= 0 && schema instanceof z.ZodArray;
+          return [field, list ? read._.slice(position) : read[optionName(field)]];
+        }),
       );
       // A terminal isn't kept waiting for text, since only a lead may post.
       if (Object.hasOwn(input, "text") && input.text === undefined && !process.stdin.isTTY) {
         input.text = await Bun.stdin.text();
       }
       const channelId = typeof read.channel === "string" ? read.channel : null;
-      const { exitCode, text, json } = await callBridge(name, input, { channelId });
+      let outcome = await callBridge(name, input, { channelId });
+      if (outcome.confirm !== undefined) {
+        process.stderr.write(`${outcome.text}\n\n`);
+        const reader = passphraseReader();
+        const passphrase = await reader.read("Type the owner's passphrase, or press Ctrl-C: ");
+        reader.close();
+        const owner = passphrase === null ? null : { passphrase, confirms: outcome.confirm };
+        outcome = owner
+          ? await callBridge(name, input, { channelId, owner })
+          : failed(1, `\`${name}\` didn't get the owner's passphrase, so nothing changed.`);
+      }
+      const { exitCode, text, json } = outcome;
       if (read.json === true) process.stdout.write(`${JSON.stringify(json, null, 2)}\n`);
       else process[exitCode === 0 ? "stdout" : "stderr"].write(`${text}\n`);
       process.exitCode = exitCode;

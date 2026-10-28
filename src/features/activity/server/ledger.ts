@@ -149,3 +149,12 @@ async function appendChange(
   `;
   return change!.seq;
 }
+
+/** Deletes the messages kept from a link's channel, and the changes recorded for the link. */
+export async function deleteLinkActivity(
+  transaction: Bun.SQL,
+  link: { id: string; slackChannelId: string },
+): Promise<void> {
+  await transaction`DELETE FROM changes WHERE link_id = ${link.id}`;
+  await transaction`DELETE FROM messages WHERE channel_id = ${link.slackChannelId}`;
+}

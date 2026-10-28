@@ -20,7 +20,12 @@ async function call(name: string, body: unknown) {
     },
   };
   // The tests call no other command.
-  const serve = serveCommands(database, handlers as CommandHandlers, () => 1_000);
+  const serve = serveCommands(
+    database,
+    handlers as CommandHandlers,
+    () => null,
+    () => 1_000,
+  );
   const request = new Request(`http://bridge${COMMANDS_PATH}${name}`, {
     method: "POST",
     body: JSON.stringify(body),

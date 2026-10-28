@@ -1,7 +1,7 @@
 // Waking a lead through a fake Toy Box that answers the way the real handlers do.
 
 import { expect, onTestFinished, spyOn, test } from "bun:test";
-import { runToyBoxRoutine } from "@toybox/server/api";
+import { readToyBoxChannel, runToyBoxRoutine } from "@toybox/server/api";
 import { wakeLead } from "@toybox/server";
 import { startFakeToyBox } from "../fakes/toybox";
 import { REQUESTS_ROUTINE } from "./linkedBridge";
@@ -28,6 +28,22 @@ test("waking a lead runs the routine whose prompt runs inbox, and lets go of the
 
   expect(await wakeLead(origin, channelId)).toBe("ran");
   expect(toyBox.runs).toEqual([{ channelId, routineId: routine.id, at: expect.any(Number) }]);
+  await waitFor(() => expect(toyBox.openStreams()).toBe(0));
+});
+
+test("reading a channel gives its title, its lead's provider and its routines, or null once it's gone", async () => {
+  const { toyBox, origin } = startToyBox();
+  const channelId = toyBox.addChannel({ name: "Releases", provider: "codex" });
+  const routine = toyBox.scheduleRoutine(channelId, REQUESTS_ROUTINE);
+  const deleted = toyBox.addChannel();
+  toyBox.deleteChannel(deleted);
+
+  expect(await readToyBoxChannel(origin, channelId)).toEqual({
+    name: "Releases",
+    provider: "codex",
+    routines: [routine],
+  });
+  expect(await readToyBoxChannel(origin, deleted)).toBeNull();
   await waitFor(() => expect(toyBox.openStreams()).toBe(0));
 });
 

@@ -10,6 +10,11 @@
 
 export type FakeRoutine = { id: string; title: string; schedule: string; prompt: string };
 
+/** A channel's title, and the provider its lead runs on, which is Copilot unless set. */
+export type FakeChannelSettings = { name?: string; provider?: string };
+
+type FakeChannel = Required<FakeChannelSettings> & { routines: FakeRoutine[] };
+
 /** A routine run Toy Box accepted. */
 export type FakeRun = { channelId: string; routineId: string; at: number };
 
@@ -17,7 +22,7 @@ export type FakeToyBox = {
   url: string;
   runs: FakeRun[];
   /** Adds a channel, whose ID is its lead's session ID, as in Toy Box. */
-  addChannel(): string;
+  addChannel(settings?: FakeChannelSettings): string;
   scheduleRoutine(channelId: string, routine: Omit<FakeRoutine, "id">): FakeRoutine;
   deleteChannel(channelId: string): void;
   /** Answers the next run with `status` and doesn't run it. */
@@ -31,7 +36,7 @@ const encoder = new TextEncoder();
 
 /** Starts a fake Toy Box on an ephemeral loopback port. */
 export function startFakeToyBox(): FakeToyBox {
-  const channels = new Map<string, FakeRoutine[]>();
+  const channels = new Map<string, FakeChannel>();
   const runs: FakeRun[] = [];
   const failures: number[] = [];
   let open = 0;
@@ -56,11 +61,11 @@ export function startFakeToyBox(): FakeToyBox {
   }
 
   function stream(channelId: string): Response {
-    const routines = channels.get(channelId);
+    const channel = channels.get(channelId);
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(encoder.encode("retry: 1000\n\n"));
-        if (!routines) {
+        if (!channel) {
           controller.enqueue(encoder.encode(frame({ type: "deleted", channelId })));
           controller.close();
           return;
@@ -68,7 +73,7 @@ export function startFakeToyBox(): FakeToyBox {
         open += 1;
         controller.enqueue(
           encoder.encode(
-            `id: 1\n${frame({ type: "snapshot", state: snapshot(channelId, routines) })}`,
+            `id: 1\n${frame({ type: "snapshot", state: snapshot(channelId, channel) })}`,
           ),
         );
       },
@@ -89,7 +94,7 @@ export function startFakeToyBox(): FakeToyBox {
     if (failure !== undefined) {
       return Response.json({ error: "Unable to run routine." }, { status: failure });
     }
-    if (!channels.get(channelId)?.some(({ id }) => id === routineId)) {
+    if (!channels.get(channelId)?.routines.some(({ id }) => id === routineId)) {
       return Response.json({ error: "Routine not found." }, { status: 404 });
     }
     runs.push({ channelId, routineId, at: Date.now() });
@@ -99,14 +104,14 @@ export function startFakeToyBox(): FakeToyBox {
   return {
     url: server.url.href,
     runs,
-    addChannel() {
+    addChannel({ name = "Linked", provider = "copilot" } = {}) {
       const channelId = crypto.randomUUID();
-      channels.set(channelId, []);
+      channels.set(channelId, { name, provider, routines: [] });
       return channelId;
     },
     scheduleRoutine(channelId, input) {
       const routine = { id: crypto.randomUUID(), ...input, prompt: input.prompt.trim() };
-      channels.get(channelId)!.push(routine);
+      channels.get(channelId)!.routines.push(routine);
       return routine;
     },
     deleteChannel(channelId) {
@@ -125,11 +130,11 @@ function frame(event: object): string {
 }
 
 // The snapshot's fields as ChannelState has them in src/features/channels/model/index.ts. The
-// bridge reads only the routines.
-function snapshot(channelId: string, routines: FakeRoutine[]) {
+// bridge reads only the channel's name and provider, and the routines.
+function snapshot(channelId: string, { name, provider, routines }: FakeChannel) {
   return {
     revision: 1,
-    channel: { id: channelId, name: "Linked", tasks: [] },
+    channel: { id: channelId, name, model: { provider, name: "model" }, tasks: [] },
     lead: { id: channelId, name: "Lead" },
     members: [],
     messages: [],

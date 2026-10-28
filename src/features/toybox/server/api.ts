@@ -1,6 +1,6 @@
 // Toy Box's HTTP API as the bridge calls it.
 //
-// The bridge reads a channel's routines and runs one, and calls nothing else. Every URL is a path
+// The bridge reads a channel and runs one of its routines, and calls nothing else. Every URL is a path
 // on the loopback origin the bridge started with, and redirects aren't followed, so no request
 // leaves this Mac. The routes are the toy-box repo's src/features/channels/routes/v1/channels, and
 // their handlers are in src/features/channels/server/api.ts.
@@ -9,7 +9,7 @@ import {
   firstFrameSchema,
   routineRunOutcome,
   type RoutineRunOutcome,
-  type ToyBoxRoutine,
+  type ToyBoxChannel,
 } from "@toybox/model";
 import { readServerSentEvents } from "./sse";
 
@@ -17,14 +17,14 @@ import { readServerSentEvents } from "./sse";
 const REQUEST_TIMEOUT_MS = 15_000;
 
 /**
- * The channel's routines, oldest first, or null when Toy Box has no such channel. Toy Box shows
- * routines only in the snapshot its event stream starts with (getChannelResponse), so this reads
- * that first frame and closes the stream.
+ * The channel, with its routines oldest first, or null when Toy Box has no such channel. Toy Box
+ * shows routines only in the snapshot its event stream starts with (getChannelResponse), so this
+ * reads that first frame and closes the stream.
  */
-export async function readToyBoxRoutines(
+export async function readToyBoxChannel(
   origin: URL,
   channelId: string,
-): Promise<ToyBoxRoutine[] | null> {
+): Promise<ToyBoxChannel | null> {
   const response = await fetch(channelsUrl(origin, channelId), {
     headers: { Accept: "text/event-stream" },
     redirect: "manual",
@@ -40,7 +40,9 @@ export async function readToyBoxRoutines(
   // Leaving the loop cancels the body, which closes the stream.
   for await (const { data } of readServerSentEvents(response.body)) {
     const frame = firstFrameSchema.parse(JSON.parse(data));
-    return frame.type === "snapshot" ? frame.state.routines : null;
+    if (frame.type === "deleted") return null;
+    const { channel, routines } = frame.state;
+    return { name: channel.name, provider: channel.model.provider, routines };
   }
   throw new Error(`Toy Box closed channel ${channelId}'s stream before it sent anything.`);
 }

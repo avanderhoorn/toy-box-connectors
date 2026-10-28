@@ -18,12 +18,20 @@ import { dismissCommand } from "@commands/server/dismiss";
 import { inboxCommand } from "@commands/server/inbox";
 import { publishCommand, replyCommand, retractCommand } from "@commands/server/posts";
 import { serveCommands } from "@commands/server/serve";
+import {
+  allowCommand,
+  denyCommand,
+  linkCommand,
+  pauseCommand,
+  resumeCommand,
+  unlinkCommand,
+} from "@commands/server/setup";
 import { statusCommand } from "@commands/server/status";
 import { startOutboxWorker, type OutboxWorker } from "@outbox/server";
 import { recoverOutboxAttempts } from "@outbox/server/database";
 import { createBotClient, type BotClient } from "@slackapi/server/botClient";
 import { wakeLead } from "@toybox/server";
-import { readToyBoxRoutines } from "@toybox/server/api";
+import { readToyBoxChannel } from "@toybox/server/api";
 import { startWakeScheduler, type WakeScheduler } from "@wakes/server";
 import { prepareDataFolder, resolveDataFolder } from "./dataFolder";
 import { openBridgeDatabase, type BridgeDatabase } from "./database";
@@ -122,32 +130,44 @@ export async function startBridge(
       });
     }
     const workspaceUrl = () => slack?.workspaceUrl() ?? null;
+    const setup = { database, bot, toyBoxOrigin: origin, wakes: scheduler };
     socket = listenForCommands(
       commandSocketPath(dataFolder),
-      serveCommands(database, {
-        inbox: inboxCommand({
-          database,
-          wakes: scheduler,
-          workspaceUrl,
-          acknowledge: (requests) => outbox?.acknowledge(requests),
-        }),
-        dismiss: dismissCommand({ database, wakes: scheduler }),
-        reply: replyCommand({ database, wakes: scheduler, outbox }),
-        activity: activityCommand({ database, workspaceUrl }),
-        "mark-read": markReadCommand({ database }),
-        publish: publishCommand({
-          database,
-          routines: (channelId) => readToyBoxRoutines(origin, channelId),
-          outbox,
-        }),
-        retract: retractCommand({ database, bot }),
-        status: statusCommand({
-          database,
-          slack: slackState,
-          workspaceUrl,
-          timings: settings.wakeTimings,
-        }),
-      }),
+      serveCommands(
+        database,
+        {
+          inbox: inboxCommand({
+            database,
+            wakes: scheduler,
+            workspaceUrl,
+            acknowledge: (requests) => outbox?.acknowledge(requests),
+          }),
+          dismiss: dismissCommand({ database, wakes: scheduler }),
+          reply: replyCommand({ database, wakes: scheduler, outbox }),
+          activity: activityCommand({ database, workspaceUrl }),
+          "mark-read": markReadCommand({ database }),
+          publish: publishCommand({
+            database,
+            routines: async (channelId) =>
+              (await readToyBoxChannel(origin, channelId))?.routines ?? null,
+            outbox,
+          }),
+          retract: retractCommand({ database, bot }),
+          status: statusCommand({
+            database,
+            slack: slackState,
+            workspaceUrl,
+            timings: settings.wakeTimings,
+          }),
+          link: linkCommand(setup),
+          allow: allowCommand(setup),
+          deny: denyCommand(setup),
+          pause: pauseCommand(setup),
+          resume: resumeCommand(setup),
+          unlink: unlinkCommand(setup),
+        },
+        () => readCredentialsFile(dataFolder).OWNER_PASSPHRASE_HASH ?? null,
+      ),
     );
     return { failed: failure.promise, stop };
   } catch (error) {

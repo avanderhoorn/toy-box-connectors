@@ -1,5 +1,6 @@
 // The bridge works out who's calling before anything else, so a caller it won't act for learns
-// nothing about any channel. Then it parses the input with the command's schema and runs it.
+// nothing about any channel. Then it parses the input with the command's schema, checks the
+// owner's passphrase when the call brings one, and runs it.
 
 import type { z } from "zod";
 import type { BridgeDatabase } from "@bridge/server/database";
@@ -11,6 +12,7 @@ import {
   CommandRefusedError,
   type CommandAnswer,
 } from "@commands/model/protocol";
+import { checkOwner } from "./owner";
 
 const ANOTHER_RELEASE =
   "That happens when the CLI runs another release of toy-box-slack, which restarting the bridge fixes.";
@@ -20,6 +22,8 @@ export type CommandContext = {
   caller: Caller;
   /** When the bridge took the call. Commands read the time from here. */
   at: number;
+  /** The change the owner confirmed with their passphrase, by the name the bridge gave it. */
+  confirmed?: string;
 };
 
 export type CommandHandler<Name extends CommandName> = (
@@ -29,9 +33,11 @@ export type CommandHandler<Name extends CommandName> = (
 
 export type CommandHandlers = { [Name in CommandName]: CommandHandler<Name> };
 
+/** Serves `handlers`, checking passphrases against the argon2id hash `ownerHash` reads, if any. */
 export function serveCommands(
   database: BridgeDatabase,
   handlers: CommandHandlers,
+  ownerHash: () => string | null,
   now = Date.now,
 ): (request: Request) => Promise<Response> {
   return async (request) => {
@@ -60,11 +66,12 @@ export function serveCommands(
       if (!input.success) {
         return answerError(422, inputProblem(name, spec, call.data.input, input.error));
       }
+      const { owner } = call.data;
+      if (owner) await checkOwner(owner.passphrase, ownerHash());
       // The schema that parsed the input is the one the handler's type reads.
       const handler = handlers[name as CommandName] as CommandHandler<CommandName>;
-      return Response.json(
-        await handler(input.data as never, { caller: resolved.caller, at: now() }),
-      );
+      const context = { caller: resolved.caller, at: now(), confirmed: owner?.confirms };
+      return Response.json(await handler(input.data as never, context));
     } catch (error) {
       if (error instanceof CommandRefusedError) return answerError(409, error.message);
       console.error(`Couldn't finish \`${name}\`:`, error);

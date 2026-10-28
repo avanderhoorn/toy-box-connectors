@@ -15,13 +15,22 @@ const routineSchema = z.object({
 });
 export type ToyBoxRoutine = z.output<typeof routineSchema>;
 
+/** A channel as the bridge reads it. Its lead keeps its provider for the channel's life. */
+export type ToyBoxChannel = { name: string; provider: string; routines: ToyBoxRoutine[] };
+
 /**
  * The frame GET /api/v1/channels/:id starts with when read from scratch, the only place Toy Box
  * shows a channel's routines: a snapshot, or word that the channel is gone (stream.ts in the
  * toy-box repo's src/features/channels/server).
  */
 export const firstFrameSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("snapshot"), state: z.object({ routines: z.array(routineSchema) }) }),
+  z.object({
+    type: z.literal("snapshot"),
+    state: z.object({
+      channel: z.object({ name: z.string(), model: z.object({ provider: z.string() }) }),
+      routines: z.array(routineSchema),
+    }),
+  }),
   z.object({ type: z.literal("deleted") }),
 ]);
 

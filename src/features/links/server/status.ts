@@ -1,9 +1,52 @@
 import type { SuspendReason } from "@links/model/status";
+import { tsAt } from "@slackapi/model/ts";
+import type { ChannelLink } from "./database";
 
 // A link's status.
 //
-// A lead or the operator pauses a link, and the bridge suspends one when Slack or Toy Box makes
-// continuing unsafe. Either way the link keeps its settings and data until someone resumes or unlinks it.
+// The owner's approval makes a link active. A lead or the operator pauses it, and the bridge
+// suspends it when Slack or Toy Box makes continuing unsafe. Either way it keeps its settings and
+// data until the owner resumes it, or until unlink deletes it.
+
+/** A link as the owner approves it. */
+export type ApprovedLink = Pick<
+  ChannelLink,
+  "toyBoxChannelId" | "slackChannelId" | "requestMode" | "observe" | "approved"
+>;
+
+/** Makes the link active as the owner approved it, keeping the allowlist and the rest it had. */
+export async function approveLink(
+  transaction: Bun.SQL,
+  link: ApprovedLink,
+  now: number,
+): Promise<void> {
+  // Never INSERT OR REPLACE, whose delete would take the link's allowlist and the rest with it.
+  await transaction`
+    INSERT INTO links ${transaction({
+      id: crypto.randomUUID(),
+      toybox_channel_id: link.toyBoxChannelId,
+      slack_channel_id: link.slackChannelId,
+      request_mode: link.requestMode,
+      observe: link.observe,
+      status: "active",
+      approved_audience: JSON.stringify(link.approved),
+      linked_at_ts: tsAt(now),
+      created_at: now,
+      updated_at: now,
+    })}
+    ON CONFLICT (toybox_channel_id) DO UPDATE SET
+      request_mode = excluded.request_mode, observe = excluded.observe, status = 'active',
+      status_reason = NULL, approved_audience = excluded.approved_audience,
+      updated_at = excluded.updated_at
+  `;
+}
+
+/** Pauses the link, if it's active. */
+export async function pauseLink(transaction: Bun.SQL, linkId: string, now: number): Promise<void> {
+  await transaction`
+    UPDATE links SET status = 'paused', updated_at = ${now} WHERE id = ${linkId} AND status = 'active'
+  `;
+}
 
 /**
  * Suspends the link for `reason`. A link already suspended for that reason, or because its Toy Box
@@ -22,4 +65,9 @@ export async function suspendLink(
     RETURNING id
   `;
   return suspended.length > 0;
+}
+
+/** Deletes a link, and with it every row that references it, such as its allowlist. */
+export async function deleteLink(transaction: Bun.SQL, linkId: string): Promise<void> {
+  await transaction`DELETE FROM links WHERE id = ${linkId}`;
 }

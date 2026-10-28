@@ -62,6 +62,14 @@ export type ChannelVerdict =
   | { kind: "approved" }
   | { kind: "suspended"; reason: ChannelSuspendReason };
 
+/** Why the owner can't link a channel, or resume its link, as Slack describes it now. */
+export type ApprovalProblem =
+  | "channel_not_found"
+  | "not_a_channel"
+  | "channel_archived"
+  | "bot_removed"
+  | AudienceProblem;
+
 /** A channel's audience, or null for a conversation that isn't a channel, such as a direct message. */
 export function audienceOf(
   facts: ChannelFacts,
@@ -130,6 +138,22 @@ export function judgeChannel(
   if (wider) return suspended(wider);
   if (current.workspaces.length === 0) return suspended("workspaces_unknown");
   return { kind: "approved" };
+}
+
+/**
+ * The audience the owner would approve by linking a channel or resuming its link, as Slack
+ * describes it now, or why they can't. `facts` is null when Slack can't find the channel.
+ */
+export function approvableAudience(
+  facts: ChannelFacts | null,
+  home: Pick<Installation, "teamId" | "enterpriseId">,
+): Audience | ApprovalProblem {
+  if (!facts) return "channel_not_found";
+  const audience = audienceOf(facts, home);
+  if (!audience) return "not_a_channel";
+  if (facts.isArchived) return "channel_archived";
+  if (!facts.isMember) return "bot_removed";
+  return audienceProblem(audience, home) ?? audience;
 }
 
 function workspacesOf(facts: ChannelFacts, home: Pick<Installation, "teamId">): readonly string[] {

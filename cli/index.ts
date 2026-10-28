@@ -5,7 +5,9 @@
 // bridge it reaches.
 
 import { defineCommand, runMain } from "citty";
+import { resolveDataFolder } from "@bridge/server/dataFolder";
 import { socketCommands } from "@commands/client/cli";
+import { setPassphrase } from "@commands/client/passphrase";
 import { installSkill } from "@commands/client/skill";
 
 import { version } from "../package.json";
@@ -16,6 +18,16 @@ const serve = defineCommand({
     // Loaded on demand so the commands the lead runs don't load the bridge.
     const { serveBridge } = await import("@bridge/server/bridge");
     process.exitCode = await serveBridge();
+  },
+});
+
+const passphrase = defineCommand({
+  meta: {
+    name: "passphrase",
+    description: "Set the owner's passphrase, or change it given the old one",
+  },
+  async run() {
+    process.exitCode = await setPassphrase(resolveDataFolder());
   },
 });
 
@@ -35,7 +47,7 @@ const main = defineCommand({
     version,
     description: "Let a Toy Box channel's lead watch and answer a Slack channel",
   },
-  subCommands: { ...socketCommands(), serve, "install-skill": install },
+  subCommands: { ...socketCommands(), serve, passphrase, "install-skill": install },
 });
 
 await runMain(main);

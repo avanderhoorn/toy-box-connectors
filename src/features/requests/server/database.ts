@@ -183,3 +183,8 @@ function requestColumns(request: Request): Omit<RequestRow, "id"> {
     closed_reason: request.closedReason,
   };
 }
+
+/** Deletes a link's requests, along with which messages each held. */
+export async function deleteLinkRequests(transaction: Bun.SQL, linkId: string): Promise<void> {
+  await transaction`DELETE FROM requests WHERE link_id = ${linkId}`;
+}

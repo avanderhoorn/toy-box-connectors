@@ -2,11 +2,12 @@
 //
 // The operator keeps the Slack tokens in `credentials.env` in the data folder, and a variable set
 // in the environment wins over the file. Every setting is checked before the bridge takes its
-// lock, so a bad one stops it before it starts. No message repeats a token. Only tests set
+// lock, so a bad one stops it before it starts. No message repeats a token. The owner's passphrase
+// hash is read from the file alone, each time the bridge checks a passphrase. Only tests set
 // SLACK_API_URL and the wake timings: one points the Slack clients at a fake, and the other
 // shortens timings so a scenario doesn't wait minutes for a reminder.
 
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseEnv } from "node:util";
 import { z } from "zod";
@@ -22,6 +23,11 @@ const credentialsSchema = z
     SLACK_BOT_TOKEN: z.string().optional().describe("The token the bridge reads and posts with."),
     SLACK_APP_TOKEN: z.string().optional().describe("The token that opens Socket Mode."),
     TOY_BOX_URL: z.string().optional().describe("The Toy Box whose leads the bridge wakes."),
+    OWNER_PASSPHRASE_HASH: z
+      .string()
+      .startsWith("$argon2id$")
+      .optional()
+      .describe("The owner's passphrase as `toy-box-slack passphrase` hashed it."),
   })
   .strict()
   .describe("What credentials.env may set, one NAME=value a line.");
@@ -69,7 +75,7 @@ export function resolveBridgeSettings(
  * others could read or write, and a setting the bridge doesn't know.
  */
 export function readCredentialsFile(dataFolder: string): Credentials {
-  const path = join(dataFolder, "credentials.env");
+  const path = credentialsPath(dataFolder);
   let mode: number;
   try {
     mode = statSync(path).mode & 0o777;
@@ -86,10 +92,23 @@ export function readCredentialsFile(dataFolder: string): Credentials {
   const credentials = credentialsSchema.safeParse(parseEnv(readFileSync(path, "utf8")));
   if (!credentials.success) {
     throw new BridgeRefusedError(
-      `${path} may set only SLACK_BOT_TOKEN, SLACK_APP_TOKEN and TOY_BOX_URL.\n${z.prettifyError(credentials.error)}`,
+      `${path} may set only SLACK_BOT_TOKEN, SLACK_APP_TOKEN, TOY_BOX_URL and OWNER_PASSPHRASE_HASH.\n${z.prettifyError(credentials.error)}`,
     );
   }
   return credentials.data;
+}
+
+/** Sets `name` in `credentials.env`, keeping its other lines, and leaves the file at mode 600. */
+export function writeCredential(dataFolder: string, name: keyof Credentials, value: string): void {
+  const path = credentialsPath(dataFolder);
+  const lines = existsSync(path) ? readFileSync(path, "utf8").split("\n") : [];
+  const kept = lines.filter((line) => line.trim() && !line.startsWith(`${name}=`));
+  writeFileSync(`${path}.tmp`, [...kept, `${name}=${value}`, ""].join("\n"), { mode: 0o600 });
+  renameSync(`${path}.tmp`, path);
+}
+
+function credentialsPath(dataFolder: string): string {
+  return join(dataFolder, "credentials.env");
 }
 
 /** The wake timings, with any that `TOY_BOX_SLACK_WAKE_TIMINGS` sets as a JSON object. */

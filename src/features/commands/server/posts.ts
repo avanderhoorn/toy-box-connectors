@@ -65,7 +65,7 @@ export function publishCommand({
   return async ({ series, text }, { caller, at }) => {
     const link = await database.read((sql) => readCallerLink(sql, caller));
     const command = `${PUBLISH_COMMAND} ${series}`;
-    const routine = findRoutine((await routines(link.toyboxChannelId)) ?? [], command);
+    const routine = findRoutine((await routines(link.toyBoxChannelId)) ?? [], command);
     if (!routine) {
       throw new CommandRefusedError(
         `Nothing posted, because no routine in this channel runs \`${command}\`. Publish posts once for each scheduled run of that routine, so create it first.`,

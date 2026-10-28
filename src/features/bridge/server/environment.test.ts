@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { defaultWakeTimings } from "@wakes/model";
-import { readCredentialsFile, resolveBridgeSettings } from "./environment";
+import { readCredentialsFile, resolveBridgeSettings, writeCredential } from "./environment";
 import { BridgeRefusedError } from "./refusal";
 import { createTestFolder } from "./testFixtures";
 
@@ -83,6 +83,20 @@ describe("credentials.env", () => {
     });
   });
 
+  test("keeps its other lines when a setting is written, and stays at mode 600", () => {
+    const dataFolder = createTestFolder();
+    const path = join(dataFolder, "credentials.env");
+    writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", "$argon2id$old");
+    appendFileSync(path, "# the bot\nSLACK_BOT_TOKEN=xoxb-1\n");
+    writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", "$argon2id$new");
+
+    expect(readCredentialsFile(dataFolder)).toEqual({
+      SLACK_BOT_TOKEN: "xoxb-1",
+      OWNER_PASSPHRASE_HASH: "$argon2id$new",
+    });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
   test("is refused when others could read or write it, or it sets anything else, without repeating a value", () => {
     const dataFolder = createTestFolder();
     const path = join(dataFolder, "credentials.env");
@@ -91,7 +105,7 @@ describe("credentials.env", () => {
     });
 
     expect(refusalOf(() => readCredentialsFile(dataFolder))).toBe(
-      `${path} may set only SLACK_BOT_TOKEN, SLACK_APP_TOKEN and TOY_BOX_URL.\n✖ Unrecognized key: "SLACK_SIGNING_SECRET"`,
+      `${path} may set only SLACK_BOT_TOKEN, SLACK_APP_TOKEN, TOY_BOX_URL and OWNER_PASSPHRASE_HASH.\n✖ Unrecognized key: "SLACK_SIGNING_SECRET"`,
     );
     for (const mode of [0o640, 0o604, 0o620, 0o602]) {
       chmodSync(path, mode);

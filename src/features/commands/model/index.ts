@@ -10,7 +10,7 @@ export type CommandSpec = {
   callers: readonly CallerRole[];
   /** A strict object whose fields parse the text the CLI read. */
   input: z.ZodObject;
-  /** The fields the CLI takes as arguments instead, in order. */
+  /** The fields the CLI takes as arguments instead, in order. A list takes every argument left. */
   positionals?: readonly string[];
 };
 
@@ -44,6 +44,16 @@ function limitSchema(most: number, fallback: number, items: string) {
     .default(fallback)
     .describe(`The most ${items} to show, ${fallback} unless set`);
 }
+
+const slackChannelSchema = z
+  .string()
+  .regex(/^[CDG][A-Z0-9]{2,20}$/, "Give the channel's ID, such as C0123ABCD, not its name")
+  .describe("The Slack channel's ID, such as C0123ABCD, which its details show at the bottom");
+
+const slackUsersSchema = z
+  .array(z.string().regex(/^[UW][A-Z0-9]{2,20}$/, "Give member IDs, such as U0123ABCD"))
+  .min(1)
+  .describe("Slack member IDs, such as U0123ABCD, which each one's profile shows");
 
 export const commands = {
   inbox: {
@@ -111,6 +121,50 @@ export const commands = {
     callers: ["lead", "terminal"],
     input: z.object({}).strict(),
   },
+  link: {
+    description: "Link the Toy Box channel to a Slack channel, or change what the link does",
+    callers: ["terminal"],
+    input: z
+      .object({
+        slackChannel: slackChannelSchema,
+        requests: z
+          .enum(["mention", "all"])
+          .optional()
+          .describe("Which posts by an allowed person ask the lead: mention (the default) or all"),
+        observe: z
+          .enum(["requesters", "channel"])
+          .optional()
+          .describe("What the lead reads: requesters' threads (the default) or the whole channel"),
+      })
+      .strict(),
+  },
+  allow: {
+    description: "Let people make the lead act, by their Slack member IDs",
+    callers: ["terminal"],
+    input: z.object({ users: slackUsersSchema }).strict(),
+    positionals: ["users"],
+  },
+  deny: {
+    description: "Stop people making the lead act, and cancel what they asked",
+    callers: ["lead", "terminal"],
+    input: z.object({ users: slackUsersSchema }).strict(),
+    positionals: ["users"],
+  },
+  pause: {
+    description: "Stop answering and posting in Slack until the owner resumes",
+    callers: ["lead", "terminal"],
+    input: z.object({}).strict(),
+  },
+  resume: {
+    description: "Answer and post in Slack again, once what paused the link is fixed",
+    callers: ["terminal"],
+    input: z.object({}).strict(),
+  },
+  unlink: {
+    description: "Remove the link and delete what the bridge kept for it",
+    callers: ["lead", "terminal"],
+    input: z.object({}).strict(),
+  },
 } as const satisfies Record<string, CommandSpec>;
 
 export type CommandName = keyof typeof commands;
@@ -134,5 +188,5 @@ export function inputProblem(
       : `--${optionName(field)}`;
     return `${shown}: ${input[field] === undefined ? "Missing" : message}.`;
   });
-  return `\`${name}\` didn't run. ${problems.join(" ")} Run \`toy-box-slack ${name} --help\` to see what it takes.`;
+  return `\`${name}\` didn't run. ${[...new Set(problems)].join(" ")} Run \`toy-box-slack ${name} --help\` to see what it takes.`;
 }

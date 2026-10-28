@@ -6,6 +6,8 @@ import type { SlackTs } from "@slackapi/model/ts";
 /** A link's settings for the Slack channel it watches, with the people it allows. */
 export type ChannelLink = {
   id: string;
+  toyBoxChannelId: string;
+  slackChannelId: string;
   status: "active" | "paused" | "suspended";
   requestMode: "mention" | "all";
   observe: "requesters" | "channel";
@@ -17,14 +19,24 @@ export type ChannelLink = {
 };
 
 /** The link that watches a Slack channel, whatever its status. */
-export async function readChannelLink(
+export function readChannelLink(sql: Bun.SQL, slackChannelId: string): Promise<ChannelLink | null> {
+  return readLink(sql, "slack_channel_id", slackChannelId);
+}
+
+/** The link of a Toy Box channel, whatever its status. */
+export function readToyBoxLink(sql: Bun.SQL, toyBoxChannelId: string): Promise<ChannelLink | null> {
+  return readLink(sql, "toybox_channel_id", toyBoxChannelId);
+}
+
+async function readLink(
   sql: Bun.SQL,
-  slackChannelId: string,
+  column: "slack_channel_id" | "toybox_channel_id",
+  channelId: string,
 ): Promise<ChannelLink | null> {
   const [link] = await sql<(Omit<ChannelLink, "approved" | "allowlist"> & { approved: string })[]>`
-    SELECT id, status, request_mode AS requestMode, observe, linked_at_ts AS linkedAtTs,
-      approved_audience AS approved
-    FROM links WHERE slack_channel_id = ${slackChannelId}
+    SELECT id, toybox_channel_id AS toyBoxChannelId, slack_channel_id AS slackChannelId, status,
+      request_mode AS requestMode, observe, linked_at_ts AS linkedAtTs, approved_audience AS approved
+    FROM links WHERE ${sql(column)} = ${channelId}
   `;
   if (!link) return null;
   const allowed = await sql<{ user_id: string }[]>`
@@ -35,4 +47,27 @@ export async function readChannelLink(
     approved: JSON.parse(link.approved) as Audience,
     allowlist: new Set(allowed.map((entry) => entry.user_id)),
   };
+}
+
+/** Lets the person `userId` make the link's lead act. */
+export async function allowPerson(
+  transaction: Bun.SQL,
+  linkId: string,
+  userId: string,
+  now: number,
+): Promise<void> {
+  await transaction`
+    INSERT INTO allowlist ${transaction({ link_id: linkId, user_id: userId, added_at: now })}
+  `;
+}
+
+/** Stops the people `userIds` names making the link's lead act. */
+export async function denyPeople(
+  transaction: Bun.SQL,
+  linkId: string,
+  userIds: readonly string[],
+): Promise<void> {
+  await transaction`
+    DELETE FROM allowlist WHERE link_id = ${linkId} AND user_id IN ${transaction([...userIds])}
+  `;
 }
