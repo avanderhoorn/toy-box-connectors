@@ -1,7 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { wakeBudget, type WakeBudget } from "./budget";
 import {
-  consecutiveFailures,
+  catchUpPeriod,
   decideCatchUp,
   decideProposalWake,
   decideWake,
@@ -23,6 +23,7 @@ const workingLead: ToyBoxView = { ...idleLead, leadWorking: true };
 
 function request(changes: Partial<WakeRequest> = {}): WakeRequest {
   return {
+    id: 1,
     state: "open",
     attention: null,
     heldAt: null,
@@ -527,12 +528,42 @@ describe("retrying a failed run", () => {
   ])("after %i failures in a row waits %i ms", (failures, delay) => {
     expect(retryDelay(failures)).toBe(delay);
   });
+});
 
-  test("counts the failures since the last run that didn't fail", () => {
-    expect(consecutiveFailures([])).toBe(0);
-    expect(consecutiveFailures(["failed", "failed", "ran", "failed"])).toBe(2);
-    expect(consecutiveFailures(["ran", "failed"])).toBe(0);
-    expect(consecutiveFailures(["failed", "failed"])).toBe(2);
-    expect(consecutiveFailures(["missing", "failed"])).toBe(0);
+describe("the period a series may catch up", () => {
+  // Schedules run in local time, so these tests pin a zone.
+  const zone = process.env.TZ;
+  beforeAll(() => {
+    process.env.TZ = "America/Los_Angeles";
+  });
+  afterAll(() => {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  });
+
+  const local = (value: string) => new Date(value).getTime();
+  const standup = { series: "standup", period: "day", schedule: "0 16 * * 1-5" } as const;
+
+  test("is the one the latest scheduled run started", () => {
+    const series = { ...standup, registeredAt: local("2026-10-20T09:00:00") };
+    expect(catchUpPeriod(series, local("2026-10-28T09:00:00"))).toEqual({
+      scheduledAt: local("2026-10-27T16:00:00"),
+      key: "standup/2026-10-27",
+    });
+  });
+
+  test("starts with the first run at or after the series was registered", () => {
+    const at = local("2026-10-28T09:00:00");
+    const scheduledAt = local("2026-10-27T16:00:00");
+    expect(catchUpPeriod({ ...standup, registeredAt: scheduledAt }, at)).toEqual({
+      scheduledAt,
+      key: "standup/2026-10-27",
+    });
+    expect(catchUpPeriod({ ...standup, registeredAt: scheduledAt + 1 }, at)).toBeNull();
+  });
+
+  test("doesn't exist for a schedule that can't run", () => {
+    const series = { ...standup, schedule: "0 9 31 2 *", registeredAt: 0 };
+    expect(catchUpPeriod(series, local("2026-10-28T09:00:00"))).toBeNull();
   });
 });

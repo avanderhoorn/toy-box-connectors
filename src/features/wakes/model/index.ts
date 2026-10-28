@@ -5,6 +5,11 @@
 // running a routine: the link's requests routine, or a publication series' routine to catch up a
 // period the lead missed.
 
+import {
+  currentPeriod,
+  type PublicationSeries,
+  type SeriesPeriod,
+} from "@outbox/model/publications";
 import type { RequestAttention } from "@requests/model/lifecycle";
 import type { RoutineRunOutcome, RoutineState } from "@toybox/model";
 import type { WakeBudget } from "./budget";
@@ -32,6 +37,7 @@ export type WakeDecision =
 
 /** A request that may still need the lead. Answering and finished requests never do. */
 export type WakeRequest = {
+  id: number;
   state: "open" | "seen" | "in_progress";
   attention: RequestAttention | null;
   heldAt: number | null;
@@ -69,6 +75,8 @@ export type WakeTimings = {
   debounceLimit: number;
   /** A working lead gets this long before a wake steers into its turn. */
   steerAfter: number;
+  /** A run that landed holds its channel this long, so the turn it started can show as working. */
+  settle: number;
   /** The waits after the first, second and third wakes inbox didn't follow. */
   backoff: readonly [number, number, number];
   /** A seen request that made no progress this long gets a reminder. */
@@ -89,6 +97,7 @@ export const defaultWakeTimings: WakeTimings = {
   debounce: 10_000,
   debounceLimit: 30_000,
   steerAfter: 2 * MINUTE,
+  settle: 10_000,
   backoff: [3 * MINUTE, 6 * MINUTE, 12 * MINUTE],
   remindSeen: 30 * MINUTE,
   remindInProgress: 120 * MINUTE,
@@ -210,10 +219,16 @@ export function retryDelay(failures: number, timings = defaultWakeTimings): numb
   return Math.min(timings.retry * 2 ** Math.max(failures - 1, 0), timings.retryLimit);
 }
 
-/** How many runs failed in a row, given outcomes newest first. */
-export function consecutiveFailures(outcomes: readonly WakeOutcome[]): number {
-  const settled = outcomes.findIndex((outcome) => outcome !== "failed");
-  return settled === -1 ? outcomes.length : settled;
+/**
+ * The period a series may owe a catch-up for at `now`: the one its latest scheduled run started,
+ * unless that run came before the series was registered or its schedule last changed.
+ */
+export function catchUpPeriod(
+  series: PublicationSeries & { registeredAt: number },
+  now: number,
+): SeriesPeriod | null {
+  const period = currentPeriod(series, now);
+  return period && period.scheduledAt >= series.registeredAt ? period : null;
 }
 
 // Answering requests wait on the outbox, not the lead.
