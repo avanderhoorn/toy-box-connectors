@@ -385,7 +385,7 @@ test("delete removes only the named bot post and foreign messages cannot be edit
 });
 
 test("reactions preserve other users and duplicate adds/removes return Slack errors", async () => {
-  const { fake, client } = setup();
+  const { fake, client } = setup({ emojiNames: ["custom_status"] });
   const channel = fake.addChannel();
   fake.setMessage(channel, {
     ts: "1.000001",
@@ -406,6 +406,10 @@ test("reactions preserve other users and duplicate adds/removes return Slack err
   await expect(client.reactions.remove(args)).rejects.toMatchObject({
     data: { error: "no_reaction" },
   });
+  await expect(client.reactions.add({ ...args, name: "no_such_emoji" })).rejects.toMatchObject({
+    data: { error: "invalid_name" },
+  });
+  expect((await client.reactions.add({ ...args, name: "custom_status" })).ok).toBe(true);
 });
 
 test("a post can land while its response is lost, without an implicit fake retry", async () => {
@@ -491,6 +495,13 @@ test("channel/thread refusals remain Slack platform errors, and status expires o
   await client.chat.postMessage({ channel, thread_ts: "1.000001", text: "Done" });
   expect(fake.getThreadStatus(channel, "1.000001")).toBeNull();
   await expect(
+    client.assistant.threads.setStatus({
+      channel_id: channel,
+      thread_ts: "9.000001",
+      status: "No root",
+    }),
+  ).rejects.toMatchObject({ data: { error: "invalid_thread_ts" } });
+  await expect(
     client.chat.postMessage({ channel, thread_ts: "9.000001", text: "No root" }),
   ).rejects.toMatchObject({ data: { error: "thread_not_found" } });
   fake.setChannel({ id: channel, is_member: false });
@@ -510,4 +521,40 @@ test("bad structured arguments fail loudly rather than accepting a JSON-shaped s
     client.apiCall("chat.postMessage", { channel, text: "Bad", blocks: "not JSON" }),
   ).rejects.toMatchObject({ data: { error: "invalid_arguments" } });
   await expect(fake.stop()).rejects.toThrow("Invalid JSON argument");
+});
+
+test("offline seed changes recompute thread counters without retaining a deleted reply or status", async () => {
+  const { fake, client } = setup();
+  const channel = fake.addChannel();
+  const root = await client.chat.postMessage({ channel, text: "Root" });
+  const reply = await client.chat.postMessage({ channel, thread_ts: root.ts!, text: "Reply" });
+  fake.setMessage(channel, {
+    ts: "9000000000.000001",
+    thread_ts: root.ts!,
+    user: "U1",
+    text: "Offline reply",
+  });
+  expect((await client.conversations.history({ channel })).messages?.[0].reply_count).toBe(2);
+  fake.deleteMessage(channel, "9000000000.000001");
+  expect((await client.conversations.history({ channel })).messages?.[0].latest_reply).toBe(
+    reply.ts,
+  );
+  fake.deleteMessage(channel, reply.ts!);
+  const history = await client.conversations.history({ channel });
+  expect(history.messages?.[0].thread_ts).toBeUndefined();
+  expect(history.messages?.[0].reply_count).toBeUndefined();
+  await client.assistant.threads.setStatus({
+    channel_id: channel,
+    thread_ts: root.ts!,
+    status: "Thinking",
+  });
+  fake.deleteMessage(channel, root.ts!);
+  expect(fake.getThreadStatus(channel, root.ts!)).toBeNull();
+  await expect(
+    client.assistant.threads.setStatus({
+      channel_id: channel,
+      thread_ts: root.ts!,
+      status: "Deleted",
+    }),
+  ).rejects.toMatchObject({ data: { error: "invalid_thread_ts" } });
 });

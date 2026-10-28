@@ -1,0 +1,150 @@
+{
+  "capture": {
+    "date": "2026-10-28",
+    "source": "Dedicated free test workspace and test app, Socket Mode and Web API",
+    "projection": "Observed protocol and reconciliation keys and types only. Rendering, bot profiles and user-controlled payload details are omitted."
+  },
+  "hello": {
+    "type": "string",
+    "num_connections": "number",
+    "connection_info.app_id": "string",
+    "debug_info.host": "string",
+    "debug_info.build_number": "number",
+    "debug_info.approximate_connection_time": "number"
+  },
+  "envelope": {
+    "type": "string",
+    "envelope_id": "string",
+    "accepts_response_payload": "boolean",
+    "retry_attempt": "number",
+    "retry_reason": "string",
+    "payload.type": "string",
+    "payload.token": "string",
+    "payload.team_id": "string",
+    "payload.context_team_id": "string",
+    "payload.context_enterprise_id": "null",
+    "payload.api_app_id": "string",
+    "payload.event_id": "string",
+    "payload.event_time": "number",
+    "payload.authorizations": "array",
+    "payload.is_ext_shared_channel": "boolean",
+    "payload.event_context": "string"
+  },
+  "post": {
+    "ok": "boolean",
+    "channel": "string",
+    "ts": "string",
+    "message.user": "string",
+    "message.type": "string",
+    "message.ts": "string",
+    "message.bot_id": "string",
+    "message.app_id": "string",
+    "message.text": "string",
+    "message.team": "string",
+    "message.metadata.event_type": "string",
+    "message.metadata.event_payload": "object"
+  },
+  "posted": {
+    "payload.event.type": "string",
+    "payload.event.user": "string",
+    "payload.event.ts": "string",
+    "payload.event.bot_id": "string",
+    "payload.event.app_id": "string",
+    "payload.event.text": "string",
+    "payload.event.team": "string",
+    "payload.event.channel": "string",
+    "payload.event.event_ts": "string",
+    "payload.event.channel_type": "string",
+    "payload.event.metadata.event_type": "string",
+    "payload.event.metadata.event_payload": "object"
+  },
+  "reply": {
+    "payload.event.thread_ts": "string",
+    "payload.event.parent_user_id": "string",
+    "payload.event.metadata.event_type": "string",
+    "payload.event.metadata.event_payload": "object"
+  },
+  "broadcast": {
+    "payload.event.subtype": "string",
+    "payload.event.thread_ts": "string",
+    "payload.event.root.ts": "string",
+    "payload.event.root.thread_ts": "string",
+    "payload.event.root.reply_count": "number",
+    "payload.event.root.reply_users_count": "number",
+    "payload.event.root.reply_users": "array",
+    "payload.event.root.latest_reply": "string",
+    "payload.event.root.is_locked": "boolean",
+    "payload.event.root.subscribed": "boolean",
+    "payload.event.root.metadata.event_type": "string"
+  },
+  "update": {
+    "ok": "boolean",
+    "channel": "string",
+    "ts": "string",
+    "text": "string",
+    "message.edited.user": "string",
+    "message.edited.ts": "string",
+    "message.thread_ts": "string",
+    "message.reply_count": "number",
+    "message.latest_reply": "string",
+    "message.metadata.event_payload": "object"
+  },
+  "changed": {
+    "payload.event.type": "string",
+    "payload.event.subtype": "string",
+    "payload.event.hidden": "boolean",
+    "payload.event.channel": "string",
+    "payload.event.ts": "string",
+    "payload.event.event_ts": "string",
+    "payload.event.channel_type": "string",
+    "payload.event.message.ts": "string",
+    "payload.event.previous_message.ts": "string"
+  },
+  "broadcastRootChanged": {
+    "payload.event.message.root.edited.user": "string",
+    "payload.event.message.root.edited.ts": "string",
+    "payload.event.message.root.metadata.event_type": "string",
+    "payload.event.previous_message.root.ts": "string"
+  },
+  "edited": {
+    "payload.event.message.edited.user": "string",
+    "payload.event.message.edited.ts": "string",
+    "payload.event.message.thread_ts": "string",
+    "payload.event.message.reply_count": "number",
+    "payload.event.message.latest_reply": "string",
+    "payload.event.message.metadata.event_payload": "object"
+  },
+  "deleted": {
+    "payload.event.type": "string",
+    "payload.event.subtype": "string",
+    "payload.event.hidden": "boolean",
+    "payload.event.deleted_ts": "string",
+    "payload.event.channel": "string",
+    "payload.event.ts": "string",
+    "payload.event.event_ts": "string",
+    "payload.event.channel_type": "string",
+    "payload.event.previous_message.ts": "string"
+  },
+  "deletedReply": {
+    "payload.event.previous_message.thread_ts": "string"
+  },
+  "emptyRoot": {
+    "payload.event.message.edited.user": "string",
+    "payload.event.message.edited.ts": "string",
+    "payload.event.message.metadata.event_payload": "object"
+  },
+  "history": {
+    "ok": "boolean",
+    "messages": "array",
+    "has_more": "boolean",
+    "pin_count": "number",
+    "channel_actions_ts": "null",
+    "channel_actions_count": "number",
+    "response_metadata.next_cursor": "string"
+  },
+  "delete": {
+    "ok": "boolean",
+    "channel": "string",
+    "ts": "string"
+  }
+}

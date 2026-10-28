@@ -105,6 +105,7 @@ export function startFakeSlack(
     pingIntervalMs?: number;
     scopes?: readonly string[];
     pageSize?: number;
+    emojiNames?: readonly string[];
   } = {},
 ): FakeSlack {
   const now = options.now ?? Date.now;
@@ -144,7 +145,7 @@ export function startFakeSlack(
             type: "hello",
             connection_info: { app_id: nextHelloAppId ?? identity.appId },
             num_connections: sockets.size,
-            debug_info: { approximate_connection_time: 3600 },
+            debug_info: { host: "fake-slack", build_number: 1, approximate_connection_time: 3600 },
           }),
         );
         nextHelloAppId = undefined;
@@ -201,8 +202,9 @@ export function startFakeSlack(
     now,
     scopes: options.scopes,
     pageSize: options.pageSize,
-    emitEvent(event) {
-      if (sockets.size) sendEvent(event);
+    emojiNames: options.emojiNames,
+    emitEvent(event, context) {
+      if (sockets.size) sendEvent(event, { context });
     },
     connectionUrl() {
       const ticket = crypto.randomUUID();
@@ -249,6 +251,11 @@ export function startFakeSlack(
     settings: FakeEventOptions = {},
   ): FakeSlackDelivery {
     const payload: Record<string, unknown> = {
+      token: "fake-verification-token",
+      context_team_id: identity.teamId,
+      context_enterprise_id: identity.enterpriseId,
+      is_ext_shared_channel: false,
+      event_context: `fake-event-context-${crypto.randomUUID()}`,
       ...settings.context,
       type: "event_callback",
       api_app_id: settings.appId ?? identity.appId,
@@ -276,7 +283,7 @@ export function startFakeSlack(
       envelope_id: settings.envelopeId ?? crypto.randomUUID(),
       accepts_response_payload: false,
       retry_attempt: settings.retryAttempt ?? 0,
-      ...(settings.retryReason === undefined ? {} : { retry_reason: settings.retryReason }),
+      retry_reason: settings.retryReason ?? "",
       payload,
     });
   }
