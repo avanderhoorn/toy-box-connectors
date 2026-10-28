@@ -6,7 +6,16 @@ import { pendingApproval } from "@links/model/testFixtures";
 import { slackPerson } from "@slackapi/model/testFixtures";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { writeSlackPerson } from "@slackapi/server/users";
-import { type IgnoredInteraction, readApproval, recordCardPosted, takeClick } from "./approvals";
+import {
+  countProposalsSince,
+  createApproval,
+  expireApprovals,
+  type IgnoredInteraction,
+  readAllOpenApprovals,
+  readApproval,
+  recordCardPosted,
+  takeClick,
+} from "./approvals";
 import { createStoredApproval } from "./testFixtures";
 
 /** U-owner's click on `actionId` on approval-1's card, as Slack sends it. `changes` replace its fields. */
@@ -315,5 +324,166 @@ describe("reading an approval", () => {
 
     expect(await database.read((sql) => readApproval(sql, "approval-1"))).toEqual(approval);
     expect(await database.read((sql) => readApproval(sql, "approval-2"))).toBeNull();
+  });
+});
+
+describe("making a proposal", () => {
+  const proposal = {
+    toyboxChannelId: "toybox-link",
+    linkId: "link",
+    action: "allow",
+    patch: [{ field: "allowlist.U-carol", after: { label: null } }],
+    readSet: pendingApproval().readSet,
+    cardChannelId: "C-link",
+    createdBy: "lead",
+  } as const;
+
+  test("takes the number after every channel's, an ID nobody can guess, and an hour", async () => {
+    const database = await openTestDatabase();
+    await createStoredApproval(database, {
+      id: "approval-7",
+      number: 7,
+      toyboxChannelId: "toybox-other",
+      state: "expired",
+    });
+    const create = () =>
+      database.write((transaction) => createApproval(transaction, proposal, 60_000));
+
+    const first = await create();
+    const second = await create();
+
+    expect(first).toEqual({
+      ...pendingApproval(),
+      id: expect.stringMatching(/^[0-9a-f]{32}$/),
+      number: 8,
+      card: { channelId: "C-link", ts: null },
+      createdAt: 60_000,
+      expiresAt: 60_000 + APPROVAL_LIFETIME_MS,
+    });
+    expect(second.number).toBe(9);
+    expect(second.id).not.toBe(first.id);
+    expect(await database.read((sql) => readApproval(sql, first.id))).toEqual(first);
+    expect(await readOutbox(database)).toEqual([
+      { kind: "card", phase: "post", approval_id: first.id, link_id: "link", channel_id: "C-link" },
+      {
+        kind: "card",
+        phase: "post",
+        approval_id: second.id,
+        link_id: "link",
+        channel_id: "C-link",
+      },
+    ]);
+    expect(await readAudit(database)).toEqual([
+      {
+        actor: "lead",
+        action: "propose",
+        link_id: "link",
+        approval_id: first.id,
+        subject: "allow",
+      },
+      {
+        actor: "lead",
+        action: "propose",
+        link_id: "link",
+        approval_id: second.id,
+        subject: "allow",
+      },
+    ]);
+  });
+});
+
+describe("reading proposals", () => {
+  test("open approvals are those waiting for the owner or apply, from every channel, oldest first", async () => {
+    const database = await openTestDatabase();
+    const states = ["approved", "applied", "pending", "rejected", "expired", "stale"] as const;
+    for (const [index, state] of states.entries()) {
+      await createStoredApproval(database, {
+        id: `approval-${index + 1}`,
+        number: 10 - index,
+        toyboxChannelId: `toybox-${index}`,
+        linkId: `link-${index}`,
+        state,
+        staleReason: state === "stale" ? "reversed" : null,
+        appliedAt: state === "applied" ? 3 : null,
+        decidedBy: ["approved", "applied", "rejected"].includes(state) ? "U-owner" : null,
+        decidedAt: ["approved", "applied", "rejected"].includes(state) ? 2 : null,
+      });
+    }
+
+    const open = await database.read((sql) => readAllOpenApprovals(sql));
+    expect(open.map((approval) => [approval.id, approval.state])).toEqual([
+      ["approval-3", "pending"],
+      ["approval-1", "approved"],
+    ]);
+  });
+
+  test("a channel's proposals since a moment count whatever became of them, and only its own", async () => {
+    const database = await openTestDatabase();
+    const created = [
+      { toyboxChannelId: "toybox-link", createdAt: 100, state: "pending" },
+      { toyboxChannelId: "toybox-link", createdAt: 101, state: "expired" },
+      { toyboxChannelId: "toybox-link", createdAt: 102, state: "stale", staleReason: "reversed" },
+      { toyboxChannelId: "toybox-other", createdAt: 103, state: "pending" },
+    ] as const;
+    for (const [index, changes] of created.entries()) {
+      await createStoredApproval(database, {
+        id: `approval-${index}`,
+        number: index + 1,
+        ...changes,
+      });
+    }
+    const count = (channelId: string, since: number) =>
+      database.read((sql) => countProposalsSince(sql, channelId, since));
+
+    expect(await count("toybox-link", 99)).toBe(3);
+    expect(await count("toybox-link", 100)).toBe(2);
+    expect(await count("toybox-link", 102)).toBe(0);
+    expect(await count("toybox-other", 0)).toBe(1);
+    expect(await count("toybox-new", 0)).toBe(0);
+  });
+});
+
+describe("expiring proposals", () => {
+  test("a pending card expires once its hour is up, showing it on the card, and nothing else does", async () => {
+    const database = await openTestDatabase();
+    await createStoredApproval(database);
+    await createStoredApproval(database, {
+      id: "approval-2",
+      number: 2,
+      expiresAt: APPROVAL_LIFETIME_MS + 1,
+    });
+    await createStoredApproval(database, {
+      id: "approval-3",
+      number: 3,
+      state: "approved",
+      decidedBy: "U-owner",
+      decidedAt: 2,
+    });
+    const expire = (now: number) =>
+      database.write((transaction) => expireApprovals(transaction, now));
+
+    expect(await expire(APPROVAL_LIFETIME_MS - 1)).toEqual([]);
+    expect(await expire(APPROVAL_LIFETIME_MS)).toEqual([pendingApproval({ state: "expired" })]);
+    expect(await expire(APPROVAL_LIFETIME_MS)).toEqual([]);
+
+    expect(await readState(database)).toEqual({
+      state: "expired",
+      decided_by: null,
+      decided_at: null,
+    });
+    expect(await database.read((sql) => readAllOpenApprovals(sql))).toMatchObject([
+      { id: "approval-2", state: "pending" },
+      { id: "approval-3", state: "approved" },
+    ]);
+    expect(await readOutbox(database)).toEqual([cardUpdate]);
+    expect(await readAudit(database)).toEqual([
+      {
+        actor: "bridge",
+        action: "expire",
+        link_id: "link",
+        approval_id: "approval-1",
+        subject: null,
+      },
+    ]);
   });
 });

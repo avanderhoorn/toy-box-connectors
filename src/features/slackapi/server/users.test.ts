@@ -7,6 +7,7 @@ import {
   canonicalUserId,
   fetchSlackPerson,
   readBotUserIds,
+  readPersonIds,
   readSlackPersonName,
   writeSlackPerson,
 } from "./users";
@@ -138,6 +139,23 @@ describe("keeping what Slack said about someone", () => {
       expect(await canonicalUserId(sql, "W-carol")).toBe("U-carol");
       expect(await canonicalUserId(sql, "U-carol")).toBe("U-carol");
       expect(await canonicalUserId(sql, "U-stranger")).toBe("U-stranger");
+    });
+  });
+
+  test("knows every ID someone goes by, from either of them", async () => {
+    const database = await openTestDatabase();
+    await database.write((transaction) =>
+      writeSlackPerson(
+        transaction,
+        person({ enterpriseId: "E-org", enterpriseUserId: "W-carol" }),
+        1_000,
+      ),
+    );
+
+    await database.read(async (sql) => {
+      expect(await readPersonIds(sql, "U-carol")).toEqual(["U-carol", "W-carol"]);
+      expect(await readPersonIds(sql, "W-carol")).toEqual(["U-carol", "W-carol"]);
+      expect(await readPersonIds(sql, "U-stranger")).toEqual(["U-stranger"]);
     });
   });
 

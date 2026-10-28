@@ -82,6 +82,18 @@ export async function canonicalUserId(sql: Bun.SQL, userId: string): Promise<str
   return alias?.user_id ?? userId;
 }
 
+/**
+ * Every ID the person `userId` counts as is known by: the one users.info gave them, then each
+ * alias stored for them, and `userId` itself.
+ */
+export async function readPersonIds(sql: Bun.SQL, userId: string): Promise<string[]> {
+  const canonical = await canonicalUserId(sql, userId);
+  const aliases = await sql<{ alias_id: string }[]>`
+    SELECT alias_id FROM user_aliases WHERE user_id = ${canonical} ORDER BY alias_id
+  `;
+  return [...new Set([canonical, ...aliases.map((alias) => alias.alias_id), userId])];
+}
+
 /** The users Slack said are bots, which a message's user ID alone doesn't tell apart from people. */
 export async function readBotUserIds(sql: Bun.SQL): Promise<Set<string>> {
   const bots = await sql<{ user_id: string }[]>`SELECT user_id FROM users WHERE is_bot = 1`;

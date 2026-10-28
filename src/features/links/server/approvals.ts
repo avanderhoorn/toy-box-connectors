@@ -1,7 +1,9 @@
 import {
+  APPROVAL_LIFETIME_MS,
   approvalStates,
   clickedApprovalId,
   decide,
+  expireApproval,
   isOpen,
   staleApproval,
   type Approval,
@@ -11,6 +13,7 @@ import {
   type IgnoredClick,
   type PatchEntry,
   type ProposalCaller,
+  type ProposalDraft,
   type ReadSet,
   type StaleReason,
 } from "@links/model/approvals";
@@ -23,7 +26,8 @@ import { audit } from "./audit";
 
 // Stored approvals.
 //
-// The receiver hands over every interactive payload in its delivery's transaction, before the ack,
+// A setup command stores a proposal, with its card queued, in the transaction that checks it. The
+// receiver hands over every interactive payload in its delivery's transaction, before the ack,
 // and a click is decided there from what's stored: the installation, the approval and the aliases
 // of people the bridge has read. Nothing here calls Slack, so the decision commits before Slack is
 // acked and a redelivered click finds it made. An approved approval applies after the ack.
@@ -78,6 +82,113 @@ export async function readOpenApprovals(sql: Bun.SQL, linkId: string): Promise<A
     ORDER BY number
   `;
   return rows.map(approvalFromRow);
+}
+
+/** Every approval that waits for the owner or for apply, whichever Toy Box channel made it, oldest first. */
+export async function readAllOpenApprovals(sql: Bun.SQL): Promise<Approval[]> {
+  const rows = await sql<ApprovalRow[]>`
+    SELECT * FROM approvals WHERE state IN ${sql(openStates)} ORDER BY number
+  `;
+  return rows.map(approvalFromRow);
+}
+
+/** How many proposals a Toy Box channel has made since `since`, whatever became of them. */
+export async function countProposalsSince(
+  sql: Bun.SQL,
+  toyboxChannelId: string,
+  since: number,
+): Promise<number> {
+  const [row] = await sql<{ count: number }[]>`
+    SELECT COUNT(*) AS count FROM approvals
+    WHERE toybox_channel_id = ${toyboxChannelId} AND created_at > ${since}
+  `;
+  return row!.count;
+}
+
+/** What a new proposal holds besides what the bridge gives every one. */
+export type NewProposal = ProposalDraft & {
+  readSet: ReadSet;
+  cardChannelId: string;
+  createdBy: ProposalCaller;
+};
+
+/**
+ * Stores a proposal for the owner to decide within the hour, queues posting its card and audits
+ * it. It gets 128 random bits as the ID its buttons carry, and the next number.
+ */
+export async function createApproval(
+  transaction: Bun.SQL,
+  proposal: NewProposal,
+  now: number,
+): Promise<Approval> {
+  const [next] = await transaction<{ number: number }[]>`
+    SELECT COALESCE(MAX(number), 0) + 1 AS number FROM approvals
+  `;
+  const approval: Approval = {
+    id: Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("hex"),
+    number: next!.number,
+    toyboxChannelId: proposal.toyboxChannelId,
+    linkId: proposal.linkId,
+    action: proposal.action,
+    patch: proposal.patch,
+    readSet: proposal.readSet,
+    card: { channelId: proposal.cardChannelId, ts: null },
+    state: "pending",
+    staleReason: null,
+    appliedAt: null,
+    decidedBy: null,
+    decidedAt: null,
+    reportedAt: null,
+    createdBy: proposal.createdBy,
+    createdAt: now,
+    expiresAt: now + APPROVAL_LIFETIME_MS,
+  };
+  await transaction`INSERT INTO approvals ${transaction(approvalColumns(approval))}`;
+  await queueCard(
+    transaction,
+    {
+      approvalId: approval.id,
+      linkId: approval.linkId,
+      channelId: approval.card.channelId,
+      phase: "post",
+    },
+    now,
+  );
+  await audit(
+    transaction,
+    {
+      actor: approval.createdBy,
+      action: "propose",
+      linkId: approval.linkId,
+      approvalId: approval.id,
+      subject: approval.action,
+    },
+    now,
+  );
+  return approval;
+}
+
+/**
+ * Expires every pending approval whose hour is up, queues the update that shows it on each card
+ * and audits each. Returns them as they're stored now.
+ */
+export async function expireApprovals(transaction: Bun.SQL, now: number): Promise<Approval[]> {
+  const rows = await transaction<ApprovalRow[]>`
+    SELECT * FROM approvals WHERE state = 'pending' AND expires_at <= ${now} ORDER BY number
+  `;
+  const expired: Approval[] = [];
+  for (const row of rows) {
+    const approval = expireApproval(approvalFromRow(row), now);
+    await saveApproval(transaction, approval);
+    await queueUpdate(transaction, approval, now);
+    await audit(
+      transaction,
+      { actor: "bridge", action: "expire", linkId: approval.linkId, approvalId: approval.id },
+      now,
+    );
+    expired.push(approval);
+  }
+  return expired;
 }
 
 /**
