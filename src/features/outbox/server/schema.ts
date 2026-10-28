@@ -21,9 +21,5 @@ export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
         OR (kind = 'publication' AND request_id IS NULL AND thread_ts IS NULL
           AND series IS NOT NULL AND scheduled_at IS NOT NULL))
     );
-    CREATE TABLE outbox_channels (
-      link_id TEXT PRIMARY KEY REFERENCES links(id) ON DELETE CASCADE,
-      next_post_at INTEGER NOT NULL
-    );
   `);
 }

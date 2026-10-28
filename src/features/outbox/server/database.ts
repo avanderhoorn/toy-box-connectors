@@ -214,15 +214,6 @@ export async function startOutboxAttempt(tx: Bun.SQL, item: OutboxItem, now: num
     current.payloadHash !== item.payloadHash
   )
     return { kind: "changed" as const };
-  const [slot] = await tx<
-    { next_post_at: number }[]
-  >`SELECT next_post_at FROM outbox_channels WHERE link_id = ${item.linkId}`;
-  const until = Math.max(current.nextAttemptAt ?? 0, slot?.next_post_at ?? 0);
-  if (until > now) return { kind: "waiting" as const, reason: "post_slot", until };
-  await tx`
-    INSERT INTO outbox_channels (link_id, next_post_at) VALUES (${item.linkId}, ${now + 1000})
-    ON CONFLICT(link_id) DO UPDATE SET next_post_at = excluded.next_post_at
-  `;
   const [row] = await tx<OutboxRow[]>`
     UPDATE outbox SET state = 'sending', attempts = attempts + 1, attempt_started_at = ${now},
       next_attempt_at = NULL, error = NULL, updated_at = ${now}

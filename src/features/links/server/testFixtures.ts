@@ -48,7 +48,6 @@ export async function fillEveryTable(database: BridgeDatabase): Promise<void> {
   await createStoredRequest(database);
   await createStoredOutboxItem(database, 1);
   await database.write(async (transaction) => {
-    await transaction`INSERT INTO outbox_channels (link_id, next_post_at) VALUES ('link', 1000)`;
     await transaction`INSERT INTO users (user_id) VALUES ('U-carol')`;
     await transaction`INSERT INTO user_aliases VALUES ('W-carol', 'U-carol')`;
     await transaction`INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-carol', 0)`;

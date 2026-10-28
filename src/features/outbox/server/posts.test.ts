@@ -36,7 +36,6 @@ test("one threaded Markdown answer confirms its request, retracts and keeps its 
   await expect(world.queue()).rejects.toThrow(`reserved by o${item.number}`);
   expect((await world.post(item.id)).kind).toBe("changed");
 
-  world.advance(1000);
   const publication = await world.database.write((tx) =>
     queuePublication(
       tx,

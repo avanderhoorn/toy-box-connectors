@@ -10,8 +10,8 @@ A duplicate command refuses with the first item's number and state, rather than 
 
 Before posting, read fresh channel facts and recheck the installation, link, destination and
 requester's current permission. Commit `sending`, the attempt number and its start time before
-calling Slack. SDK retries are disabled. Share the client's method cooldowns and a durable
-one-second channel post slot. Restarting may encounter another 429, never retry an ambiguous post.
+calling Slack. SDK retries are disabled. Share the client's method cooldowns and defer a 429
+until its Retry-After deadline. Restarting may encounter another 429, never retry an ambiguous post.
 
 A matching response confirms delivery. A lost, malformed or ambiguous response becomes
 `delivery_unknown`. Startup treats interrupted sends the same way. Read the intended thread
