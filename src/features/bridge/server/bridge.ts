@@ -84,7 +84,6 @@ export async function startBridge(
 
   try {
     database = await openBridgeDatabase(join(dataFolder, "bridge.db"));
-    const filesFolder = join(dataFolder, "files");
     // Slack is supervised exactly when both tokens are set.
     const slackState = (): SlackState => unconfiguredSlack(settings) ?? slack!.state();
     const { botToken, appToken, slackApiUrl } = settings;
@@ -95,7 +94,6 @@ export async function startBridge(
       });
       slack = startSlackSupervisor(database, bot, {
         tokens: { botToken, appToken },
-        filesFolder,
         slackApiUrl,
         onChange: () => scheduler?.reconsider(),
         onError: failure.resolve,

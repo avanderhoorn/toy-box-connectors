@@ -1,12 +1,11 @@
-import { confirmAnswer, returnToProgress } from "@requests/model/lifecycle";
+import { confirmAnswer, returnToSeen } from "@requests/model/lifecycle";
 import { readRequest, saveRequest } from "@requests/server/database";
 import { queueReaction, type OutboxState } from "./database";
 
-type FinalReply = { request_rev: number; state: OutboxState };
-
 /**
- * Settles delivery proof and verified input together. Proof calls this after storing sent, and
- * repair calls it after changing a request, all inside the transaction that made the change.
+ * Settles an answering request by its final reply: a reply Slack confirmed answers it, and one
+ * Slack refused gives it back to the lead. Proof calls this after storing the outcome, inside the
+ * transaction that stored it.
  */
 export async function settleRequestAnswer(
   transaction: Bun.SQL,
@@ -15,58 +14,33 @@ export async function settleRequestAnswer(
 ): Promise<boolean> {
   const request = await readRequest(transaction, requestId);
   if (!request || request.state !== "answering") return false;
-  await transaction`
-    UPDATE outbox SET state = 'superseded', updated_at = ${now}
-    WHERE request_id = ${requestId} AND kind = 'reply' AND phase = 'final'
-      AND state = 'queued' AND request_rev < ${request.inputRev}
-  `;
-  const finals = await transaction<FinalReply[]>`
-    SELECT request_rev, state FROM outbox
+  const finals = await transaction<{ state: OutboxState }[]>`
+    SELECT state FROM outbox
     WHERE request_id = ${requestId} AND kind = 'reply' AND phase = 'final'
   `;
-  const current = finals.filter((reply) => reply.request_rev === request.inputRev);
-  if (current.some((reply) => reply.state === "sent" || reply.state === "retracted")) {
-    if (request.sourceUnverifiedAt !== null) return false;
-    await saveRequest(transaction, confirmAnswer(request, request.inputRev, now));
-    for (const [action, name] of [
-      ["remove", "eyes"],
-      ["add", "white_check_mark"],
-    ] as const) {
-      await queueReaction(
-        transaction,
-        {
-          action,
-          name,
-          channelId: request.channelId,
-          ts: request.sourceTs,
-          linkId: request.linkId,
-          requestId,
-        },
-        now,
-      );
-    }
+  if (finals.some((reply) => reply.state === "sent" || reply.state === "retracted")) {
+    await saveRequest(transaction, confirmAnswer(request));
+    await queueReaction(
+      transaction,
+      {
+        action: "add",
+        name: "white_check_mark",
+        channelId: request.channelId,
+        ts: request.sourceTs,
+        linkId: request.linkId,
+        requestId,
+      },
+      now,
+    );
     return true;
   }
   if (
-    current.some((reply) =>
-      ["queued", "sending", "delivery_unknown", "stray"].includes(reply.state),
-    )
+    finals.some((reply) => ["queued", "sending", "delivery_unknown", "stray"].includes(reply.state))
   ) {
     return false;
   }
-  if (current.some((reply) => ["failed", "dropped", "cancelled"].includes(reply.state))) {
-    await saveRequest(transaction, returnToProgress(request, "reply_failed", now));
-    return true;
-  }
-  if (finals.some((reply) => reply.request_rev < request.inputRev)) {
-    await saveRequest(
-      transaction,
-      returnToProgress(
-        request,
-        request.attention === "reply_failed" ? "reply_failed" : "updated",
-        now,
-      ),
-    );
+  if (finals.some((reply) => ["failed", "dropped", "cancelled"].includes(reply.state))) {
+    await saveRequest(transaction, returnToSeen(request, now));
     return true;
   }
   return false;

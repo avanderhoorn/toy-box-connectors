@@ -4,8 +4,7 @@ import type { SlackMessage } from "@slackapi/model/messages";
 //
 // A thank-you or an okay shouldn't open a request or send the lead back to a
 // thread it already answered. Only short, closed phrases count, so a message
-// that could carry a decision, such as yes, no or lgtm, still reaches the lead,
-// and so does anything with a file.
+// that could carry a decision, such as yes, no or lgtm, still reaches the lead.
 
 const courtesyPhrases = [
   "thanks",
@@ -36,8 +35,7 @@ const courtesyPhrase = `(?:${courtesyPhrases.join("|")})`;
 const courtesyPattern = new RegExp(`^${courtesyPhrase}(?: ${courtesyPhrase})*$`);
 
 /** Whether a message only thanks or acknowledges, such as "thanks!", "ok 👍" or a lone emoji. */
-export function isCourtesyOnly(message: Pick<SlackMessage, "text" | "files">): boolean {
-  if (message.files.length > 0) return false;
+export function isCourtesyOnly(message: Pick<SlackMessage, "text">): boolean {
   const words = message.text
     .replace(/<[@!][^>]*>/g, " ")
     .replace(/&(?:amp|lt|gt);/g, " ")

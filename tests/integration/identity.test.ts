@@ -1,10 +1,7 @@
 import { describe, expect, onTestFinished, test } from "bun:test";
-import { interruptionGap } from "@activity/model/gaps";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { confirmIdentity } from "@bridge/server/identity";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import { createStoredLink } from "@links/server/testFixtures";
-import { createStoredRequest } from "@requests/server/testFixtures";
 import type { Installation } from "@slackapi/model/installation";
 import { createBotClient, guardBotClient, type BotClient } from "@slackapi/server/botClient";
 import { markAuthFailed, readInstallation } from "@slackapi/server/installation";
@@ -36,7 +33,7 @@ function confirm(
     slackApiUrl: slack.url,
     now: () => NOW,
   });
-  return confirmIdentity(database, wrap(bot), tokens, () => NOW);
+  return confirmIdentity(database, wrap(bot), tokens);
 }
 
 function methodsCalled(slack: FakeSlack) {
@@ -48,12 +45,6 @@ function readFailure(database: BridgeDatabase) {
     const [row] = await sql`SELECT status, auth_failed_at FROM installation`;
     return row;
   });
-}
-
-function readGaps(database: BridgeDatabase) {
-  return database.read(
-    (sql) => sql`SELECT link_id, oldest_ts, latest_ts, reason FROM coverage ORDER BY id`,
-  );
 }
 
 const fakeInstallation: Installation = {
@@ -218,50 +209,22 @@ describe("a rejected bot token", () => {
     }
   });
 
-  test("recovers in the write that records the rejected span as a gap in every linked channel", async () => {
+  test("recovers once Slack confirms the tokens again", async () => {
     const slack = fakeSlack();
     const database = await openTestDatabase();
     await confirm(database, slack);
-    await createStoredLink(database, "watch");
-    await createStoredLink(database, "paused", { status: "paused" });
-    await createStoredRequest(database, { linkId: "watch", channelId: "C-watch" });
-    const failedAt = NOW - 3_600_000;
-    await database.write((transaction) => markAuthFailed(transaction, failedAt));
+    await database.write((transaction) => markAuthFailed(transaction, NOW - 3_600_000));
 
     expect(await confirm(database, slack)).toMatchObject({
       kind: "confirmed",
       installation: fakeInstallation,
     });
     expect(await readFailure(database)).toEqual({ status: "active", auth_failed_at: null });
-    const window = interruptionGap(failedAt, NOW, "1700000000.000100")!;
-    expect(await readGaps(database)).toEqual(
-      ["paused", "watch"].map((linkId) => ({
-        link_id: linkId,
-        oldest_ts: window.oldestTs,
-        latest_ts: window.latestTs,
-        reason: "auth_failed",
-      })),
-    );
-    // An edit that came while the token was rejected was left for repair.
-    expect(await database.read((sql) => sql`SELECT source_unverified_at FROM requests`)).toEqual([
-      { source_unverified_at: NOW },
-    ]);
   });
 
-  test("records no gap when the installation wasn't failing", async () => {
-    const slack = fakeSlack();
-    const database = await openTestDatabase();
-    await confirm(database, slack);
-    await createStoredLink(database, "watch");
-
-    expect(await confirm(database, slack)).toMatchObject({ kind: "confirmed" });
-    expect(await readGaps(database)).toEqual([]);
-  });
-
-  test("keeps failing, recording nothing, while the tokens belong to someone else", async () => {
+  test("keeps failing while the tokens belong to someone else", async () => {
     const database = await openTestDatabase();
     await confirm(database, fakeSlack());
-    await createStoredLink(database, "watch");
     await database.write((transaction) => markAuthFailed(transaction, NOW - 60_000));
 
     expect(await confirm(database, fakeSlack({ teamId: "TOTHER" }))).toMatchObject({
@@ -272,7 +235,6 @@ describe("a rejected bot token", () => {
       status: "auth_failed",
       auth_failed_at: NOW - 60_000,
     });
-    expect(await readGaps(database)).toEqual([]);
   });
 });
 

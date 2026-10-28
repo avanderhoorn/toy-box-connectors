@@ -1,6 +1,5 @@
 import type { WebClient } from "@slack/web-api";
 import { z } from "zod";
-import { recordInterruption } from "@activity/server/coverage";
 import type { BridgeDatabase } from "@bridge/server/database";
 import {
   checkOwner,
@@ -22,9 +21,7 @@ import {
 //
 // Startup asks Slack whose tokens the bridge holds before it reads or sends anything, and so does
 // recovery after Slack rejected the bot token. The first answer records the installation, and every
-// later one must agree with it. The write that makes a failing installation active again records
-// the span Slack rejected the token for as a gap in every linked channel, so repair reads what was
-// posted or edited meanwhile. An answer the bridge can't get or can't read decides nothing.
+// later one must agree with it. An answer the bridge can't get or can't read decides nothing.
 
 /** What Slack said about the tokens. */
 export type IdentityVerdict =
@@ -42,7 +39,6 @@ export async function confirmIdentity(
   database: BridgeDatabase,
   bot: BotClient,
   tokens: { botToken: string; appToken: string },
-  now: () => number = Date.now,
 ): Promise<IdentityVerdict> {
   const rotating = tokensRefusal(tokens);
   if (rotating !== null) return { kind: "refused", refusal: rotating };
@@ -63,17 +59,13 @@ export async function confirmIdentity(
   }
 
   return database.write(async (transaction): Promise<IdentityVerdict> => {
-    const at = now();
     // Slack may have uninstalled the app, or the bridge recorded the installation, since it read.
     const stored = await readInstallation(transaction);
     if (stored?.status === "uninstalled") return uninstalled;
     const refusal = stored === null ? null : identityRefusal(stored, found);
     if (refusal !== null) return { kind: "refused", refusal };
     if (stored === null) await recordInstallation(transaction, found);
-    const failedSince = await reactivateInstallation(transaction);
-    if (failedSince !== null) {
-      await recordInterruption(transaction, "auth_failed", failedSince, at, at);
-    }
+    await reactivateInstallation(transaction);
     const installation: Installation = { ...found, status: "active" };
     return { kind: "confirmed", installation, workspaceUrl: owner.workspaceUrl };
   });

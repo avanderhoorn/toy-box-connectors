@@ -7,14 +7,14 @@
 // runs in its own `BEGIN IMMEDIATE` transaction.
 
 import { pathToFileURL } from "node:url";
-import { initializeActivitySchema, numberGapsOnce } from "@activity/server/schema";
+import { initializeActivitySchema } from "@activity/server/schema";
 import { initializeLinkSchema } from "@links/server/schema";
 import {
   addOutboxDeliverySchema,
   initializeOutboxSchema,
   numberOutboxItemsOnce,
 } from "@outbox/server/schema";
-import { initializeRequestSchema, rebuildRequestSchema } from "@requests/server/schema";
+import { initializeRequestSchema } from "@requests/server/schema";
 import { initializeSlackApiSchema } from "@slackapi/server/schema";
 import { initializeWakeSchema } from "@wakes/server/schema";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
@@ -42,9 +42,7 @@ export const bridgeMigrations: readonly Migration[] = [
   addOutboxDeliverySchema,
   async (transaction) => {
     await numberOutboxItemsOnce(transaction);
-    await numberGapsOnce(transaction);
   },
-  rebuildRequestSchema,
 ];
 
 /** The settings that keep an acked event on disk through a power loss and keep references whole. */

@@ -52,11 +52,17 @@ describe("who may ask", () => {
     expect(classify(ask, facts)).toEqual({ kind: "request", reason: "mention" });
   });
 
-  test("a paused or suspended link opens nothing", () => {
+  test("a paused or suspended link opens nothing, but a requester can still add to a request", () => {
     for (const status of ["paused", "suspended"] as const) {
-      expect(classify(ask, { ...facts, link: { ...facts.link, status } })).toEqual({
+      const inactive = { ...facts, link: { ...facts.link, status } };
+      expect(classify(ask, inactive)).toEqual({ kind: "none", reason: "link_inactive" });
+      expect(classify(reply, { ...inactive, askedBefore: true })).toEqual({
         kind: "none",
         reason: "link_inactive",
+      });
+      expect(classify(reply, { ...inactive, active: { id: 4, sourceTs: ask.ts } })).toEqual({
+        kind: "join",
+        requestId: 4,
       });
     }
   });

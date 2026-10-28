@@ -252,7 +252,7 @@ async function additionPermission(
   }
   if (
     reaction.name === "eyes" &&
-    (!request || !isActive(request.state) || request.seenAt === null)
+    (!request || !isActive(request.state) || request.state === "open")
   ) {
     return { kind: "refused", state: "dropped", error: "reaction_no_longer_needed" };
   }

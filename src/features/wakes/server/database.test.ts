@@ -16,7 +16,6 @@ test("a link's wake state is its open and seen requests and its runs, newest fir
     state: "seen",
     attention: "updated",
     changedAt: 7,
-    seenAt: 6,
     touchedAt: 6,
   });
   await createStoredRequest(database, { rootTs: "1.3", state: "expired" });

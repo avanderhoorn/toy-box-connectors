@@ -1,4 +1,3 @@
-import { gapOverlapMs } from "@activity/model/gaps";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { suspendChannelLinks } from "@links/server/lifecycle";
 import { channelFailureReason } from "@slackapi/model/errors";
@@ -13,6 +12,9 @@ import { reconciliationReceipt } from "../model/delivery";
 import { advanceReconciliation, readOutboxItem, type OutboxItem } from "./database";
 import { linkWasRemoved, settleDelivery } from "./delivery";
 import type { PostStep } from "./posts";
+
+/** How far before an attempt began a search reaches, absorbing clock skew between Mac and Slack. */
+const attemptOverlapMs = 5 * 60_000;
 
 type Preparation =
   | Exclude<PostStep, { kind: "settled" }>
@@ -128,7 +130,7 @@ export function createReconciliation(
       return hold(item, "invalid_update_target", null);
     }
     const targetTs = target?.success ? target.data : undefined;
-    const oldest = tsAt(Math.max(0, item.attemptStartedAt - gapOverlapMs));
+    const oldest = tsAt(Math.max(0, item.attemptStartedAt - attemptOverlapMs));
     const scopes: ReadScope[] =
       item.threadTs === null
         ? [

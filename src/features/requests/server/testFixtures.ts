@@ -15,8 +15,6 @@ export function createStoredRequest(database: BridgeDatabase, changes: Partial<R
       sourceTs: "1700000100.000100",
       requesterUserId: "U-owner",
       reason: "mention",
-      inputHash: "hash",
-      late: false,
     },
     0,
   );

@@ -58,7 +58,7 @@ describe("openBridgeDatabase", () => {
 
     const { version, objects } = await database.read(readSchema);
 
-    expect(version).toBe(4);
+    expect(version).toBe(3);
     expect(
       objects.filter((object) => object.type === "table").map((object) => object.name),
     ).toEqual([
@@ -66,9 +66,7 @@ describe("openBridgeDatabase", () => {
       "changes",
       "channel_aliases",
       "channel_info",
-      "coverage",
       "cursors",
-      "files",
       "installation",
       "links",
       "messages",
@@ -78,7 +76,6 @@ describe("openBridgeDatabase", () => {
       "receipts",
       "request_messages",
       "requests",
-      "threads",
       "user_aliases",
       "users",
       "wakes",
@@ -86,12 +83,11 @@ describe("openBridgeDatabase", () => {
     expect(
       objects.filter((object) => object.type === "index").map((object) => object.name),
     ).toEqual([
-      "files_message",
       "outbox_one_final",
       "outbox_one_publication",
       "receipts_received",
       "request_messages_one_request",
-      "requests_one_active",
+      "requests_thread",
     ]);
   });
 
@@ -164,7 +160,7 @@ describe("openBridgeDatabase", () => {
 
     const database = await open(join(folder, "bridge.db"));
 
-    expect(await database.read(readSchema)).toMatchObject({ version: 4 });
+    expect(await database.read(readSchema)).toMatchObject({ version: 3 });
     expect(readdirSync(folder)).toContain("bridge.db");
     expect(existsSync(join(folder, "..", "a"))).toBe(false);
   });

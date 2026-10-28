@@ -18,12 +18,11 @@ import { confirmIdentity } from "./identity";
 // The bridge confirms whose tokens it holds before it takes anything from Slack, and then keeps one
 // Socket Mode connection open. Each connection starts from a fresh apps.connections.open, and its
 // frames reach the receiver only once hello names the installation's app. Losing a connection
-// holds every pending request's replies at once, and the next hello records what may have been
-// missed. A connection that never opened, or dropped within a minute of its hello, backs off, so
-// a Slack that keeps refusing or dropping it costs a call every few minutes rather than a gap a
-// second. While Slack rejects a token the bridge keeps asking, and the connection stays up
-// meanwhile so deletions and a channel's lifecycle are still taken. A refusal turns Slack off
-// until the operator acts.
+// and each hello are noted in order with the deliveries between them. A connection that never
+// opened, or dropped within a minute of its hello, backs off, so a Slack that keeps refusing or
+// dropping it costs a call every few minutes rather than a reconnect a second. While Slack rejects
+// a token the bridge keeps asking, and the connection stays up meanwhile so deletions and a
+// channel's lifecycle are still taken. A refusal turns Slack off until the operator acts.
 
 export interface SlackSupervisor {
   /** How the connection is doing, and what to do about it when something's wrong. */
@@ -41,8 +40,6 @@ export interface SlackSupervisor {
 
 export type SlackSupervisorOptions = {
   tokens: { botToken: string; appToken: string };
-  /** The folder local copies of files are kept in. */
-  filesFolder: string;
   slackApiUrl?: string;
   /** Called when the connection's state changes, and after a delivery changed what's stored. */
   onChange?: () => void;
@@ -69,7 +66,6 @@ export function startSlackSupervisor(
   bot: BotClient,
   {
     tokens,
-    filesFolder,
     slackApiUrl,
     onChange = () => {},
     onError = () => {},
@@ -83,7 +79,6 @@ export function startSlackSupervisor(
   const stopping = new AbortController();
   const { signal } = stopping;
   const receiver = startSlackReceiver(database, {
-    filesFolder,
     onChange,
     onUninstalled: () => refuse({ reason: "uninstalled" }),
     onError: halt,
@@ -121,7 +116,7 @@ export function startSlackSupervisor(
     try {
       while (recheck && !signal.aborted) {
         recheck = false;
-        const verdict = await confirmIdentity(database, bot, tokens, now);
+        const verdict = await confirmIdentity(database, bot, tokens);
         if (signal.aborted) return;
         switch (verdict.kind) {
           case "confirmed": {
@@ -237,7 +232,7 @@ export function startSlackSupervisor(
       }
     }
 
-    // The gap this hello records commits before anything the connection delivers.
+    // The hello's note commits before anything the connection delivers.
     await hello;
     if (!signal.aborted) {
       if (failing) console.error("Connected to Slack.");
@@ -250,8 +245,8 @@ export function startSlackSupervisor(
     }
     const closedAt = await current.closed;
     connected = false;
-    // Stopping, failing or refusing Slack records nothing, since only starting again reconnects, and
-    // starting holds every reply until it hears from Slack.
+    // Stopping, failing or refusing Slack notes nothing, since only starting again reconnects, and
+    // starting notes that the bridge may have missed anything.
     if (signal.aborted) return null;
     receiver.disconnected(closedAt).catch(fail);
     console.error(`${connectionLoss(reason)}, so the bridge is reconnecting.`);

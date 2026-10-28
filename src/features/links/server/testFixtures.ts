@@ -60,21 +60,7 @@ export async function fillEveryTable(database: BridgeDatabase): Promise<void> {
     await transaction`INSERT INTO users (user_id) VALUES ('U-carol')`;
     await transaction`INSERT INTO user_aliases VALUES ('W-carol', 'U-carol')`;
     await transaction`INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-carol', 0)`;
-    await transaction`
-      INSERT INTO threads (channel_id, thread_ts, tracked_reason)
-      VALUES ('C-link', '1700000100.000100', 'request')
-    `;
-    await transaction`
-      INSERT INTO coverage (link_id, channel_id, scope, oldest_ts, latest_ts, state, reason, opened_at)
-      VALUES ('link', 'C-link', 'channel', '1700000000.000100', '1700000100.000100', 'open',
-        'startup', 0)
-    `;
     await transaction`INSERT INTO cursors (link_id) VALUES ('link')`;
-    await transaction`
-      INSERT INTO files (file_id, channel_id, ts, state, local_path, fetched_at) VALUES
-        ('F-kept', 'C-link', '1700000100.000100', 'fetched', 'F-kept/report.pdf', 0),
-        ('F-indexed', 'C-link', '1700000100.000100', 'indexed', NULL, NULL)
-    `;
     await transaction`INSERT INTO wakes (link_id, at, outcome) VALUES ('link', 0, 'ran')`;
     await transaction`
       INSERT INTO request_messages (request_id, channel_id, ts)

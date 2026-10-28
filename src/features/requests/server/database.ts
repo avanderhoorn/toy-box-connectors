@@ -1,10 +1,9 @@
 import {
-  inputSource,
+  canMove,
   isActive,
   requestStates,
   type Request,
   type RequestAttention,
-  type RequestInput,
   type RequestReason,
   type RequestState,
 } from "@requests/model/lifecycle";
@@ -27,36 +26,27 @@ type RequestRow = {
   requester_user_id: string;
   reason: RequestReason;
   state: RequestState;
-  input_rev: number;
-  input_hash: string;
-  served_rev: number;
   attention: RequestAttention | null;
-  source_unverified_at: number | null;
-  held_at: number | null;
-  hold_reason: string | null;
-  late: number;
   created_at: number;
   changed_at: number;
-  seen_at: number | null;
   touched_at: number | null;
-  reminded_at: number | null;
-  progress_ts: SlackTs | null;
   expires_at: number;
   closed_reason: string | null;
-  closed_reported_at: number | null;
 };
 
-type InputRow = { ts: SlackTs; deleted: number; content_hash: string | null };
-
 const activeStates = requestStates.filter(isActive);
+const expiringStates = requestStates.filter((state) => canMove(state, "expired"));
 
 export async function readRequest(sql: Bun.SQL, id: number): Promise<StoredRequest | null> {
   const [row] = await sql<RequestRow[]>`SELECT * FROM requests WHERE id = ${id}`;
   return row ? requestFromRow(row) : null;
 }
 
-/** The request a person has active in a thread, which their later messages there join. */
-export async function readActiveRequest(
+/**
+ * The newest request a person has open or seen in a thread, which their later messages there join.
+ * Once the lead answers, their next message asks anew.
+ */
+export async function readJoinableRequest(
   sql: Bun.SQL,
   linkId: string,
   requesterUserId: string,
@@ -65,12 +55,13 @@ export async function readActiveRequest(
   const [row] = await sql<RequestRow[]>`
     SELECT * FROM requests
     WHERE link_id = ${linkId} AND requester_user_id = ${requesterUserId} AND root_ts = ${rootTs}
-      AND state IN ${sql(activeStates)}
+      AND state IN ('open', 'seen')
+    ORDER BY id DESC LIMIT 1
   `;
   return row ? requestFromRow(row) : null;
 }
 
-/** A link's open, seen, in-progress and answering requests, oldest first. */
+/** A link's open, seen and answering requests, oldest first. */
 export async function readActiveRequests(sql: Bun.SQL, linkId: string): Promise<StoredRequest[]> {
   const rows = await sql<RequestRow[]>`
     SELECT * FROM requests WHERE link_id = ${linkId} AND state IN ${sql(activeStates)} ORDER BY id
@@ -78,40 +69,11 @@ export async function readActiveRequests(sql: Bun.SQL, linkId: string): Promise<
   return rows.map(requestFromRow);
 }
 
-/** Every link's active requests whose lifetime ended by `now`, oldest first. */
+/** Every link's requests still waiting on the lead whose lifetime ended by `now`, oldest first. */
 export async function readOverdueRequests(sql: Bun.SQL, now: number): Promise<StoredRequest[]> {
   const rows = await sql<RequestRow[]>`
     SELECT * FROM requests
-    WHERE state IN ${sql(activeStates)} AND expires_at <= ${now} ORDER BY id
-  `;
-  return rows.map(requestFromRow);
-}
-
-/**
- * A link's requests the lead read that were cancelled or expired since inbox last said so, oldest
- * first.
- */
-export async function readUnreportedEndings(
-  sql: Bun.SQL,
-  linkId: string,
-): Promise<StoredRequest[]> {
-  const rows = await sql<RequestRow[]>`
-    SELECT * FROM requests
-    WHERE link_id = ${linkId} AND state IN ('cancelled', 'expired') AND seen_at IS NOT NULL
-      AND closed_reported_at IS NULL
-    ORDER BY id
-  `;
-  return rows.map(requestFromRow);
-}
-
-/** A link's requests held since before `heldBefore`. */
-export async function readHeldRequests(
-  sql: Bun.SQL,
-  linkId: string,
-  heldBefore: number,
-): Promise<StoredRequest[]> {
-  const rows = await sql<RequestRow[]>`
-    SELECT * FROM requests WHERE link_id = ${linkId} AND held_at < ${heldBefore} ORDER BY id
+    WHERE state IN ${sql(expiringStates)} AND expires_at <= ${now} ORDER BY id
   `;
   return rows.map(requestFromRow);
 }
@@ -145,6 +107,16 @@ export async function askedBefore(
   return requests.some((request) => compareTs(request.source_ts, ts) < 0);
 }
 
+/** Whether anyone started a request in a link's thread, whatever became of it. */
+export async function hasRequestInThread(
+  sql: Bun.SQL,
+  linkId: string,
+  rootTs: SlackTs,
+): Promise<boolean> {
+  const rows = await sql`SELECT 1 FROM requests WHERE link_id = ${linkId} AND root_ts = ${rootTs}`;
+  return rows.length > 0;
+}
+
 export async function insertRequest(
   transaction: Bun.SQL,
   request: Request,
@@ -175,35 +147,6 @@ export async function assignRequestMessage(
   `;
 }
 
-/** Follows a channel Slack gave a new ID, so its requests and their messages name the new one. */
-export async function moveRequestChannel(
-  transaction: Bun.SQL,
-  oldId: string,
-  newId: string,
-): Promise<void> {
-  await transaction`UPDATE requests SET channel_id = ${newId} WHERE channel_id = ${oldId}`;
-  await transaction`UPDATE request_messages SET channel_id = ${newId} WHERE channel_id = ${oldId}`;
-}
-
-/** Hashes a request's input, so any change to which messages it has or what they say shows. */
-export function hashInput(messages: readonly RequestInput[]): string {
-  return Bun.SHA256.hash(inputSource(messages), "hex");
-}
-
-/** The input hash of a request's messages as the ledger holds them now. */
-export async function readInputHash(sql: Bun.SQL, requestId: number): Promise<string> {
-  const rows = await sql<InputRow[]>`
-    SELECT messages.ts, messages.deleted, messages.content_hash
-    FROM request_messages
-    JOIN messages
-      ON messages.channel_id = request_messages.channel_id AND messages.ts = request_messages.ts
-    WHERE request_messages.request_id = ${requestId}
-  `;
-  return hashInput(
-    rows.map((row) => ({ ts: row.ts, deleted: row.deleted === 1, contentHash: row.content_hash })),
-  );
-}
-
 function requestFromRow(row: RequestRow): StoredRequest {
   return {
     id: row.id,
@@ -214,23 +157,12 @@ function requestFromRow(row: RequestRow): StoredRequest {
     requesterUserId: row.requester_user_id,
     reason: row.reason,
     state: row.state,
-    inputRev: row.input_rev,
-    inputHash: row.input_hash,
-    servedRev: row.served_rev,
     attention: row.attention,
-    sourceUnverifiedAt: row.source_unverified_at,
-    heldAt: row.held_at,
-    holdReason: row.hold_reason,
-    late: row.late === 1,
     createdAt: row.created_at,
     changedAt: row.changed_at,
-    seenAt: row.seen_at,
     touchedAt: row.touched_at,
-    remindedAt: row.reminded_at,
-    progressTs: row.progress_ts,
     expiresAt: row.expires_at,
     closedReason: row.closed_reason,
-    closedReportedAt: row.closed_reported_at,
   };
 }
 
@@ -243,22 +175,11 @@ function requestColumns(request: Request): Omit<RequestRow, "id"> {
     requester_user_id: request.requesterUserId,
     reason: request.reason,
     state: request.state,
-    input_rev: request.inputRev,
-    input_hash: request.inputHash,
-    served_rev: request.servedRev,
     attention: request.attention,
-    source_unverified_at: request.sourceUnverifiedAt,
-    held_at: request.heldAt,
-    hold_reason: request.holdReason,
-    late: request.late ? 1 : 0,
     created_at: request.createdAt,
     changed_at: request.changedAt,
-    seen_at: request.seenAt,
     touched_at: request.touchedAt,
-    reminded_at: request.remindedAt,
-    progress_ts: request.progressTs,
     expires_at: request.expiresAt,
     closed_reason: request.closedReason,
-    closed_reported_at: request.closedReportedAt,
   };
 }

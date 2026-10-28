@@ -1,43 +1,22 @@
-import { interruptionGap, rateLimitedGap } from "@activity/model/gaps";
-import {
-  acksInTime,
-  lifecycleAction,
-  receiptKey,
-  receiptType,
-  type LifecycleAction,
-  type SlackDelivery,
-} from "@activity/model/receiver";
+import { acksInTime, lifecycleAction, type SlackDelivery } from "@activity/model/receiver";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
 import type { BridgeDatabase } from "@bridge/server/database";
-import { changeChannelId, recordUninstall, suspendChannelLinks } from "@links/server/lifecycle";
-import { moveRequestChannel } from "@requests/server/database";
-import type { EventCallback, MalformedHint } from "@slackapi/model/envelopes";
+import { recordUninstall, suspendChannelLinks } from "@links/server/lifecycle";
+import type { EventCallback } from "@slackapi/model/envelopes";
 import { isForInstallation, readSlackEvent } from "@slackapi/model/events";
 import type { Installation } from "@slackapi/model/installation";
 import { normalizeMessageEvent, type SlackMessageEventPayload } from "@slackapi/model/messages";
-import { currentChannelId, invalidateChannelInfo } from "@slackapi/server/channels";
-import { readInstallation } from "@slackapi/server/installation";
-import { hasReceipt, recordReceipt, type ReceiptDisposition } from "@slackapi/server/receipts";
+import { markConnected, markDisconnected, readInstallation } from "@slackapi/server/installation";
 import { readBotUserIds } from "@slackapi/server/users";
-import { recordChannelGaps, recordConnect, recordDisconnect } from "./coverage";
-import { forgetFile, removeLocalCopies } from "./files";
 import { ingestMessageEvent } from "./ingest";
-import { moveLedgerChannel } from "./ledger";
 
 // The receiver.
 //
 // Deliveries are handled one at a time in the order they arrived. Each one commits everything it
-// changes with its receipt in one transaction, and only then is its envelope acked, and only while
-// Slack still waits, so a delivery is never acked unless it's stored. A delivery that fails to
-// commit isn't acked, and nothing after it is handled, so Slack sends it again to a bridge that
-// starts afresh. Local copies of files whose rows a delivery deleted are removed after the commit.
-//
-// While Slack rejects the bot token, a channel's lifecycle, deleted and withdrawn messages, deleted
-// files, gaps and clicks are still taken, because repair can't find any of them later. What's
-// posted or edited meanwhile is left for the repair that follows recovery.
-//
-// A hello takes its place in the same order, so the gap it records ends before anything the new
-// connection delivers is stored, and no receipt from it can shorten the gap.
+// changes in one transaction, and only then is its envelope acked, and only while Slack still
+// waits, so a delivery is never acked unless it's stored. A delivery that fails to commit isn't
+// acked, and nothing after it is handled, so Slack sends it again to a bridge that starts afresh.
+// A hello and a lost connection take their places in the same order.
 
 export interface SlackReceiver {
   /**
@@ -49,22 +28,16 @@ export interface SlackReceiver {
     arrivedAt: number,
     ack: (envelopeId: string) => void,
   ): Promise<void>;
-  /**
-   * Records what the bridge may have missed before Slack said hello at `helloAt`, after every
-   * delivery received before the hello. The first hello follows startup, and each later one a
-   * lost connection.
-   */
+  /** Notes that Slack said hello at `helloAt`, after every delivery received before the hello. */
   connected(helloAt: number): Promise<void>;
-  /** Holds every pending request's replies, because the connection was found lost at `at`. */
+  /** Notes that the connection was found lost at `at`. */
   disconnected(at: number): Promise<void>;
   /** Stops once the delivery in hand is handled. */
   stop(): Promise<void>;
 }
 
 export type SlackReceiverOptions = {
-  /** The folder local copies of files are kept in. */
-  filesFolder: string;
-  /** Called after a delivery changed a link, request or channel's stored facts. */
+  /** Called after a delivery changed a link or request. */
   onChange?: () => void;
   /** Called after a delivery uninstalled the app and the purge committed. */
   onUninstalled?: () => void;
@@ -73,31 +46,22 @@ export type SlackReceiverOptions = {
   now?: () => number;
 };
 
-/** What a delivery did, which decides its receipt and what follows its commit. */
-type Taken = {
-  disposition: ReceiptDisposition;
-  changed?: boolean;
-  /** Local copies of files whose rows are gone. */
-  purged?: string[];
-  /** The app was uninstalled, which purged receipts with everything else. */
-  uninstalled?: boolean;
-};
+/** What a delivery did, which decides what follows its commit. */
+type Taken = { changed: boolean; uninstalled?: boolean };
 
-const ignored: Taken = { disposition: "ignored" };
+const unchanged: Taken = { changed: false };
 
 export function startSlackReceiver(
   database: BridgeDatabase,
   {
-    filesFolder,
     onChange = () => {},
     onUninstalled = () => {},
     onError = () => {},
     now = Date.now,
-  }: SlackReceiverOptions,
+  }: SlackReceiverOptions = {},
 ): SlackReceiver {
   const queue = new SerialTaskQueue();
   let stopped = false;
-  let interruption: "startup" | "disconnect" = "startup";
 
   async function handle(
     delivery: SlackDelivery,
@@ -105,10 +69,9 @@ export function startSlackReceiver(
     ack: (envelopeId: string) => void,
   ) {
     if (stopped) return;
-    let taken: Taken | null;
+    let taken: Taken;
     try {
-      const at = now();
-      taken = await database.write((transaction) => take(transaction, delivery, arrivedAt, at));
+      taken = await database.write((transaction) => take(transaction, delivery, now()));
     } catch (error) {
       fail(error);
       return;
@@ -118,28 +81,14 @@ export function startSlackReceiver(
       else
         console.error("Stored a delivery from Slack too late to ack it, so Slack will resend it.");
     }
-    if (taken === null) return;
-    if (taken.purged?.length) await removeLocalCopies(filesFolder, taken.purged);
     if (taken.changed) onChange();
     if (taken.uninstalled) onUninstalled();
   }
 
-  async function connect(helloAt: number) {
+  async function note(mark: (transaction: Bun.SQL, at: number) => Promise<void>, at: number) {
     if (stopped) return;
     try {
-      await database.write((transaction) =>
-        recordConnect(transaction, helloAt, interruption, now()),
-      );
-      interruption = "disconnect";
-    } catch (error) {
-      fail(error);
-    }
-  }
-
-  async function disconnect(at: number) {
-    if (stopped) return;
-    try {
-      await database.write((transaction) => recordDisconnect(transaction, at));
+      await database.write((transaction) => mark(transaction, at));
     } catch (error) {
       fail(error);
     }
@@ -153,8 +102,8 @@ export function startSlackReceiver(
 
   return {
     receive: (delivery, arrivedAt, ack) => queue.enqueue(() => handle(delivery, arrivedAt, ack)),
-    connected: (helloAt) => queue.enqueue(() => connect(helloAt)),
-    disconnected: (at) => queue.enqueue(() => disconnect(at)),
+    connected: (helloAt) => queue.enqueue(() => note(markConnected, helloAt)),
+    disconnected: (at) => queue.enqueue(() => note(markDisconnected, at)),
     async stop() {
       stopped = true;
       await queue.waitForPending();
@@ -163,92 +112,66 @@ export function startSlackReceiver(
 }
 
 /**
- * Takes a delivery once, with its receipt. Null when there's nothing to take: the bridge doesn't
- * know who it is yet, the app is uninstalled, or the delivery was received already.
+ * Takes a delivery. Nothing is taken before the bridge knows who it is, or once the app is
+ * uninstalled. Taking a redelivery again changes nothing.
  */
-async function take(
-  transaction: Bun.SQL,
-  delivery: SlackDelivery,
-  arrivedAt: number,
-  now: number,
-): Promise<Taken | null> {
+async function take(transaction: Bun.SQL, delivery: SlackDelivery, now: number): Promise<Taken> {
   const installation = await readInstallation(transaction);
-  if (installation === null || installation.status === "uninstalled") return null;
-  const key = receiptKey(delivery);
-  if (key !== null && (await hasReceipt(transaction, key))) return null;
-
-  const context = { installation, arrivedAt, now };
-  const taken = await takeDelivery(transaction, delivery, context);
-  if (key !== null && !taken.uninstalled) {
-    const type = receiptType(delivery);
-    await recordReceipt(transaction, {
-      key,
-      type,
-      receivedAt: arrivedAt,
-      disposition: taken.disposition,
-    });
-  }
-  return taken;
-}
-
-type TakeContext = { installation: Installation; arrivedAt: number; now: number };
-
-async function takeDelivery(
-  transaction: Bun.SQL,
-  delivery: SlackDelivery,
-  context: TakeContext,
-): Promise<Taken> {
+  if (installation === null || installation.status === "uninstalled") return unchanged;
   switch (delivery.kind) {
     case "event":
-      return takeEvent(transaction, delivery.callback, context);
+      return takeEvent(transaction, delivery.callback, installation, now);
     case "rate_limited":
-      return takeRateLimit(transaction, delivery, context);
+      if (delivery.appId === installation.appId && delivery.teamId === installation.teamId) {
+        console.error("Slack held events back for a minute, so the bridge may have missed some.");
+      }
+      return unchanged;
     case "malformed":
-      return takeMalformed(transaction, delivery.hint, delivery.issues, "a frame", context);
+      return takeMalformed("a frame", delivery.issues);
     case "other":
-      return ignored;
+      return unchanged;
   }
 }
 
 async function takeEvent(
   transaction: Bun.SQL,
   callback: EventCallback,
-  context: TakeContext,
+  installation: Installation,
+  now: number,
 ): Promise<Taken> {
-  const { installation } = context;
-  if (!isForInstallation(callback, installation)) return { disposition: "foreign" };
+  if (!isForInstallation(callback, installation)) return unchanged;
   const event = readSlackEvent(callback.event);
-  switch (event.kind) {
-    case "malformed": {
-      const hint = { channelId: event.channelId, eventTime: callback.eventTime };
-      const what = `an event of type ${callback.event.type}`;
-      return takeMalformed(transaction, hint, event.issues, what, context);
+  if (event.kind === "malformed") {
+    return takeMalformed(`an event of type ${callback.event.type}`, event.issues);
+  }
+  const taken =
+    event.kind === "message"
+      ? await takeMessage(transaction, event.payload, installation, now)
+      : unchanged;
+  const action = lifecycleAction(event, installation.botUserId);
+  switch (action?.kind) {
+    case undefined:
+      return taken;
+    case "suspend": {
+      const suspended = await suspendChannelLinks(
+        transaction,
+        action.channelId,
+        action.reason,
+        now,
+      );
+      return { changed: taken.changed || suspended.length > 0 };
     }
-    case "message": {
-      const action = lifecycleAction(event, installation.botUserId);
-      const message = await takeMessage(transaction, event.payload, context);
-      if (action === null) return message;
-      await takeLifecycle(transaction, action, callback.eventTime, context);
-      return { ...message, disposition: "applied", changed: true };
-    }
-    case "file_deleted": {
-      const purged = await forgetFile(transaction, event.fileId);
-      return purged === null ? ignored : { disposition: "applied", purged };
-    }
-    case "other":
-      return ignored;
-    default: {
-      const action = lifecycleAction(event, installation.botUserId);
-      if (action === null) return ignored;
-      return takeLifecycle(transaction, action, callback.eventTime, context);
-    }
+    case "uninstall":
+      await recordUninstall(transaction);
+      return { changed: true, uninstalled: true };
   }
 }
 
 async function takeMessage(
   transaction: Bun.SQL,
   payload: SlackMessageEventPayload,
-  { installation, now }: TakeContext,
+  installation: Installation,
+  now: number,
 ): Promise<Taken> {
   const botUserIds = await readBotUserIds(transaction);
   const event = normalizeMessageEvent(payload, {
@@ -256,110 +179,11 @@ async function takeMessage(
     botId: installation.botId,
     isBotUser: (userId) => botUserIds.has(userId),
   });
-  // Repair finds what was posted or edited while Slack rejected the token, but never a delete, and
-  // never a withdrawal of a message older than the gap.
-  const removes = event.kind === "deleted" || event.kind === "withdrawn";
-  if (installation.status !== "active" && !removes) return ignored;
-
-  const ingested = await ingestMessageEvent(transaction, event, {
-    botUserId: installation.botUserId,
-    late: false,
-    now,
-  });
-  switch (ingested.kind) {
-    case "unlinked":
-      return { disposition: "unlinked" };
-    case "stored":
-      return { disposition: "applied", changed: ingested.requestsChanged, purged: ingested.purged };
-  }
+  return { changed: await ingestMessageEvent(transaction, event, now) };
 }
 
-/**
- * Acts on what an event means for the links on its channel. An event that names an ID Slack moved
- * the channel from is about the channel at its current ID, but a move is taken as Slack named it,
- * so a channel that moves back follows.
- */
-async function takeLifecycle(
-  transaction: Bun.SQL,
-  action: LifecycleAction,
-  eventTime: number,
-  { arrivedAt, now }: TakeContext,
-): Promise<Taken> {
-  switch (action.kind) {
-    case "invalidate": {
-      const channelId = await currentChannelId(transaction, action.channelId);
-      await invalidateChannelInfo(transaction, channelId, now);
-      break;
-    }
-    case "suspend": {
-      const channelId = await currentChannelId(transaction, action.channelId);
-      await suspendChannelLinks(transaction, channelId, action.reason, now);
-      break;
-    }
-    case "move": {
-      const { oldChannelId, newChannelId } = action;
-      await changeChannelId(transaction, oldChannelId, newChannelId, now);
-      await moveLedgerChannel(transaction, oldChannelId, newChannelId);
-      await moveRequestChannel(transaction, oldChannelId, newChannelId);
-      // Events under the new ID that arrived before this one found no link watching it.
-      const since = happenedAt(eventTime, arrivedAt);
-      await recordChannelGaps(transaction, newChannelId, "moved", now, (linkedAtTs) =>
-        interruptionGap(since, arrivedAt, linkedAtTs),
-      );
-      break;
-    }
-    case "uninstall":
-      return {
-        disposition: "applied",
-        changed: true,
-        purged: await recordUninstall(transaction),
-        uninstalled: true,
-      };
-  }
-  return { disposition: "applied", changed: true };
-}
-
-/** Records the minute Slack held events back as a gap in every linked channel. */
-async function takeRateLimit(
-  transaction: Bun.SQL,
-  delivery: Extract<SlackDelivery, { kind: "rate_limited" }>,
-  { installation, now }: TakeContext,
-): Promise<Taken> {
-  if (delivery.appId !== installation.appId || delivery.teamId !== installation.teamId) {
-    return { disposition: "foreign" };
-  }
-  console.error("Slack held events back for a minute, so repair will read that minute.");
-  await recordChannelGaps(transaction, null, "rate_limited", now, (linkedAtTs) =>
-    rateLimitedGap(delivery.minute, linkedAtTs),
-  );
-  return { disposition: "rate_limited" };
-}
-
-/**
- * Logs what couldn't be read, by its issue codes and paths only, and records a gap from when it
- * happened in the channel it names, or in every linked channel when it names none.
- */
-async function takeMalformed(
-  transaction: Bun.SQL,
-  hint: MalformedHint,
-  issues: string[],
-  what: string,
-  { arrivedAt, now }: TakeContext,
-): Promise<Taken> {
-  console.error(
-    `Couldn't read ${what} from Slack, so repair will read around it: ${issues.join(", ")}`,
-  );
-  const since = hint.eventTime === null ? arrivedAt : happenedAt(hint.eventTime, arrivedAt);
-  await recordChannelGaps(transaction, hint.channelId, "malformed", now, (linkedAtTs) =>
-    interruptionGap(since, arrivedAt, linkedAtTs),
-  );
-  return { disposition: "malformed" };
-}
-
-/**
- * When an event Slack timed at `eventTime` epoch seconds happened, by this Mac's clock. It can't
- * have happened after it arrived, so a later time is only the two clocks disagreeing.
- */
-function happenedAt(eventTime: number, arrivedAt: number): number {
-  return Math.min(eventTime * 1000, arrivedAt);
+/** Logs what couldn't be read, by its issue codes and paths only. */
+function takeMalformed(what: string, issues: string[]): Taken {
+  console.error(`Couldn't read ${what} from Slack: ${issues.join(", ")}`);
+  return unchanged;
 }

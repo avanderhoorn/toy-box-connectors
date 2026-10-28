@@ -8,7 +8,7 @@ import type { OutboxItem } from "../server/database";
 
 type PostIntent = Pick<
   OutboxItem,
-  "kind" | "phase" | "linkId" | "requestId" | "requestRev" | "channelId" | "threadTs"
+  "kind" | "phase" | "linkId" | "requestId" | "channelId" | "threadTs"
 >;
 
 /** The current link, not the settings under which the item was queued. */
@@ -18,9 +18,8 @@ export type PostingLink = Pick<ChannelLink, "id" | "status" | "allowlist" | "app
 
 export type PostingPermission =
   | { kind: "allowed" }
-  | { kind: "waiting"; reason: "installation_inactive" | "link_inactive" | "source_unverified" }
+  | { kind: "waiting"; reason: "installation_inactive" | "link_inactive" }
   | { kind: "refresh"; channelId: string }
-  | { kind: "superseded"; revision: number }
   | {
       kind: "failed";
       error:
@@ -64,23 +63,17 @@ export function postingPermission(
     ) {
       return { kind: "failed", error: "destination_changed" };
     }
-    if (post.requestRev !== request.inputRev) {
-      return { kind: "superseded", revision: request.inputRev };
-    }
     if (!link.allowlist.has(request.requesterUserId)) {
       return { kind: "failed", error: "requester_denied" };
     }
     if (request.state === "cancelled") return { kind: "failed", error: "request_closed" };
     const ready =
       post.kind === "progress"
-        ? request.state === "seen" || request.state === "in_progress"
+        ? request.state === "seen"
         : post.phase === "follow_up"
           ? ["answered", "dismissed", "expired"].includes(request.state)
           : post.phase === "final" && request.state === "answering";
     if (!ready) return { kind: "failed", error: "request_not_ready" };
-    if (request.sourceUnverifiedAt !== null) {
-      return { kind: "waiting", reason: "source_unverified" };
-    }
   } else {
     return { kind: "failed", error: "invalid_post" };
   }

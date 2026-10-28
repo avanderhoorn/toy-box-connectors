@@ -23,6 +23,7 @@ export function createStoredMessage(
   database: BridgeDatabase,
   message: SlackMessage,
   link = ledgerLink(),
+  inRequestThread = false,
 ) {
-  return database.write((transaction) => storeMessage(transaction, link, message));
+  return database.write((transaction) => storeMessage(transaction, link, message, inRequestThread));
 }

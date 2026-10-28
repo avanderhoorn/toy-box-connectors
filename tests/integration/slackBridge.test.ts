@@ -50,7 +50,7 @@ test("a bridge that can't store an event exits 1 without acking it", async () =>
     prepare: (database) =>
       database.write(
         (transaction) => transaction`
-          CREATE TRIGGER disk_full BEFORE INSERT ON receipts
+          CREATE TRIGGER disk_full BEFORE INSERT ON messages
           BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END
         `,
       ),

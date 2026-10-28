@@ -174,9 +174,6 @@ export function createPostDelivery(
       at,
     );
     if (permission.kind === "refresh") return permission;
-    if (permission.kind === "superseded") {
-      return finishQueued(tx, item, "superseded", "revision_changed", at);
-    }
     if (permission.kind === "failed") {
       if (permission.error === "requester_denied" && request && isActive(request.state)) {
         await cancelStoredRequest(tx, request, "requester_denied", at);

@@ -1,32 +1,16 @@
-import { describe, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import {
   beginAnswer,
   cancelRequest,
-  canMove,
+  changeRequest,
   confirmAnswer,
   dismissRequest,
   expireRequest,
-  inputSource,
   isActive,
-  isDueToExpire,
-  holdRequest,
-  markSourceUnverified,
   openRequest,
-  releaseHold,
-  reportEnding,
-  requestLifetimeMs,
-  RequestStateError,
-  requestStates,
-  returnToProgress,
-  reviseRequest,
+  returnToSeen,
   serveRequest,
-  startProgress,
-  type Request,
-  type RequestState,
 } from "./lifecycle";
-
-const openedAt = 1_700_000_000_000;
-const later = openedAt + 60_000;
 
 const opened = openRequest(
   {
@@ -36,410 +20,78 @@ const opened = openRequest(
     sourceTs: "1700000000.000100",
     requesterUserId: "UALICE",
     reason: "mention",
-    inputHash: "hash-1",
-    late: false,
   },
-  openedAt,
+  0,
 );
+const seen = serveRequest(opened, 10);
 
-function inState(state: RequestState, changes: Partial<Request> = {}): Request {
-  const seenAt = state === "open" ? null : openedAt + 1_000;
-  return { ...opened, state, seenAt, ...changes };
-}
+test("a request opens waiting on the lead for a week", () => {
+  expect(opened).toMatchObject({ state: "open", attention: null, touchedAt: null });
+  expect(opened.expiresAt).toBe(7 * 24 * 60 * 60_000);
+  expect(changeRequest(opened, 5)).toEqual({ ...opened, changedAt: 5 });
+});
 
-const moves: Record<RequestState, RequestState[]> = {
-  open: ["seen", "cancelled", "expired"],
-  seen: ["in_progress", "answering", "dismissed", "cancelled", "expired"],
-  in_progress: ["answering", "dismissed", "cancelled", "expired"],
-  answering: ["answered", "in_progress", "cancelled"],
-  answered: [],
-  dismissed: [],
-  cancelled: [],
-  expired: [],
-};
-
-describe("the request state machine", () => {
-  test("allows exactly the moves the lifecycle names", () => {
-    for (const from of requestStates) {
-      for (const to of requestStates) {
-        expect(`${from}->${to}:${canMove(from, to)}`).toBe(
-          `${from}->${to}:${moves[from].includes(to)}`,
-        );
-      }
-    }
-  });
-
-  test("answered, dismissed, cancelled and expired requests are closed for good", () => {
-    expect(requestStates.filter((state) => isActive(state))).toEqual([
-      "open",
-      "seen",
-      "in_progress",
-      "answering",
-    ]);
+test("the lead can answer or dismiss only a request it has read", () => {
+  expect(() => beginAnswer(opened, 5)).toThrow("A request that's open can't be answered.");
+  expect(() => dismissRequest(opened, "no question")).toThrow("can't be dismissed");
+  expect(seen).toMatchObject({ state: "seen", touchedAt: 10 });
+  expect(beginAnswer(seen, 20)).toMatchObject({ state: "answering", touchedAt: 20 });
+  expect(dismissRequest(seen, "no question")).toMatchObject({
+    state: "dismissed",
+    closedReason: "no question",
   });
 });
 
-describe("opening", () => {
-  test("a request opens unseen at revision 1 and expires after its lifetime", () => {
-    expect(opened).toMatchObject({
-      state: "open",
-      inputRev: 1,
-      inputHash: "hash-1",
-      servedRev: 0,
-      attention: null,
-      sourceUnverifiedAt: null,
-      heldAt: null,
-      createdAt: openedAt,
-      changedAt: openedAt,
-      seenAt: null,
-      touchedAt: null,
-      expiresAt: openedAt + 7 * 24 * 60 * 60_000,
-      closedReason: null,
-      closedReportedAt: null,
-    });
-    expect(requestLifetimeMs).toBe(604_800_000);
+test("a change after the lead read a request waits until inbox shows it", () => {
+  const updated = changeRequest(seen, 20);
+  expect(updated).toMatchObject({ state: "seen", attention: "updated", changedAt: 20 });
+  expect(() => beginAnswer(updated, 30)).toThrow("with updated unread can't be answered");
+  expect(() => dismissRequest(updated, "done")).toThrow("with updated unread can't be dismissed");
+  const reread = serveRequest(updated, 40);
+  expect(reread).toMatchObject({ attention: null, touchedAt: 40 });
+  expect(beginAnswer(reread, 50).state).toBe("answering");
+});
+
+test("once the lead answers, changes are ignored, and only Slack's confirmation answers it", () => {
+  const answering = beginAnswer(seen, 20);
+  expect(changeRequest(answering, 30)).toBe(answering);
+  expect(isActive(answering.state)).toBe(true);
+  expect(confirmAnswer(answering)).toMatchObject({ state: "answered", closedReason: null });
+  expect(() => confirmAnswer(seen)).toThrow("A request that's seen can't become answered.");
+});
+
+test("a refused reply goes back to the lead, who must read why before answering again", () => {
+  const failed = returnToSeen(beginAnswer(seen, 20), 30);
+  expect(failed).toMatchObject({ state: "seen", attention: "reply_failed", changedAt: 30 });
+  expect(changeRequest(failed, 40).attention).toBe("reply_failed");
+  expect(() => beginAnswer(failed, 50)).toThrow("with reply_failed unread can't be answered");
+  expect(beginAnswer(serveRequest(failed, 60), 70).state).toBe("answering");
+  expect(() => returnToSeen(seen, 30)).toThrow("A request that's seen can't return to the lead.");
+});
+
+test("a request whose reply is in flight can be cancelled but can't expire", () => {
+  const answering = beginAnswer(seen, 20);
+  expect(cancelRequest(answering, "source_deleted")).toMatchObject({
+    state: "cancelled",
+    closedReason: "source_deleted",
+  });
+  expect(() => expireRequest(answering)).toThrow("can't become expired");
+  expect(expireRequest(changeRequest(seen, 20))).toMatchObject({
+    state: "expired",
+    attention: null,
   });
 });
 
-describe("serving", () => {
-  test("showing an open request to the lead marks it seen at its current revision", () => {
-    const shown = serveRequest({ ...opened, inputRev: 2 }, later);
-    expect(shown).toMatchObject({ state: "seen", seenAt: later, touchedAt: later, servedRev: 2 });
-  });
-
-  test("showing a request again records the read without moving it", () => {
-    const working = inState("in_progress", { inputRev: 3, servedRev: 1, attention: "updated" });
-    expect(serveRequest(working, later)).toEqual({
-      ...working,
-      servedRev: 3,
-      touchedAt: later,
-      attention: null,
-    });
-  });
-
-  test("the read answers a failed reply and leaves an unverified source to repair", () => {
-    const failed = inState("in_progress", { attention: "reply_failed", sourceUnverifiedAt: later });
-    expect(serveRequest(failed, later + 1)).toEqual({
-      ...failed,
-      servedRev: 1,
-      touchedAt: later + 1,
-      attention: null,
-    });
-  });
-});
-
-describe("progress and answers", () => {
-  test("progress moves a seen request to in progress, and more progress keeps it there", () => {
-    const working = startProgress(inState("seen"), later);
-    expect(working).toMatchObject({ state: "in_progress", touchedAt: later });
-    expect(startProgress(working, later + 1)).toEqual({ ...working, touchedAt: later + 1 });
-  });
-
-  test("progress needs a request the lead has read and hasn't answered", () => {
-    for (const state of ["open", "answering", "answered", "dismissed"] as const) {
-      expect(() => startProgress(inState(state), later)).toThrow(
-        "A request that's " + state + " can't start progress.",
-      );
-    }
-  });
-
-  test("queueing a final reply moves a seen or in-progress request to answering and ends its hold", () => {
-    for (const state of ["seen", "in_progress"] as const) {
-      const held = inState(state, { heldAt: later, holdReason: "asking", attention: "updated" });
-      expect(beginAnswer(held, later + 1)).toMatchObject({
-        state: "answering",
-        heldAt: null,
-        holdReason: null,
-        attention: null,
-        touchedAt: later + 1,
-      });
-    }
-  });
-
-  test("a final reply can be queued while the source is unverified, and waits for repair", () => {
-    const unverified = inState("seen", { sourceUnverifiedAt: later });
-    expect(beginAnswer(unverified, later + 1)).toEqual({
-      ...unverified,
-      state: "answering",
-      touchedAt: later + 1,
-    });
-  });
-
-  test("a final reply to a newer revision keeps an answering request answering", () => {
-    const answering = inState("answering", { inputRev: 2, attention: "updated" });
-    expect(beginAnswer(answering, later)).toEqual({
-      ...answering,
-      attention: null,
-      touchedAt: later,
-    });
-  });
-
-  test("a final reply needs a request the lead has read and that's still active", () => {
-    for (const state of ["open", "answered", "dismissed", "cancelled", "expired"] as const) {
-      expect(() => beginAnswer(inState(state), later)).toThrow(RequestStateError);
-    }
-  });
-
-  test("Slack confirming the reply to the current revision answers the request", () => {
-    const answering = inState("answering", {
-      inputRev: 2,
-      attention: "updated",
-      sourceUnverifiedAt: later,
-    });
-    expect(confirmAnswer(answering, 2, later)).toEqual({
-      ...answering,
-      state: "answered",
-      attention: null,
-      sourceUnverifiedAt: null,
-    });
-  });
-
-  test("a confirmed reply to an older revision sends the request back as updated", () => {
-    const answering = inState("answering", { inputRev: 2 });
-    expect(confirmAnswer(answering, 1, later)).toEqual({
-      ...answering,
-      state: "in_progress",
-      attention: "updated",
-      changedAt: later,
-    });
-  });
-
-  test("a confirmed reply can't name a revision the request hasn't reached", () => {
-    expect(() => confirmAnswer(inState("answering"), 2, later)).toThrow(RangeError);
-  });
-
-  test("only an answering request can be answered", () => {
-    for (const state of ["seen", "in_progress", "cancelled"] as const) {
-      expect(() => confirmAnswer(inState(state), 1, later)).toThrow(RequestStateError);
-    }
-  });
-
-  test("a failed or dropped reply sends the request back to the lead", () => {
-    const answering = inState("answering");
-    expect(returnToProgress(answering, "reply_failed", later)).toEqual({
-      ...answering,
-      state: "in_progress",
-      attention: "reply_failed",
-      changedAt: later,
-    });
-    const unverified = inState("answering", { attention: "updated", sourceUnverifiedAt: later });
-    expect(returnToProgress(unverified, "reply_failed", later + 1)).toEqual({
-      ...unverified,
-      state: "in_progress",
-      attention: "reply_failed",
-      changedAt: later + 1,
-    });
-    for (const state of ["seen", "in_progress", "cancelled"] as const) {
-      expect(() => returnToProgress(inState(state), "reply_failed", later)).toThrow(
-        "A request that's " + state.replace("_", " ") + " can't return to progress.",
-      );
-    }
-  });
-});
-
-describe("closing", () => {
-  test("the lead can dismiss a request it has read but not one it's answering", () => {
-    for (const state of ["seen", "in_progress"] as const) {
-      const held = inState(state, {
-        heldAt: later,
-        holdReason: "asking",
-        attention: "updated",
-        sourceUnverifiedAt: later,
-      });
-      expect(dismissRequest(held, "answered in standup")).toEqual({
-        ...held,
-        state: "dismissed",
-        closedReason: "answered in standup",
-        attention: null,
-        sourceUnverifiedAt: null,
-        heldAt: null,
-        holdReason: null,
-      });
-    }
-    for (const state of ["open", "answering", "answered", "expired"] as const) {
-      expect(() => dismissRequest(inState(state), "no")).toThrow(RequestStateError);
-    }
-  });
-
-  test("any active request can be cancelled, even one answering", () => {
-    for (const state of ["open", "seen", "in_progress", "answering"] as const) {
-      const attention = state === "open" ? null : "updated";
-      const active = inState(state, { attention, sourceUnverifiedAt: later });
-      expect(cancelRequest(active, "source_deleted")).toMatchObject({
-        state: "cancelled",
-        closedReason: "source_deleted",
-        attention: null,
-        sourceUnverifiedAt: null,
-      });
-    }
-    for (const state of ["answered", "dismissed", "cancelled", "expired"] as const) {
-      expect(() => cancelRequest(inState(state), "mention_removed")).toThrow(
-        "A request that's " + state + " can't become cancelled.",
-      );
-    }
-  });
-
-  test("a request expires once its lifetime passes, even held, unless it's answering", () => {
-    const due = opened.expiresAt;
-    expect(isDueToExpire(inState("in_progress"), due - 1)).toBe(false);
-    for (const state of ["open", "seen", "in_progress"] as const) {
-      expect(isDueToExpire(inState(state), due)).toBe(true);
-      const held = inState(state, {
-        heldAt: later,
-        holdReason: "asking",
-        sourceUnverifiedAt: later,
-      });
-      expect(isDueToExpire(held, due)).toBe(true);
-      expect(expireRequest(held, due)).toEqual({
-        ...held,
-        state: "expired",
-        closedReason: null,
-        attention: null,
-        sourceUnverifiedAt: null,
-        heldAt: null,
-        holdReason: null,
-      });
-    }
-    expect(isDueToExpire(inState("answering"), due)).toBe(false);
-    expect(isDueToExpire(inState("answered"), due)).toBe(false);
-    expect(() => expireRequest(inState("answering"), due)).toThrow(RequestStateError);
-  });
-
-  test("a request can't expire early", () => {
-    expect(() => expireRequest(inState("seen"), opened.expiresAt - 1)).toThrow(RangeError);
-  });
-
-  test("the lead is told once that a request it read was cancelled or expired", () => {
-    const ended = [
-      cancelRequest(inState("in_progress"), "requester_denied"),
-      expireRequest(inState("seen"), opened.expiresAt),
-    ];
-    for (const request of ended) {
-      expect<Request>(reportEnding(request, later)).toEqual({
-        ...request,
-        closedReportedAt: later,
-      });
-    }
-  });
-
-  test("only a request that ended without an answer, after the lead read it, is reported", () => {
-    for (const state of requestStates.filter(
-      (state) => !["cancelled", "expired"].includes(state),
-    )) {
-      expect(() => reportEnding(inState(state), later)).toThrow(
-        `A request that's ${state.replace("_", " ")} can't be reported as no longer needed.`,
-      );
-    }
-    for (const state of ["cancelled", "expired"] as const) {
-      expect(() => reportEnding(inState(state, { seenAt: null }), later)).toThrow(
-        `A request that's ${state} can't be reported to a lead that never read it.`,
-      );
-    }
-  });
-});
-
-describe("holds", () => {
-  test("the lead can hold a request it has read, and holding again replaces the reason", () => {
-    const held = holdRequest(inState("seen"), "asking the owner", later);
-    expect(held).toMatchObject({ heldAt: later, holdReason: "asking the owner", touchedAt: later });
-    expect(holdRequest(held, "still asking", later + 1)).toMatchObject({
-      state: "seen",
-      heldAt: later + 1,
-      holdReason: "still asking",
-    });
-    expect(holdRequest(inState("in_progress"), "asking", later).heldAt).toBe(later);
-  });
-
-  test("an unread, answering or closed request can't be held", () => {
-    for (const state of ["open", "answering", "answered", "expired"] as const) {
-      expect(() => holdRequest(inState(state), "asking", later)).toThrow(
-        "A request that's " + state + " can't be held.",
-      );
-    }
-  });
-
-  test("releasing a hold clears it", () => {
-    const held = holdRequest(inState("in_progress"), "asking", later);
-    expect(releaseHold(held)).toEqual({ ...held, heldAt: null, holdReason: null });
-  });
-});
-
-describe("unverified sources", () => {
-  test("marking a source unverified holds an active request's replies from the first time", () => {
-    for (const state of ["open", "seen", "in_progress", "answering"] as const) {
-      const marked = markSourceUnverified(inState(state), later);
-      expect(marked).toEqual({ ...inState(state), sourceUnverifiedAt: later });
-      expect(markSourceUnverified(marked, later + 1)).toBe(marked);
-    }
-  });
-
-  test("a closed request has no replies to hold", () => {
-    for (const state of ["answered", "dismissed", "cancelled", "expired"] as const) {
-      expect(() => markSourceUnverified(inState(state), later)).toThrow(
-        "A request that's " + state + " can't hold its replies.",
-      );
-    }
-  });
-});
-
-describe("revisions", () => {
-  test("new input bumps the revision, flags a request the lead has seen, and ends its hold", () => {
-    for (const state of ["seen", "in_progress", "answering"] as const) {
-      const held = inState(state, { heldAt: later, holdReason: "asking" });
-      expect(reviseRequest(held, "hash-2", later + 1)).toEqual({
-        ...held,
-        inputRev: 2,
-        inputHash: "hash-2",
-        changedAt: later + 1,
-        attention: "updated",
-        heldAt: null,
-        holdReason: null,
-      });
-    }
-  });
-
-  test("an open request takes new input without being flagged, since the lead hasn't read it", () => {
-    expect(reviseRequest(opened, "hash-2", later)).toMatchObject({
-      inputRev: 2,
-      attention: null,
-      changedAt: later,
-    });
-  });
-
-  test("new input leaves a failed reply flagged and the source unverified", () => {
-    const failed = inState("in_progress", { attention: "reply_failed", sourceUnverifiedAt: later });
-    expect(reviseRequest(failed, "hash-2", later + 1)).toEqual({
-      ...failed,
-      inputRev: 2,
-      inputHash: "hash-2",
-      changedAt: later + 1,
-    });
-  });
-
-  test("input that hashes the same changes nothing", () => {
-    const seen = inState("seen", { heldAt: later, holdReason: "asking" });
-    expect(reviseRequest(seen, "hash-1", later + 1)).toBe(seen);
-  });
-
-  test("a closed request takes no new input", () => {
-    for (const state of ["answered", "dismissed", "cancelled", "expired"] as const) {
-      expect(() => reviseRequest(inState(state), "hash-2", later)).toThrow(RequestStateError);
-    }
-  });
-
-  test("a request's input is its messages that still exist, in ts order", () => {
-    const first = { ts: "1700000000.000100", deleted: false, contentHash: "a" };
-    const second = { ts: "999999999.000100", deleted: false, contentHash: "b" };
-    const gone = { ts: "1700000005.000100", deleted: true, contentHash: null };
-    expect(inputSource([first, gone, second])).toBe(
-      JSON.stringify([
-        ["999999999.000100", "b"],
-        ["1700000000.000100", "a"],
-      ]),
-    );
-    expect(inputSource([first, second])).toBe(inputSource([second, first]));
-    expect(inputSource([first, { ...second, contentHash: "c" }])).not.toBe(
-      inputSource([first, second]),
-    );
-  });
+test("answered, dismissed, cancelled and expired requests never reopen", () => {
+  for (const finished of [
+    confirmAnswer(beginAnswer(seen, 20)),
+    dismissRequest(seen, "no question"),
+    cancelRequest(opened, "mention_removed"),
+    expireRequest(opened),
+  ]) {
+    expect(isActive(finished.state)).toBe(false);
+    expect(changeRequest(finished, 99)).toBe(finished);
+    expect(() => beginAnswer(serveRequest(finished, 99), 99)).toThrow("can't be answered");
+    expect(() => cancelRequest(finished, "link_removed")).toThrow("can't become cancelled");
+  }
 });

@@ -53,15 +53,14 @@ describe("a lifecycle signal about a linked channel", () => {
 });
 
 describe("uninstalling the app", () => {
-  test("deletes every row but the installation, and the files it kept", async () => {
+  test("deletes every row but the installation", async () => {
     const database = await openTestDatabase();
     await fillEveryTable(database);
     const before = await countRows(database);
     expect(Object.keys(before).filter((table) => before[table] === 0)).toEqual([]);
 
-    const copies = await database.write(recordUninstall);
+    await database.write(recordUninstall);
 
-    expect(copies).toEqual(["F-kept/report.pdf"]);
     const after = await countRows(database);
     expect(Object.keys(after).filter((table) => after[table] !== 0)).toEqual(["installation"]);
     expect(await database.read((sql) => sql`SELECT team_id, status FROM installation`)).toEqual([

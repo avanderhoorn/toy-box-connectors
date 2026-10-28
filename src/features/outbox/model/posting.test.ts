@@ -24,7 +24,6 @@ function facts(): Facts {
       phase: "final",
       linkId: "link",
       requestId: 14,
-      requestRev: 1,
       channelId: "C-link",
       threadTs: "1700000100.000100",
     },
@@ -52,15 +51,11 @@ function facts(): Facts {
           sourceTs: "1700000100.000100",
           requesterUserId: "U-owner",
           reason: "mention",
-          inputHash: "input",
-          late: false,
         },
         now - 1_000,
       ),
       id: 14,
       state: "answering",
-      servedRev: 1,
-      seenAt: now - 1_000,
     },
     channel: { facts: channelFacts(), refreshedAt: now, invalidatedAt: null },
   };
@@ -154,20 +149,6 @@ describe("send-time posting authority", () => {
     expect(check(value)).toEqual({ kind: "failed", error: "request_missing" });
   });
 
-  test("a stale queued answer is superseded even while its source awaits verification", () => {
-    const value = facts();
-    value.request.inputRev = 2;
-    value.request.sourceUnverifiedAt = now;
-    expect(check(value)).toEqual({ kind: "superseded", revision: 2 });
-  });
-
-  test("an unverified source holds output before requesting another channel read", () => {
-    const value = facts();
-    value.request.sourceUnverifiedAt = now;
-    value.channel.refreshedAt = 0;
-    expect(check(value)).toEqual({ kind: "waiting", reason: "source_unverified" });
-  });
-
   test.each(["answered", "dismissed", "expired"] as const)(
     "only an explicit follow-up may post to a request that's %s",
     (state) => {
@@ -179,7 +160,7 @@ describe("send-time posting authority", () => {
     },
   );
 
-  test.each(["open", "seen", "in_progress", "answering"] as const)(
+  test.each(["open", "seen", "answering"] as const)(
     "a follow-up cannot post to a request that's still %s",
     (state) => {
       const value = facts();
@@ -196,14 +177,12 @@ describe("send-time posting authority", () => {
     expect(check(value)).toEqual({ kind: "failed", error: "request_closed" });
   });
 
-  test("progress may post while seen or in progress, never after a final was queued", () => {
+  test("progress may post while the lead works on a request, never after a final was queued", () => {
     const value = facts();
     value.post.kind = "progress";
     value.post.phase = null;
     expect(check(value)).toEqual({ kind: "failed", error: "request_not_ready" });
     value.request.state = "seen";
-    expect(check(value)).toEqual({ kind: "allowed" });
-    value.request.state = "in_progress";
     expect(check(value)).toEqual({ kind: "allowed" });
   });
 
@@ -214,7 +193,6 @@ describe("send-time posting authority", () => {
       kind: "publication",
       phase: null,
       requestId: null,
-      requestRev: null,
       threadTs: null,
     };
     expect(

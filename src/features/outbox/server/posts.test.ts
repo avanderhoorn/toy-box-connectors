@@ -2,7 +2,7 @@ import { describe, expect, onTestFinished, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { privateAudience } from "@links/model/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
-import { confirmAnswer, reviseRequest } from "@requests/model/lifecycle";
+import { confirmAnswer } from "@requests/model/lifecycle";
 import { readRequest, saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { channelFacts } from "@slackapi/model/testFixtures";
@@ -16,7 +16,6 @@ import { readInstallation } from "@slackapi/server/installation";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../../../../tests/fakes/slack";
 import { renderMarkdown } from "../model/rendering";
-import { settleRequestAnswer } from "./answers";
 import { queueItem, readOutboxItem, readDueReconciliations, type NewOutboxItem } from "./database";
 import { createPostDelivery } from "./posts";
 import { createReconciliation } from "./reconcile";
@@ -45,8 +44,6 @@ async function setup({ fresh = true, requesterUserId = "U-owner", timeoutMs = 1_
   const request = await createStoredRequest(database, {
     requesterUserId,
     state: "answering",
-    servedRev: 1,
-    seenAt: at - 10_000,
     touchedAt: at - 10_000,
   });
   slack.setMessage("C-link", {
@@ -157,23 +154,29 @@ test("losing usability after channel refresh prevents the post, then resumes wit
   );
 });
 
-test("a non-thread Slack refusal returns the final to the lead rather than cancelling its request", async () => {
-  const { database, slack, queue, delivery, readRequestState } = await setup();
-  slack.failNext("chat.postMessage", { error: "msg_blocks_too_long" });
-  const item = await queue();
-  expect(await delivery.post(item.id)).toMatchObject({
-    kind: "settled",
-    item: { state: "failed", error: "msg_blocks_too_long" },
-  });
-  expect(await readRequestState()).toMatchObject({
-    state: "in_progress",
-    attention: "reply_failed",
-    closedReason: null,
-  });
-  expect(await database.read((sql) => sql`SELECT id FROM outbox WHERE kind = 'reaction'`)).toEqual(
-    [],
-  );
-});
+test.each(["msg_blocks_too_long", "thread_not_found"])(
+  "a final Slack refuses with %s goes back to the lead, and its link stays active",
+  async (error) => {
+    const { database, slack, queue, delivery, readRequestState } = await setup();
+    slack.failNext("chat.postMessage", { error });
+    const item = await queue();
+    expect(await delivery.post(item.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "failed", error },
+    });
+    expect(await readRequestState()).toMatchObject({
+      state: "seen",
+      attention: "reply_failed",
+      closedReason: null,
+    });
+    expect(
+      await database.read((sql) => sql`SELECT id FROM outbox WHERE kind = 'reaction'`),
+    ).toEqual([]);
+    expect(await database.read((sql) => sql`SELECT status FROM links`)).toEqual([
+      { status: "active" },
+    ]);
+  },
+);
 
 test.each(["sent", "failed", "queued", "delivery_unknown"] as const)(
   "a %s receipt after unlink retains only the post that still needs reconciliation",
@@ -282,8 +285,14 @@ describe("confirmed posts", () => {
     });
     expect((await read(queued.id))!.payload).not.toHaveProperty("metadata");
     expect(
-      await database.read((sql) => sql`SELECT kind FROM outbox WHERE kind = 'reaction'`),
-    ).toHaveLength(2);
+      await database.read(
+        (sql) => sql`
+          SELECT json_extract(payload, '$.action') AS action,
+            json_extract(payload, '$.name') AS name
+          FROM outbox WHERE kind = 'reaction'
+        `,
+      ),
+    ).toEqual([{ action: "add", name: "white_check_mark" }]);
     expect(await delivery.post(queued.id)).toEqual({ kind: "changed" });
     expect(slack.calls).toHaveLength(1);
   });
@@ -311,8 +320,8 @@ describe("confirmed posts", () => {
   });
 
   test("an explicit follow-up posts without reopening a terminal request", async () => {
-    const { database, queue, delivery, request, now, readRequestState } = await setup();
-    await database.write((tx) => saveRequest(tx, confirmAnswer(request, 1, now())));
+    const { database, queue, delivery, request, readRequestState } = await setup();
+    await database.write((tx) => saveRequest(tx, confirmAnswer(request)));
     const before = await readRequestState();
     const queued = await queue({ phase: "follow_up" });
 
@@ -400,19 +409,6 @@ describe("send-time authority", () => {
     });
   });
 
-  test("an old revision is superseded and returns the request as updated without a call", async () => {
-    const { database, queue, delivery, request, now, readRequestState, slack } = await setup();
-    const queued = await queue();
-    await database.write((tx) => saveRequest(tx, reviseRequest(request, "new-input", now())));
-
-    expect(await delivery.post(queued.id)).toMatchObject({
-      kind: "settled",
-      item: { state: "superseded", attempts: 0 },
-    });
-    expect(await readRequestState()).toMatchObject({ state: "in_progress", attention: "updated" });
-    expect(slack.calls).toEqual([]);
-  });
-
   test("fresh cached public facts cannot overrule the owner's narrowed approved audience", async () => {
     const { database, queue, delivery, now, slack } = await setup();
     const audience = privateAudience();
@@ -461,20 +457,6 @@ describe("send-time authority", () => {
       expect(slack.calls.map((call) => call.method)).toEqual(["conversations.info"]);
     },
   );
-
-  test("an unverified source waits without taking a slot or making a call", async () => {
-    const { database, queue, delivery, request, now, slack } = await setup();
-    const queued = await queue();
-    await database.write((tx) => saveRequest(tx, { ...request, sourceUnverifiedAt: now() }));
-
-    expect(await delivery.post(queued.id)).toEqual({
-      kind: "waiting",
-      reason: "source_unverified",
-      until: null,
-    });
-    expect(await database.read((sql) => sql`SELECT * FROM outbox_channels`)).toEqual([]);
-    expect(slack.calls).toEqual([]);
-  });
 
   test("a requester no longer allowed is cancelled before any call", async () => {
     const { queue, delivery, readRequestState, slack } = await setup({
@@ -615,10 +597,7 @@ describe("send-time authority", () => {
       kind: "settled",
       item: { state: "failed", error: "slack_token", attempts: 0 },
     });
-    expect(await readRequestState()).toMatchObject({
-      state: "in_progress",
-      attention: "reply_failed",
-    });
+    expect(await readRequestState()).toMatchObject({ state: "seen", attention: "reply_failed" });
     expect(slack.calls).toEqual([]);
   });
 });
@@ -633,11 +612,8 @@ describe("uncertain and rejected writes", () => {
       kind: "settled",
       item: { state: "stray", error: "wrong_thread", evidence: "response" },
     });
-    expect(await readRequestState()).toMatchObject({
-      state: "cancelled",
-      closedReason: "thread_gone",
-      attention: null,
-    });
+    // The request waits on the withdrawal, which gives it back to the lead.
+    expect(await readRequestState()).toMatchObject({ state: "answering" });
     const cleanup = await database.read(
       (sql) => sql`SELECT kind, state, payload FROM outbox WHERE kind = 'retract'`,
     );
@@ -742,33 +718,6 @@ describe("uncertain and rejected writes", () => {
     },
   );
 
-  test.each([
-    "thread_not_found",
-    "restricted_action_thread_locked",
-    "cannot_reply_to_message",
-    "restricted_action_non_threadable_channel",
-  ])("a %s cancels the request without suspending its link", async (error) => {
-    const { database, slack, queue, delivery, readRequestState } = await setup();
-    slack.failNext("chat.postMessage", { error });
-    const queued = await queue();
-
-    expect(await delivery.post(queued.id)).toMatchObject({
-      kind: "settled",
-      item: { state: "failed", error },
-    });
-    expect(await readRequestState()).toMatchObject({
-      state: "cancelled",
-      closedReason: "thread_gone",
-      attention: null,
-    });
-    expect(
-      await database.read((sql) => sql`SELECT payload FROM outbox WHERE kind = 'reaction'`),
-    ).toEqual([{ payload: expect.stringContaining('"action":"remove","name":"eyes"') }]);
-    expect(await database.read((sql) => sql`SELECT status FROM links`)).toEqual([
-      { status: "active" },
-    ]);
-  });
-
   test("a channel-wide refusal suspends its link, not unrelated links", async () => {
     const { database, slack, queue, delivery, now } = await setup();
     await createStoredLink(database, "three");
@@ -808,33 +757,4 @@ describe("uncertain and rejected writes", () => {
     });
     expect(slack.calls).toHaveLength(1);
   });
-});
-
-test("a gap noticed during the SDK call holds confirmation until the source is verified", async () => {
-  const { database, bot, queue, request, now, readRequestState } = await setup();
-  const checked: BotClient = {
-    cooldown: (method) => bot.cooldown(method),
-    call(method, run) {
-      return bot.call(method, async (client) => {
-        const result = await run(client);
-        await database.write((tx) => saveRequest(tx, { ...request, sourceUnverifiedAt: now() }));
-        return result;
-      });
-    },
-  };
-  const queued = await queue();
-
-  expect(await createPostDelivery(database, checked, { now }).post(queued.id)).toMatchObject({
-    kind: "settled",
-    item: { state: "sent", evidence: "response" },
-  });
-  expect(await readRequestState()).toMatchObject({ state: "answering", sourceUnverifiedAt: now() });
-  expect(
-    await database.read((sql) => sql`SELECT kind FROM outbox WHERE kind = 'reaction'`),
-  ).toEqual([]);
-  await database.write(async (tx) => {
-    await saveRequest(tx, { ...request, sourceUnverifiedAt: null });
-    await settleRequestAnswer(tx, request.id, now());
-  });
-  expect(await readRequestState()).toMatchObject({ state: "answered" });
 });

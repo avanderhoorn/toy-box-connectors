@@ -1,10 +1,8 @@
 import { expect, onTestFinished, test } from "bun:test";
-import { gapOverlapMs } from "@activity/model/gaps";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import { changeChannelId } from "@links/server/lifecycle";
 import { createStoredLink } from "@links/server/testFixtures";
-import { readRequest, saveRequest } from "@requests/server/database";
+import { readRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { channelFacts } from "@slackapi/model/testFixtures";
 import { compareTs, tsAt } from "@slackapi/model/ts";
@@ -14,7 +12,6 @@ import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../../../../tests/fakes/slack";
 import { outboxMetadata } from "../model/delivery";
 import { renderMarkdown } from "../model/rendering";
-import { settleRequestAnswer } from "./answers";
 import {
   queueItem,
   readDueReconciliations,
@@ -26,6 +23,8 @@ import {
 import { createPostDelivery } from "./posts";
 import { createReconciliation } from "./reconcile";
 import { createRetraction } from "./retract";
+
+const attemptOverlapMs = 5 * 60_000;
 
 async function setup({
   kind = "reply",
@@ -56,8 +55,6 @@ async function setup({
   await database.write((tx) => writeChannelInfo(tx, channelFacts(), now()));
   const request = await createStoredRequest(database, {
     state: "answering",
-    servedRev: 1,
-    seenAt: at - 10_000,
     touchedAt: at - 10_000,
   });
   slack.setMessage("C-link", {
@@ -82,7 +79,7 @@ async function setup({
         phase: kind === "reply" ? "final" : null,
         linkId: "link",
         requestId: kind === "reply" ? request.id : null,
-        requestRev: kind === "reply" ? request.inputRev : null,
+        requestRev: kind === "reply" ? 1 : null,
         publicationKey: kind === "publication" ? "release-notes/2023-11-14" : null,
         channelId: "C-link",
         threadTs: kind === "reply" ? request.rootTs : null,
@@ -367,7 +364,7 @@ test("a complete thread read finds exact metadata, commits proof and answers in 
   });
   expect(
     await database.read((sql) => sql`SELECT kind FROM outbox WHERE kind = 'reaction'`),
-  ).toHaveLength(2);
+  ).toHaveLength(1);
   const reads = slack.calls.filter((call) => call.method === "conversations.replies");
   expect(reads.length).toBeGreaterThan(1);
   for (const call of reads) {
@@ -392,7 +389,7 @@ test("publication roots page from the attempt rather than the queue time", async
   const reads = slack.calls.filter((call) => call.method === "conversations.history");
   expect(reads.length).toBeGreaterThan(1);
   expect(reads[0]!.args).toMatchObject({
-    oldest: tsAt(stored!.attemptStartedAt! - gapOverlapMs),
+    oldest: tsAt(stored!.attemptStartedAt! - attemptOverlapMs),
     inclusive: "true",
     include_all_metadata: "true",
   });
@@ -417,12 +414,12 @@ test.each(["publication", "misplaced_reply"] as const)(
       item: { state: kind === "misplaced_reply" ? "stray" : "sent" },
     });
     const history = slack.calls.find((call) => call.method === "conversations.history")!;
-    expect(history.args.oldest).toBe(tsAt(before!.attemptStartedAt! - gapOverlapMs));
+    expect(history.args.oldest).toBe(tsAt(before!.attemptStartedAt! - attemptOverlapMs));
     expect(slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
   },
 );
 
-test("a lost reply response correlated at root cancels its request before withdrawal", async () => {
+test("a lost reply found at the channel root queues its withdrawal without answering", async () => {
   const { database, slack, item, reconcile, request } = await setup({ misplaced: true });
   expect(await reconcile(item.id)).toMatchObject({
     kind: "settled",
@@ -434,30 +431,11 @@ test("a lost reply response correlated at root cancels its request before withdr
     "conversations.history",
   ]);
   expect(await database.read((sql) => readRequest(sql, request.id))).toMatchObject({
-    state: "cancelled",
-    closedReason: "thread_gone",
-    attention: null,
+    state: "answering",
   });
   expect(
     await database.read((sql) => sql`SELECT payload FROM outbox WHERE kind = 'retract'`),
   ).toEqual([{ payload: JSON.stringify({ target: item.id }) }]);
-});
-
-test("read proof cannot answer an unverified source until repair settles it", async () => {
-  const { database, item, request, now, reconcile } = await setup();
-  await database.write((tx) => saveRequest(tx, { ...request, sourceUnverifiedAt: now() }));
-  expect(await reconcile(item.id)).toMatchObject({ kind: "settled", item: { state: "sent" } });
-  expect(await database.read((sql) => readRequest(sql, request.id))).toMatchObject({
-    state: "answering",
-    sourceUnverifiedAt: now(),
-  });
-  await database.write(async (tx) => {
-    await saveRequest(tx, { ...request, sourceUnverifiedAt: null });
-    await settleRequestAnswer(tx, request.id, now());
-  });
-  expect(await database.read((sql) => readRequest(sql, request.id))).toMatchObject({
-    state: "answered",
-  });
 });
 
 test("three complete misses spend the original deadlines and never permit another post", async () => {
@@ -1009,65 +987,6 @@ test("an exhausted read that was once held for its channel never reads again", a
     until: null,
   });
   expect(slack.calls).toHaveLength(count);
-});
-
-test("a read whose channel moved starts over from its first page with a fresh backoff", async () => {
-  const { database, slack, bot, item, now, advance } = await setup({ pageSize: 1 });
-  let reads = 0;
-  const failing: BotClient = {
-    cooldown: (method) => bot.cooldown(method),
-    call(method, run) {
-      if (method === "conversations.replies" && ++reads >= 2) {
-        slack.failNext(method, { status: 503 });
-      }
-      return bot.call(method, run);
-    },
-  };
-  const service = createReconciliation(database, failing, { now });
-  onTestFinished(() => service.close());
-  expect(await service.reconcile(item.id)).toMatchObject({ until: now() + 5_000 });
-  advance(5_000);
-  expect(await service.reconcile(item.id)).toMatchObject({ until: now() + 10_000 });
-  expect(slack.calls.at(-1)!.args).toHaveProperty("cursor");
-  slack.addChannel({ id: "C-moved", is_private: true, members: ["U-owner", "U-bot"] });
-  await database.write((tx) => changeChannelId(tx, "C-link", "C-moved", now()));
-  advance(10_000);
-  expect(await service.reconcile(item.id)).toEqual({
-    kind: "waiting",
-    reason: "HTTP 503",
-    until: now() + 5_000,
-  });
-  expect(slack.calls.at(-1)!.args).toMatchObject({ channel: "C-moved" });
-  expect(slack.calls.at(-1)!.args).not.toHaveProperty("cursor");
-});
-
-test("a read whose channel moves between pages stops before reading the old channel again", async () => {
-  const { database, slack, bot, item, now, read } = await setup({ pageSize: 1 });
-  slack.addChannel({ id: "C-moved", is_private: true, members: ["U-owner", "U-bot"] });
-  let moved = false;
-  const moving: BotClient = {
-    cooldown: (method) => bot.cooldown(method),
-    async call(method, run) {
-      const result = await bot.call(method, run);
-      if (!moved) {
-        moved = true;
-        await database.write((tx) => changeChannelId(tx, "C-link", "C-moved", now()));
-      }
-      return result;
-    },
-  };
-  const service = createReconciliation(database, moving, { now });
-  onTestFinished(() => service.close());
-  expect(await service.reconcile(item.id)).toEqual({ kind: "changed" });
-  expect(slack.calls.map((call) => call.method)).toEqual([
-    "chat.postMessage",
-    "conversations.replies",
-  ]);
-  expect(await read()).toMatchObject({
-    state: "delivery_unknown",
-    channelId: "C-moved",
-    reconcilePass: 0,
-  });
 });
 
 test.each(["sent", "stray"] as const)(

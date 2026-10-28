@@ -31,8 +31,7 @@ async function setup({ timeoutMs = 1_000 } = {}) {
   await createStoredInstallation(database);
   await createStoredLink(database);
   const request = await createStoredRequest(database, {
-    state: "in_progress",
-    seenAt: now(),
+    state: "seen",
     touchedAt: now(),
   });
   slack.setMessage("C-link", { ts: request.sourceTs, user: "U-owner", text: "A question" });
@@ -226,10 +225,10 @@ test.each(["paused", "suspended"])(
 );
 
 test.each([
-  { state: "open", seen_at: null },
+  { state: "open" },
   { state: "answered" },
   { state: "dismissed", closed_reason: "Not needed" },
-  { state: "cancelled", closed_reason: "thread_gone" },
+  { state: "cancelled", closed_reason: "source_deleted" },
   { state: "expired" },
 ])("eyes queued for a request that no longer needs them are dropped: %j", async (changes) => {
   const { database, slack, delivery, queue, read } = await setup();
@@ -778,9 +777,9 @@ test.each(
         } else if (change === "target_mismatch") {
           await tx`UPDATE requests SET source_ts = '1700000100.000200'`;
         } else if (name === "white_check_mark") {
-          await tx`UPDATE requests SET state = 'in_progress'`;
+          await tx`UPDATE requests SET state = 'seen'`;
         } else {
-          await cancelStoredRequest(tx, request, "thread_gone", now());
+          await cancelStoredRequest(tx, request, "source_deleted", now());
         }
       });
     } finally {

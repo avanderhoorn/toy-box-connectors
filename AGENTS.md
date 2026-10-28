@@ -4,7 +4,7 @@ toy-box-slack is a local bridge built on the Bun runtime that lets a Toy Box cha
 
 The central unit is a link: one Toy Box channel bound to one Slack channel, with an allowlist of Slack people and its request and observation modes. Everything the bridge stores or does on Slack's behalf belongs to a link, and unlinking deletes what the link owned.
 
-The bridge is one long-running process per data folder and the only thing that talks to Slack. `src/features/bridge` composes every subsystem into that process and owns startup, the database connection, the single-bridge lock, and the socket server. Each feature declares its tables in `server/schema.ts`, and the bridge installs them through numbered migrations that never change once released. The bridge receives events over Socket Mode and commits each one to SQLite before acking it, so an acked event survives a crash or power loss. The ledger keeps one row per channel and `ts` and appends a change for every new, edited, or deleted message. Request classification runs in the same transaction, so a stored message and the request it opened or joined never disagree. After a disconnect or a rate limit, gap repair reads history across the gap with overlap and merges what it finds exactly like live events.
+The bridge is one long-running process per data folder and the only thing that talks to Slack. `src/features/bridge` composes every subsystem into that process and owns startup, the database connection, the single-bridge lock, and the socket server. Each feature declares its tables in `server/schema.ts`, and the bridge installs them through numbered migrations that never change once released. The bridge receives events over Socket Mode and commits each one to SQLite before acking it, so an acked event survives a crash or power loss. The ledger keeps one row per channel and `ts` and appends a change for every new, edited, or deleted message. Request classification runs in the same transaction, so a stored message and the request it opened or joined never disagree.
 
 The bridge never posts into Toy Box. It reaches the lead only by running a routine the lead registered, which wakes the lead privately with the routine's prompt. The lead reaches Slack only through the `toy-box-slack` CLI, which calls the bridge over a Unix socket. Replies and publications are queued in an outbox that rechecks policy at send time, posts once with metadata naming the item, and reconciles any post whose outcome it can't confirm instead of retrying it.
 
@@ -13,8 +13,6 @@ flowchart LR
     Person[Allowlisted person] --> Slack[Monitored Slack channel]
     Slack -->|Socket Mode| Receiver[Receiver]
     Receiver -->|commit, then ack| Database[(bridge.db)]
-    Receiver -->|reports gaps| Repair[Gap repair]
-    Repair -->|history and tracked threads| Database
     Database --> Scheduler[Wake scheduler]
     Scheduler --> ToyBox[Toy Box client]
     ToyBox -->|runs routine| Lead[Toy Box lead]
@@ -31,7 +29,7 @@ toy-box-slack assumes one owner on one Mac, like Toy Box itself. Only people on 
 
 Each guide explains one capability end to end. Read them in order for a first architecture pass; for a targeted change, start with the guide whose responsibility matches it.
 
-- [`src/features/activity/AGENTS.md`](src/features/activity/AGENTS.md): Socket Mode events committed into the message ledger, tracked threads, coverage, and gap repair
+- [`src/features/activity/AGENTS.md`](src/features/activity/AGENTS.md): Socket Mode events committed into the message ledger, and the channel changes that suspend a link
 - [`src/features/requests/AGENTS.md`](src/features/requests/AGENTS.md): the request loop, from classification and the request lifecycle to waking the lead and the CLI contract it answers through
 - [`src/features/outbox/AGENTS.md`](src/features/outbox/AGENTS.md): every write to Slack, checked at send time, posted once, and reconciled when its outcome is unknown
 - [`src/features/links/AGENTS.md`](src/features/links/AGENTS.md): link settings, the allowlist, the owner's passphrase, and suspensions

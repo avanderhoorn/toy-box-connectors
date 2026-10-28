@@ -11,7 +11,7 @@ import { requestLifetimeMs, type RequestReason } from "./lifecycle";
 // and the first match wins. Bridge code decides who may ask. The model is never
 // asked.
 //
-// Gap repair can store a message after later ones from the same thread, so the
+// Catch-up can store a message after later ones from the same thread, so the
 // rules about a requester's history only look backward from the message's own
 // ts. That way a late find classifies as it would have live.
 
@@ -42,7 +42,7 @@ export type ClassifyLink = {
 export type ClassifyFacts = {
   link: ClassifyLink;
   role: AuthorRole;
-  /** The author's open, seen, in-progress or answering request in the thread. */
+  /** The author's newest open or seen request in the thread. */
   active: { id: number; sourceTs: SlackTs } | null;
   /** Whether the author started a request in the thread, in any state, before this message. */
   askedBefore: boolean;
@@ -53,7 +53,6 @@ export type ClassifyFacts = {
 
 export function classify(message: SlackMessage, facts: ClassifyFacts): Classification {
   const { link } = facts;
-  if (link.status !== "active") return none("link_inactive");
   if (message.author !== "person") return none("not_a_person");
   if (compareTs(message.ts, link.linkedAtTs) <= 0) return none("before_link");
   if (facts.firstSight && compareTs(message.ts, tsAt(facts.now - requestLifetimeMs)) < 0) {
@@ -63,11 +62,14 @@ export function classify(message: SlackMessage, facts: ClassifyFacts): Classific
   if (isCourtesyOnly(message)) return none("courtesy");
   if (message.mentions.length > 0 && !message.mentionsBot) return none("addressed_to_others");
 
+  // A paused link still lets a requester add to what they asked, so the lead reads it before
+  // answering once the link resumes, but nothing new asks.
   if (facts.active !== null) {
     return compareTs(message.ts, facts.active.sourceTs) > 0
       ? { kind: "join", requestId: facts.active.id }
       : none("before_request");
   }
+  if (link.status !== "active") return none("link_inactive");
   if (message.mentionsBot) return { kind: "request", reason: "mention" };
   if (message.isReply && facts.askedBefore) return { kind: "request", reason: "follow_up" };
   if (link.requestMode === "all" && !message.isReply) {

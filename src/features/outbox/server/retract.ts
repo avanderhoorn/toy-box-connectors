@@ -14,12 +14,7 @@ import {
   type OutboxItem,
   type OutboxSettlement,
 } from "./database";
-import {
-  cancelThreadRequest,
-  deferQueuedDelivery,
-  linkWasRemoved,
-  settleQueuedDelivery,
-} from "./delivery";
+import { deferQueuedDelivery, linkWasRemoved, settleQueuedDelivery } from "./delivery";
 import type { PostStep } from "./posts";
 
 const payloadSchema = z
@@ -153,9 +148,6 @@ export function createRetraction(
             AND attempts = ${target.attempts} AND payload_hash = ${target.payloadHash}
           RETURNING request_id
         `;
-        if (changed.length > 0 && target.state === "stray") {
-          await cancelThreadRequest(tx, target, at);
-        }
         if (
           changed.length > 0 &&
           target.kind === "reply" &&

@@ -39,8 +39,6 @@ async function setup({ misplaced = true, publication = false } = {}) {
   await database.write((tx) => writeChannelInfo(tx, channelFacts(), now()));
   const request = await createStoredRequest(database, {
     state: "answering",
-    servedRev: 1,
-    seenAt: at - 10_000,
     touchedAt: at - 10_000,
   });
   slack.setMessage("C-link", { ts: request.sourceTs, text: "Question", user: "U-owner" });
@@ -59,7 +57,7 @@ async function setup({ misplaced = true, publication = false } = {}) {
         phase: publication ? null : "final",
         linkId: "link",
         requestId: publication ? null : request.id,
-        requestRev: publication ? null : request.inputRev,
+        requestRev: publication ? null : 1,
         publicationKey: publication ? "release-notes/2023-11-14" : null,
         channelId: "C-link",
         threadTs: publication ? null : request.rootTs,
@@ -95,7 +93,7 @@ async function setup({ misplaced = true, publication = false } = {}) {
   };
 }
 
-test("withdrawing a misplaced reply deletes it and never reopens its cancelled question", async () => {
+test("withdrawing a misplaced reply deletes it and gives its request back to the lead", async () => {
   const { database, slack, original, operation, retract, readOriginal, readQuestion, read } =
     await setup();
   const slots = await database.read((sql) => sql`SELECT * FROM outbox_channels`);
@@ -110,11 +108,7 @@ test("withdrawing a misplaced reply deletes it and never reopens its cancelled q
     slackTs: original.slackTs,
     evidence: original.evidence,
   });
-  expect(await readQuestion()).toMatchObject({
-    state: "cancelled",
-    closedReason: "thread_gone",
-    attention: null,
-  });
+  expect(await readQuestion()).toMatchObject({ state: "seen", attention: "reply_failed" });
   expect(slack.getMessages("C-link").map((message) => message.ts)).not.toContain(original.slackTs);
   expect(slack.calls.at(-1)).toMatchObject({
     method: "chat.delete",
@@ -583,30 +577,6 @@ test("a late delete response cannot overwrite a manual resolution or change its 
   expect(await pending).toEqual({ kind: "changed" });
   expect(await read()).toMatchObject({ state: "dropped" });
   expect(await readOriginal()).toMatchObject({ id: original.id, state: "stray" });
-});
-
-test("the deletion, original and a legacy request cancellation commit together after recovery", async () => {
-  const { database, operation, retract, read, readOriginal, readQuestion, now, advance } =
-    await setup();
-  await database.write(async (tx) => {
-    // Older delivery may have left its question awaiting withdrawal.
-    await tx`UPDATE requests SET state = 'answering', closed_reason = NULL`;
-    await tx.unsafe(`CREATE TRIGGER reject_cleanup_answer
-      BEFORE UPDATE ON requests WHEN NEW.state = 'cancelled'
-      BEGIN SELECT RAISE(ABORT, 'cleanup cancellation failed'); END`);
-  });
-  await expect(retract(operation.id)).rejects.toThrow("cleanup cancellation failed");
-  expect(await read()).toMatchObject({ state: "sending" });
-  expect(await readOriginal()).toMatchObject({ state: "stray" });
-  expect(await readQuestion()).toMatchObject({ state: "answering" });
-  await database.write(async (tx) => {
-    await tx.unsafe("DROP TRIGGER reject_cleanup_answer");
-    await recoverOutboxAttempts(tx, now());
-  });
-  advance(10_000);
-  expect(await retract(operation.id)).toMatchObject({ kind: "settled", item: { state: "sent" } });
-  expect(await readOriginal()).toMatchObject({ state: "failed" });
-  expect(await readQuestion()).toMatchObject({ state: "cancelled", closedReason: "thread_gone" });
 });
 
 test.each(["queued", "sending", "delivery_unknown", "sent"])(

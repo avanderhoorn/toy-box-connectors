@@ -1,5 +1,4 @@
 import { describe, expect, onTestFinished, spyOn, test } from "bun:test";
-import { join } from "node:path";
 import { ACK_DEADLINE_MS } from "@activity/model/receiver";
 import type { BridgeDatabase } from "@bridge/server/database";
 import {
@@ -7,10 +6,9 @@ import {
   STEADY_CONNECTION_MS,
   type SlackSupervisorOptions,
 } from "@bridge/server/slack";
-import { createTestFolder, openTestDatabase } from "@bridge/server/testFixtures";
+import { openTestDatabase } from "@bridge/server/testFixtures";
 import type { SlackState } from "@commands/model/status";
 import { createStoredLink } from "@links/server/testFixtures";
-import { createStoredRequest } from "@requests/server/testFixtures";
 import {
   refusalProblem,
   rejectedTokenProblem,
@@ -62,7 +60,6 @@ async function linkFakeSlack() {
   });
   const database = await openTestDatabase();
   await createStoredLink(database, "link", { slack_channel_id: "C-link" });
-  const filesFolder = join(createTestFolder(), "files");
   let changes = 0;
 
   function now() {
@@ -86,7 +83,6 @@ async function linkFakeSlack() {
     });
     const supervisor = startSlackSupervisor(database, bot, {
       tokens: { botToken: fake.botToken, appToken },
-      filesFolder,
       slackApiUrl,
       onChange: () => void changes++,
       onError: (error) => errors.push(error),
@@ -131,18 +127,6 @@ function holdDatabase(database: BridgeDatabase) {
 
 function readMessages(database: BridgeDatabase) {
   return database.read((sql) => sql`SELECT ts FROM messages ORDER BY ts`);
-}
-
-function readReceipts(database: BridgeDatabase) {
-  return database.read((sql) => sql`SELECT key, disposition FROM receipts ORDER BY key`);
-}
-
-function readGaps(database: BridgeDatabase) {
-  return database.read((sql) => sql`SELECT link_id, reason, opened_at FROM coverage ORDER BY id`);
-}
-
-function readHolds(database: BridgeDatabase) {
-  return database.read((sql) => sql`SELECT source_unverified_at FROM requests`);
 }
 
 function readCooldowns(database: BridgeDatabase) {
@@ -257,21 +241,6 @@ describe("connecting", () => {
     expect(link.changes()).toBe(2);
   });
 
-  test("starting holds every pending request's replies, and the first hello records the startup gap", async () => {
-    const link = await linkFakeSlack();
-    await createStoredRequest(link.database);
-
-    const { supervisor } = link.supervise();
-    // The supervisor reads the clock as it starts, and Slack says hello a second later.
-    link.advance(1_000);
-    await waitFor(() => expect(supervisor.state()).toEqual(connected));
-
-    expect(await readHolds(link.database)).toEqual([{ source_unverified_at: NOW }]);
-    expect(await readGaps(link.database)).toEqual([
-      { link_id: "link", reason: "startup", opened_at: NOW + 1_000 },
-    ]);
-  });
-
   test("a frame before hello is left for Slack to send again, and what follows hello is taken", async () => {
     const link = await linkFakeSlack();
     const slack = proxySlack(link.fake, {
@@ -285,7 +254,6 @@ describe("connecting", () => {
     link.supervise({ slackApiUrl: slack.slackApiUrl });
     await waitFor(() => expect(slack.acked).toEqual(["env-late"]));
 
-    expect(await readReceipts(link.database)).toEqual([{ key: "Ev-late", disposition: "applied" }]);
     expect(await readMessages(link.database)).toEqual([{ ts: "1700000200.000100" }]);
   });
 
@@ -362,12 +330,11 @@ describe("connecting", () => {
 });
 
 describe("losing the connection", () => {
-  test("a lost connection holds pending replies when it's noticed, and the next hello records a gap", async () => {
+  test("a lost connection is noted when it's noticed, and the next hello when it comes", async () => {
     const log = silenceLog();
     const link = await linkFakeSlack();
     const { supervisor } = link.supervise();
     await waitFor(() => expect(supervisor.state()).toEqual(connected));
-    await createStoredRequest(link.database);
     const changes = link.changes();
 
     link.advance(STEADY_CONNECTION_MS);
@@ -380,11 +347,11 @@ describe("losing the connection", () => {
     await waitFor(() => expect(supervisor.state()).toEqual(connected));
 
     const lostAt = NOW + STEADY_CONNECTION_MS;
-    expect(await readHolds(link.database)).toEqual([{ source_unverified_at: lostAt }]);
-    expect(await readGaps(link.database)).toEqual([
-      { link_id: "link", reason: "startup", opened_at: NOW },
-      { link_id: "link", reason: "disconnect", opened_at: lostAt + 1_000 },
-    ]);
+    expect(
+      await link.database.read(
+        (sql) => sql`SELECT connected_at, disconnected_at FROM installation`,
+      ),
+    ).toEqual([{ connected_at: lostAt + 1_000, disconnected_at: lostAt }]);
     expect(link.changes()).toBe(changes + 2);
     expect(log.mock.calls).toEqual([
       ["Lost the connection to Slack, so the bridge is reconnecting."],
@@ -506,9 +473,6 @@ describe("the tokens", () => {
     await waitFor(() => expect(supervisor.state()).toEqual(connected));
     expect(link.fake.connections).toEqual([expect.objectContaining({ closedAt: null })]);
     expect(await link.database.read(readInstallation)).toMatchObject({ status: "active" });
-    expect(await readGaps(link.database)).toContainEqual(
-      expect.objectContaining({ reason: "auth_failed" }),
-    );
     expect(logged(log, problem)).toBe(1);
     // Stopping waits for Slack's answer to any connection it was asked for, so one more shows by now.
     await supervisor.stop();
@@ -695,33 +659,6 @@ describe("the tokens", () => {
     expect(link.fake.calls.map(({ method }) => method)).toEqual(["auth.test", "bots.info"]);
     expect(log.mock.calls).toEqual([["Stopped connecting to Slack:", errors[0]]]);
   });
-
-  test("a disk that fills as Slack starts stops it once, with the first error", async () => {
-    const log = silenceLog();
-    const link = await linkFakeSlack();
-    await createStoredRequest(link.database);
-    await link.database.write(async (transaction) => {
-      await transaction`
-        CREATE TRIGGER requests_full BEFORE UPDATE ON requests
-        BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END
-      `;
-      await transaction`
-        CREATE TRIGGER installation_full BEFORE INSERT ON installation
-        BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END
-      `;
-    });
-
-    const errors: unknown[] = [];
-    const { supervisor } = link.supervise({ onError: (error) => errors.push(error) });
-    // Holding the request's replies fails first, then storing the installation Slack names.
-    await waitFor(() => expect(errors).toHaveLength(1));
-    await supervisor.stop();
-
-    expect(String(errors[0])).toContain("database or disk is full");
-    expect(errors).toHaveLength(1);
-    expect(link.fake.calls.map(({ method }) => method)).toEqual(["auth.test", "bots.info"]);
-    expect(log.mock.calls).toEqual([["Stopped receiving from Slack:", errors[0]]]);
-  });
 });
 
 describe("refusing Slack", () => {
@@ -739,7 +676,6 @@ describe("refusing Slack", () => {
 
     expect(supervisor.state()).toEqual(refused);
     expect(called(link.fake, "apps.connections.open")).toBe(1);
-    expect(await readGaps(link.database)).toEqual([]);
     expect(log.mock.calls).toEqual([[refusalProblem(refusal)]]);
     expect(link.changes()).toBe(2);
 
@@ -813,7 +749,6 @@ describe("taking deliveries", () => {
     await release();
 
     expect(await link.fake.waitForAck(sent.envelopeId)).not.toBeNull();
-    expect(await readReceipts(link.database)).toEqual([{ key: "Ev-1", disposition: "applied" }]);
     expect(await readMessages(link.database)).toEqual([{ ts: "1700000200.000100" }]);
   });
 
@@ -834,7 +769,6 @@ describe("taking deliveries", () => {
 
     expect(await link.fake.waitForAck(sent.envelopeId)).not.toBeNull();
     expect(link.fake.acks).toHaveLength(1);
-    expect(await readReceipts(link.database)).toEqual([{ key: "Ev-1", disposition: "applied" }]);
     expect(await readMessages(link.database)).toEqual([{ ts: "1700000200.000100" }]);
     expect(log).toHaveBeenCalledWith(
       "Stored a delivery from Slack too late to ack it, so Slack will resend it.",
@@ -852,7 +786,6 @@ describe("taking deliveries", () => {
     const again = link.fake.sendEvent(message, { eventId: "Ev-1" });
 
     expect(await link.fake.waitForAck(again.envelopeId)).not.toBeNull();
-    expect(await readReceipts(link.database)).toEqual([{ key: "Ev-1", disposition: "applied" }]);
     expect(await readMessages(link.database)).toEqual([{ ts: message.ts }]);
   });
 
@@ -864,7 +797,7 @@ describe("taking deliveries", () => {
     await waitFor(() => expect(supervisor.state()).toEqual(connected));
     await link.database.write(
       (transaction) => transaction`
-        CREATE TRIGGER disk_full BEFORE INSERT ON receipts
+        CREATE TRIGGER disk_full BEFORE INSERT ON messages
         BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END
       `,
     );
@@ -887,12 +820,12 @@ describe("taking deliveries", () => {
     expect(log.mock.calls).toEqual([["Stopped receiving from Slack:", errors[0]]]);
   });
 
-  test("a hello whose gap can't be stored takes nothing, and closes the connection with the error", async () => {
+  test("a hello that can't be stored takes nothing, and closes the connection with the error", async () => {
     silenceLog();
     const link = await linkFakeSlack();
     await link.database.write(
       (transaction) => transaction`
-        CREATE TRIGGER disk_full BEFORE INSERT ON coverage
+        CREATE TRIGGER disk_full BEFORE UPDATE OF connected_at ON installation
         BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END
       `,
     );
@@ -927,7 +860,7 @@ describe("stopping", () => {
     await release();
     await stopping;
 
-    expect(await readReceipts(link.database)).toEqual([{ key: "Ev-1", disposition: "applied" }]);
+    expect(await readMessages(link.database)).toEqual([{ ts: "1700000200.000100" }]);
     expect(await link.fake.waitForAck(sent.envelopeId, 100)).toBeNull();
     expect(log).not.toHaveBeenCalled();
   });
@@ -1008,7 +941,6 @@ describe("stopping", () => {
     answering.resolve();
     await stopping;
 
-    expect(await readGaps(link.database)).toEqual([]);
     expect(supervisor.state()).toEqual({ connection: "connecting", problem: null });
   });
 });
