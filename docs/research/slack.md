@@ -690,7 +690,8 @@ guarantee about inherited unfurl settings.
 The local reconciler now uses single-page SDK readers with
 `include_all_metadata=true` and `limit=200`. Slack documents that a short page
 does not prove exhaustion and recommends no more than 200 results per cursor
-page. Root history is bounded from the immutable attempt time, not queue time.
+page. Root history is bounded from the immutable attempt time minus the same
+five-minute clock-skew margin used for intake gap repair, not queue time.
 Replies scan the entire intended thread because its parent can be much older.
 Known-target edits read that original message even when it predates the edit.
 [History and timestamp bounds](https://docs.slack.dev/reference/methods/conversations.history/),
@@ -699,15 +700,20 @@ Known-target edits read that original message even when it predates the edit.
 Our policy requires the own bot/app and exact item ID/payload hash to confirm
 an automatic read. Text alone never suffices. A correlated reply found at the
 root queues withdrawal instead of answering its request. If the intended thread
-cannot be read, root history may still find that misplaced post, but its absence
-does not count as a complete unsuccessful read.
+returns `thread_not_found`, root history may still find that misplaced post.
+Once that root scan finishes without evidence, it counts as a complete miss.
+Other incomplete or failed reads never spend a pass.
 
 Only complete misses spend the three original 10/60/120-second deadlines.
 Partial cursor progress survives ordinary cooldowns in memory so a large thread
 can reach its tail across rate-limit windows. Restart, expired cursors and
 malformed continuations discard that partial work without spending a pass.
 Missing or cyclic cursors, malformed pages and failed reads retain explicit
-unknown state. Exhaustion never authorizes an automatic repost. This is a local
+unknown state and back off from 5 to 120 seconds within an attempt and pass.
+Retry-After can extend that wait beyond the cap. A channel refusal clears the
+read deadline and waits for its suspended link to become active, rather than
+polling Slack. Refused linkless cards require manual resolution.
+Exhaustion never authorizes an automatic repost. This is a local
 conservative policy, not Slack's exactly-once guarantee.
 [Reconciliation implementation](../../src/features/outbox/server/reconcile.ts),
 [credential-free protocol cases](../../src/features/outbox/server/reconcile.test.ts).

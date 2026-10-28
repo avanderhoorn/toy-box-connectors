@@ -32,14 +32,22 @@ even when they retain our identity and metadata.
 
 `server/reconcile.ts` reads unknown messages through single-page history helpers and the shared
 client. It scans the whole intended thread, then roots since the attempt for a misplaced reply,
-or roots since the attempt for a publication or initial card. An edit reads its already proved
+or roots since the attempt for a publication or initial card. Those root bounds subtract the
+shared five-minute gap overlap to absorb ordinary skew between the Mac and Slack's clock.
+An edit reads its already proved
 target, even when that message predates the attempt. Only exact own-bot/app metadata proves it.
 Positive proof can finish immediately. A complete miss advances one of the three original
 deadlines, never requeues a post, and exhaustion leaves the item unknown.
+thread_not_found completes its thread scope, but a post still finishes its root correlation scan.
 Partial cursors survive cooldowns in memory so a thread longer than one rate-limit window can
 finish. They are discarded on restart or invalidation without spending a pass. Concurrent calls
 for one item coalesce, and close drains its read and prevents another page. Missing or cyclic
 cursors, malformed pages and failed reads report an explicit hold rather than a complete pass.
+These failures back off from 5 to 120 seconds per attempt and pass without resetting at a cursor
+restart. Slack's Retry-After wins even when longer. The scheduled deadline survives a restart,
+while the in-memory failure streak starts again. A channel refusal suspends its links and clears
+the read deadline. The due reader selects it again only once its link is active, and reconciliation
+releases that hold conditionally before reading. A refused linkless card needs manual resolution.
 `slackapi/model/history.ts` keeps raw messages intact for their owning decoder and distinguishes
 an empty page from an exhausted cursor.
 

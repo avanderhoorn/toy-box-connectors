@@ -1,4 +1,5 @@
 import type { SlackTs } from "@slackapi/model/ts";
+import { channelFailureReason } from "@slackapi/model/errors";
 import { z } from "zod";
 import { nextReconciliation, type OutboxMethod } from "../model/delivery";
 
@@ -148,12 +149,20 @@ export async function readReadyOutbox(sql: Bun.SQL, now: number): Promise<Outbox
 
 /** Exhausted unknowns remain unknown, but no longer trigger automatic reads. */
 export async function readDueReconciliations(sql: Bun.SQL, now: number): Promise<OutboxItem[]> {
-  const rows = await sql<OutboxRow[]>`
-    SELECT * FROM outbox WHERE state = 'delivery_unknown' AND reconcile_pass < 3
-      AND next_attempt_at IS NOT NULL AND next_attempt_at <= ${now}
-    ORDER BY next_attempt_at, number
+  const rows = await sql<(OutboxRow & { link_status: string | null })[]>`
+    SELECT outbox.*, links.status AS link_status FROM outbox
+    LEFT JOIN links ON links.id = outbox.link_id
+    WHERE outbox.state = 'delivery_unknown' AND outbox.reconcile_pass < 3
+      AND (outbox.next_attempt_at IS NULL OR outbox.next_attempt_at <= ${now})
+    ORDER BY outbox.next_attempt_at, outbox.number
   `;
-  return rows.map(outboxItem);
+  return rows
+    .filter((row) =>
+      channelFailureReason(row.error ?? "") !== null
+        ? row.link_status === "active"
+        : row.next_attempt_at !== null,
+    )
+    .map(outboxItem);
 }
 
 /**

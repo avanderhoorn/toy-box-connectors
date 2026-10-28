@@ -5,14 +5,20 @@ import { createStoredApproval, createStoredLink } from "@links/server/testFixtur
 import { readRequest, saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { channelFacts } from "@slackapi/model/testFixtures";
-import { tsAt } from "@slackapi/model/ts";
+import { compareTs, tsAt } from "@slackapi/model/ts";
 import { createBotClient, type BotClient } from "@slackapi/server/botClient";
 import { writeChannelInfo } from "@slackapi/server/channels";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../../../../tests/fakes/slack";
 import { renderMarkdown } from "../model/rendering";
 import { settleRequestAnswer } from "./answers";
-import { queueCard, queueItem, readOutboxItem, readReadyOutbox } from "./database";
+import {
+  queueCard,
+  queueItem,
+  readDueReconciliations,
+  readOutboxItem,
+  readReadyOutbox,
+} from "./database";
 import { createPostDelivery } from "./posts";
 import { createReconciliation } from "./reconcile";
 
@@ -20,12 +26,18 @@ async function setup({
   kind = "reply",
   pageSize = 2,
   misplaced = false,
-}: { kind?: "reply" | "publication" | "card"; pageSize?: number; misplaced?: boolean } = {}) {
+  slackClockOffsetMs = 0,
+}: {
+  kind?: "reply" | "publication" | "card";
+  pageSize?: number;
+  misplaced?: boolean;
+  slackClockOffsetMs?: number;
+} = {}) {
   let at = 1_700_000_200_000;
   const now = () => at;
   const database = await openTestDatabase();
   const slack = startFakeSlack({
-    now,
+    now: () => now() + slackClockOffsetMs,
     pageSize,
     identity: { teamId: "T-home", appId: "A-app", botId: "B-bot", botUserId: "U-bot" },
   });
@@ -159,12 +171,32 @@ test("publication roots page from the attempt rather than the queue time", async
   const reads = slack.calls.filter((call) => call.method === "conversations.history");
   expect(reads.length).toBeGreaterThan(1);
   expect(reads[0]!.args).toMatchObject({
-    oldest: tsAt(stored!.attemptStartedAt!),
+    oldest: tsAt(stored!.attemptStartedAt! - gapOverlapMs),
     inclusive: "true",
     include_all_metadata: "true",
   });
   expect(stored!.attemptStartedAt).toBe(now() - 10_000);
 });
+
+test.each(["publication", "card", "misplaced_reply"] as const)(
+  "clock overlap finds a %s stamped one second before this Mac's attempt time",
+  async (kind) => {
+    const { slack, item, posted, read, reconcile } = await setup({
+      kind: kind === "misplaced_reply" ? "reply" : kind,
+      misplaced: kind === "misplaced_reply",
+      slackClockOffsetMs: -1_000,
+    });
+    const before = await read();
+    expect(compareTs(posted.ts, tsAt(before!.attemptStartedAt!))).toBeLessThan(0);
+    expect(await reconcile(item.id)).toMatchObject({
+      kind: "settled",
+      item: { state: kind === "misplaced_reply" ? "stray" : "sent" },
+    });
+    const history = slack.calls.find((call) => call.method === "conversations.history")!;
+    expect(history.args.oldest).toBe(tsAt(before!.attemptStartedAt! - gapOverlapMs));
+    expect(slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
+  },
+);
 
 test("a lost reply response can be correlated at root and queues withdrawal without answering", async () => {
   const { database, slack, item, reconcile, request } = await setup({ misplaced: true });
@@ -321,12 +353,12 @@ test.each([
 ] as const)(
   "a %s read refusal suspends its channel but spends no pass or alternate read",
   async (error, reason) => {
-    const { database, slack, item, now, reconcile, read } = await setup();
+    const { database, slack, item, now, advance, reconcile, read } = await setup();
     slack.failNext("conversations.replies", { error });
     expect(await reconcile(item.id)).toEqual({
       kind: "waiting",
       reason: error,
-      until: now() + 5_000,
+      until: null,
     });
     expect(await read()).toMatchObject({ state: "delivery_unknown", reconcilePass: 0, error });
     expect(await database.read((sql) => sql`SELECT status, status_reason FROM links`)).toEqual([
@@ -336,6 +368,31 @@ test.each([
       "chat.postMessage",
       "conversations.replies",
     ]);
+    expect(await database.read((sql) => readDueReconciliations(sql, now()))).toEqual([]);
+    advance(86_400_000);
+    expect(await reconcile(item.id)).toEqual({
+      kind: "waiting",
+      reason: "link_inactive",
+      until: null,
+    });
+    expect(slack.calls).toHaveLength(2);
+    await database.write((tx) => tx`UPDATE links SET status = 'active', status_reason = NULL`);
+    expect(
+      (await database.read((sql) => readDueReconciliations(sql, now()))).map((row) => row.id),
+    ).toEqual([item.id]);
+    const restarted = createReconciliation(
+      database,
+      createBotClient(database, slack.botToken, {
+        slackApiUrl: slack.url,
+        now,
+      }),
+      { now },
+    );
+    onTestFinished(() => restarted.close());
+    expect(await restarted.reconcile(item.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "sent" },
+    });
   },
 );
 
@@ -350,6 +407,109 @@ test("an HTTP read failure remains unknown without spending a pass", async () =>
   expect(await read()).toMatchObject({ state: "delivery_unknown", reconcilePass: 0 });
 });
 
+test.each(["HTTP 503", "invalid_cursor", "lost response"])(
+  "repeated %s failures back off without spending a pass",
+  async (failure) => {
+    const { slack, item, reconcile, now, advance, read } = await setup();
+    for (const delay of [5_000, 10_000, 20_000, 40_000, 80_000, 120_000, 120_000]) {
+      slack.failNext(
+        "conversations.replies",
+        failure === "HTTP 503"
+          ? { status: 503 }
+          : failure === "invalid_cursor"
+            ? { error: "invalid_cursor" }
+            : { lostResponse: true },
+      );
+      expect(await reconcile(item.id)).toMatchObject({ kind: "waiting", until: now() + delay });
+      expect(await read()).toMatchObject({ state: "delivery_unknown", reconcilePass: 0 });
+      const count = slack.calls.length;
+      advance(delay - 1);
+      expect(await reconcile(item.id)).toMatchObject({ kind: "waiting", until: now() + 1 });
+      expect(slack.calls).toHaveLength(count);
+      advance(1);
+    }
+    expect(await reconcile(item.id)).toMatchObject({ kind: "settled", item: { state: "sent" } });
+  },
+);
+
+test("Retry-After may exceed the backoff cap and does not reset a failed pass's backoff", async () => {
+  const { slack, item, reconcile, now, advance } = await setup();
+  slack.failNext("conversations.replies", { status: 503 });
+  await reconcile(item.id);
+  advance(5_000);
+  slack.failNext("conversations.replies", { retryAfter: 180 });
+  expect(await reconcile(item.id)).toEqual({
+    kind: "waiting",
+    reason: "rate_limited",
+    until: now() + 180_000,
+  });
+  advance(179_999);
+  expect(await reconcile(item.id)).toMatchObject({ kind: "waiting", until: now() + 1 });
+  expect(slack.calls).toHaveLength(3);
+  advance(1);
+  slack.failNext("conversations.replies", { status: 503 });
+  expect(await reconcile(item.id)).toEqual({
+    kind: "waiting",
+    reason: "HTTP 503",
+    until: now() + 10_000,
+  });
+});
+
+test("a completed miss resets the next pass's failure backoff", async () => {
+  const { slack, item, posted, reconcile, now, advance } = await setup();
+  slack.failNext("conversations.replies", { status: 503 });
+  await reconcile(item.id);
+  advance(5_000);
+  slack.deleteMessage("C-link", posted.ts);
+  expect(await reconcile(item.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "delivery_unknown", reconcilePass: 1 },
+  });
+  advance(45_000);
+  slack.failNext("conversations.replies", { status: 503 });
+  expect(await reconcile(item.id)).toEqual({
+    kind: "waiting",
+    reason: "HTTP 503",
+    until: now() + 5_000,
+  });
+});
+
+test("a resumed channel hold can complete a miss and keep the original deadline", async () => {
+  const { database, slack, item, posted, reconcile, now } = await setup();
+  slack.failNext("conversations.replies", { error: "not_in_channel" });
+  await reconcile(item.id);
+  slack.deleteMessage("C-link", posted.ts);
+  await database.write((tx) => tx`UPDATE links SET status = 'active', status_reason = NULL`);
+  expect(await reconcile(item.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "delivery_unknown", reconcilePass: 1, nextAttemptAt: now() + 50_000 },
+  });
+});
+
+test("a refused linkless card stops automatic reads until manual resolution", async () => {
+  const { database, slack, item, reconcile, now, advance, read } = await setup({ kind: "card" });
+  await database.write((tx) => tx`UPDATE outbox SET link_id = NULL WHERE id = ${item.id}`);
+  slack.failNext("conversations.history", { error: "channel_not_found" });
+  expect(await reconcile(item.id)).toEqual({
+    kind: "waiting",
+    reason: "channel_not_found",
+    until: null,
+  });
+  expect(await read()).toMatchObject({
+    state: "delivery_unknown",
+    nextAttemptAt: null,
+    reconcilePass: 0,
+  });
+  advance(86_400_000);
+  expect(await reconcile(item.id)).toEqual({
+    kind: "waiting",
+    reason: "channel_unavailable",
+    until: null,
+  });
+  expect(await database.read((sql) => readDueReconciliations(sql, now()))).toEqual([]);
+  expect(slack.calls).toHaveLength(2);
+});
+
 test("a missing thread still finds its stray root without calling the read complete", async () => {
   const { slack, item, reconcile } = await setup({ misplaced: true });
   slack.failNext("conversations.replies", { error: "thread_not_found" });
@@ -360,15 +520,43 @@ test("a missing thread still finds its stray root without calling the read compl
   expect(slack.calls.at(-1)!.method).toBe("conversations.history");
 });
 
-test("a missing thread with no correlated root spends no pass", async () => {
+test("a missing thread with no correlated root completes a miss without permitting another post", async () => {
   const { slack, item, reconcile, now, read } = await setup();
   slack.failNext("conversations.replies", { error: "thread_not_found" });
+  expect(await reconcile(item.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "delivery_unknown", reconcilePass: 1, nextAttemptAt: now() + 50_000 },
+  });
+  expect(await read()).toMatchObject({ state: "delivery_unknown", reconcilePass: 1 });
+  expect(slack.calls.map((call) => call.method)).toEqual([
+    "chat.postMessage",
+    "conversations.replies",
+    "conversations.history",
+  ]);
+});
+
+test("a missing thread does not spend a pass until its root scan finishes", async () => {
+  const { slack, item, posted, reconcile, now, advance, read } = await setup();
+  slack.deleteMessage("C-link", posted.ts);
+  slack.failNext("conversations.replies", { error: "thread_not_found" });
+  slack.failNext("conversations.history", { status: 503 });
   expect(await reconcile(item.id)).toEqual({
     kind: "waiting",
-    reason: "thread_not_found",
+    reason: "HTTP 503",
     until: now() + 5_000,
   });
   expect(await read()).toMatchObject({ state: "delivery_unknown", reconcilePass: 0 });
+  advance(5_000);
+  expect(await reconcile(item.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "delivery_unknown", reconcilePass: 1 },
+  });
+  expect(slack.calls.map((call) => call.method)).toEqual([
+    "chat.postMessage",
+    "conversations.replies",
+    "conversations.history",
+    "conversations.history",
+  ]);
 });
 
 test("a revoked token holds unknown delivery and prevents further reads", async () => {
@@ -482,7 +670,9 @@ test("concurrent callers share one read and one durable settlement", async () =>
 test.each(["missing_cursor", "repeated_cursor", "malformed_history_page"])(
   "an incomplete %s response neither spends a pass nor loops",
   async (reason) => {
-    const { database, slack, bot, item, request, now, read } = await setup({ pageSize: 1 });
+    const { database, slack, bot, item, request, now, advance, read } = await setup({
+      pageSize: 1,
+    });
     slack.setMessage("C-link", {
       ts: "1700000101.000100",
       thread_ts: request.rootTs,
@@ -529,6 +719,16 @@ test.each(["missing_cursor", "repeated_cursor", "malformed_history_page"])(
       error: reason,
     });
     expect(slack.calls).toHaveLength(reason === "repeated_cursor" ? 3 : 2);
+    advance(5_000);
+    for (const delay of [10_000, 20_000, 40_000, 80_000, 120_000, 120_000]) {
+      expect(await service.reconcile(item.id)).toEqual({
+        kind: "waiting",
+        reason,
+        until: now() + delay,
+      });
+      expect(await read()).toMatchObject({ reconcilePass: 0, state: "delivery_unknown" });
+      advance(delay);
+    }
   },
 );
 
@@ -631,3 +831,4 @@ test("a manual resolution while a page is in flight cannot be overwritten by its
   });
   expect(await read()).toMatchObject({ state: "dropped" });
 });
+import { gapOverlapMs } from "@activity/model/gaps";

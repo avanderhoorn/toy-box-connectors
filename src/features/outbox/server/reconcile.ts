@@ -27,7 +27,6 @@ type ReadPass = {
   scopeIndex: number;
   cursor: string | null;
   usedCursors: Set<string>;
-  missingThread: boolean;
 };
 
 /** Positive metadata is proof; an unsuccessful pass counts only after all its scopes finish. */
@@ -37,6 +36,7 @@ export function createReconciliation(
   { now = Date.now }: { now?: () => number } = {},
 ) {
   const passes = new Map<string, ReadPass>();
+  const backoffs = new Map<string, { item: OutboxItem; delay: number }>();
   const running = new Map<string, Promise<PostStep>>();
   let closed = false;
 
@@ -53,10 +53,24 @@ export function createReconciliation(
     return database.read(async (sql) => {
       const item = await readOutboxItem(sql, id);
       if (!item || item.state !== "delivery_unknown") return { kind: "changed" };
-      if (item.reconcilePass === 3 || item.nextAttemptAt === null) {
+      if (item.reconcilePass === 3) {
         return { kind: "waiting", reason: "reconciliation_stopped", until: null };
       }
-      if (item.nextAttemptAt > now()) {
+      if (channelFailureReason(item.error ?? "") !== null) {
+        const [link] = await sql<{ status: string }[]>`
+          SELECT status FROM links WHERE id = ${item.linkId}
+        `;
+        if (!link || link.status !== "active") {
+          return {
+            kind: "waiting",
+            reason: item.linkId === null ? "channel_unavailable" : "link_inactive",
+            until: null,
+          };
+        }
+      } else if (item.nextAttemptAt === null) {
+        return { kind: "waiting", reason: "reconciliation_stopped", until: null };
+      }
+      if (item.nextAttemptAt !== null && item.nextAttemptAt > now()) {
         return { kind: "waiting", reason: "retry_after", until: item.nextAttemptAt };
       }
       const installation = await readInstallation(sql);
@@ -84,10 +98,17 @@ export function createReconciliation(
     if (prepared.kind !== "ready") {
       if (prepared.kind === "changed" || prepared.reason === "reconciliation_stopped") {
         passes.delete(id);
+        backoffs.delete(id);
       }
       return prepared;
     }
-    const { item, identity } = prepared;
+    let { item } = prepared;
+    const { identity } = prepared;
+    if (item.nextAttemptAt === null) {
+      const resumed = await resume(item);
+      if (!resumed) return { kind: "changed" };
+      item = resumed;
+    }
     if (item.attemptStartedAt === null) {
       throw new Error(`Outbox o${item.number} has no reconciliation attempt time.`);
     }
@@ -99,12 +120,13 @@ export function createReconciliation(
       return hold(item, "invalid_update_target", null);
     }
     const targetTs = target?.success ? target.data : undefined;
+    const oldest = tsAt(Math.max(0, item.attemptStartedAt - gapOverlapMs));
     const scopes: ReadScope[] =
       item.threadTs === null
         ? [
             {
               method: "conversations.history",
-              oldest: targetTs ?? tsAt(item.attemptStartedAt),
+              oldest: targetTs ?? oldest,
               ...(targetTs === undefined ? {} : { latest: targetTs }),
             },
           ]
@@ -115,7 +137,7 @@ export function createReconciliation(
               : [
                   {
                     method: "conversations.history" as const,
-                    oldest: tsAt(item.attemptStartedAt),
+                    oldest,
                   },
                 ]),
           ];
@@ -129,7 +151,6 @@ export function createReconciliation(
             scopeIndex: 0,
             cursor: null,
             usedCursors: new Set(),
-            missingThread: false,
           };
     passes.set(id, pass);
     while (pass.scopeIndex < pass.scopes.length) {
@@ -138,11 +159,13 @@ export function createReconciliation(
       if (current.kind !== "ready") {
         if (current.kind === "changed" || current.reason === "reconciliation_stopped") {
           passes.delete(id);
+          backoffs.delete(id);
         }
         return current;
       }
       if (!sameRead(item, current.item)) {
         passes.delete(id);
+        backoffs.delete(id);
         return { kind: "changed" };
       }
       let call: SlackCall<HistoryPage>;
@@ -163,16 +186,14 @@ export function createReconciliation(
         );
       } catch (error) {
         if (!(error instanceof ZodError)) throw error;
-        return hold(item, "malformed_history_page", now() + 5_000);
+        return backoff(item, "malformed_history_page");
       }
       if (call.kind !== "ok") {
         if (
           scope.method === "conversations.replies" &&
           call.kind === "error" &&
-          call.error === "thread_not_found" &&
-          !update
+          call.error === "thread_not_found"
         ) {
-          pass.missingThread = true;
           pass.scopeIndex++;
           pass.cursor = null;
           pass.usedCursors.clear();
@@ -183,17 +204,18 @@ export function createReconciliation(
           const reason = channelFailureReason(call.error);
           if (reason !== null) {
             await database.write((tx) => suspendChannelLinks(tx, item.channelId, reason, now()));
+            return hold(item, call.error, null);
           }
         }
-        return hold(
-          item,
+        const reason =
           call.kind === "unknown"
             ? call.detail
             : call.kind === "rate_limited"
               ? "rate_limited"
-              : call.error,
-          call.kind === "rate_limited" ? call.until : now() + 5_000,
-        );
+              : call.error;
+        return call.kind === "rate_limited"
+          ? hold(item, reason, call.until)
+          : backoff(item, reason);
       }
       for (const message of call.result.messages) {
         const receipt = reconciliationReceipt(
@@ -204,6 +226,7 @@ export function createReconciliation(
         );
         if (receipt === null) continue;
         passes.delete(id);
+        backoffs.delete(id);
         return database.write(async (tx) => {
           const settled = await settleDelivery(
             tx,
@@ -226,7 +249,7 @@ export function createReconciliation(
       const continuation = continueHistory(call.result, pass.usedCursors);
       if (continuation.kind === "incomplete") {
         passes.delete(id);
-        return hold(item, continuation.reason, now() + 5_000);
+        return backoff(item, continuation.reason);
       }
       if (continuation.kind === "done") {
         pass.scopeIndex++;
@@ -238,11 +261,35 @@ export function createReconciliation(
       }
     }
     passes.delete(id);
-    if (pass.missingThread) return hold(item, "thread_not_found", now() + 5_000);
+    backoffs.delete(id);
     return database.write(async (tx) => {
       const advanced = await advanceReconciliation(tx, item, now());
       return advanced ? { kind: "settled", item: advanced } : { kind: "changed" };
     });
+  }
+
+  async function resume(item: OutboxItem): Promise<OutboxItem | null> {
+    return database.write(async (tx) => {
+      const at = now();
+      const changed = await tx`
+        UPDATE outbox SET next_attempt_at = ${at}, updated_at = ${at}
+        WHERE id = ${item.id} AND state = 'delivery_unknown' AND attempts = ${item.attempts}
+          AND payload_hash = ${item.payloadHash} AND reconcile_pass = ${item.reconcilePass}
+          AND channel_id = ${item.channelId} AND error IS ${item.error}
+          AND next_attempt_at IS NULL
+          AND EXISTS (SELECT 1 FROM links WHERE id = ${item.linkId} AND status = 'active')
+        RETURNING id
+      `;
+      return changed.length > 0 ? readOutboxItem(tx, item.id) : null;
+    });
+  }
+
+  function backoff(item: OutboxItem, reason: string): Promise<PostStep> {
+    const previous = backoffs.get(item.id);
+    const delay =
+      previous && sameRead(previous.item, item) ? Math.min(previous.delay * 2, 120_000) : 5_000;
+    backoffs.set(item.id, { item, delay });
+    return hold(item, reason, now() + delay);
   }
 
   async function hold(item: OutboxItem, reason: string, until: number | null): Promise<PostStep> {
@@ -267,6 +314,7 @@ export function createReconciliation(
       await Promise.all(running.values());
     } finally {
       passes.clear();
+      backoffs.clear();
     }
   }
 
@@ -282,3 +330,4 @@ function sameRead(left: OutboxItem, right: OutboxItem): boolean {
     left.threadTs === right.threadTs
   );
 }
+import { gapOverlapMs } from "@activity/model/gaps";
