@@ -1,9 +1,13 @@
 import { expect, onTestFinished, spyOn, test } from "bun:test";
 import { createStoredLink } from "@links/server/testFixtures";
 import { startOutboxWorker, type OutboxWorker } from "@outbox/server";
-import { queuePublication } from "@outbox/server/database";
+import { queuePublication, queueReply } from "@outbox/server/database";
 import { createOutboxWorld } from "@outbox/server/testFixtures";
+import { createStoredRequest } from "@requests/server/testFixtures";
 import type { BotClient } from "@slackapi/server/botClient";
+import { createStoredInstallation } from "@slackapi/server/testFixtures";
+import { startSlackForBridge } from "./bridgeProcess";
+import { startLinkedBridge } from "./linkedBridge";
 import { waitFor } from "./waitFor";
 
 test("the timer waits for Slack, checks unknown delivery twice and treats eyes as best-effort", async () => {
@@ -131,3 +135,38 @@ test("a storage failure stops the worker and reports why without sending", async
   expect(await world.read(item.id)).toMatchObject({ state: "queued" });
   expect(world.slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(0);
 });
+
+test("a reply Slack refuses after removing the bot suspends the link and wakes its lead once", async () => {
+  const { slack, env } = startSlackForBridge({
+    teamId: "T-home",
+    appId: "A-app",
+    botId: "B-bot",
+    botUserId: "U-bot",
+  });
+  slack.addChannel({ id: "C-link", is_private: true, members: ["U-owner", "U-bot"] });
+  slack.failNext("chat.postMessage", { error: "not_in_channel" });
+  const { toyBox, channelId, bridge, status } = await startLinkedBridge({
+    env: { ...env, TOY_BOX_SLACK_WAKE_TIMINGS: JSON.stringify({ debounce: 0, debounceLimit: 0 }) },
+    allowed: ["U-owner"],
+    prepare: async (database) => {
+      await createStoredInstallation(database);
+      const request = await createStoredRequest(database, {
+        state: "seen",
+        touchedAt: Date.now(),
+        expiresAt: Date.now() + 604_800_000,
+      });
+      await database.write((tx) =>
+        queueReply(tx, { requestId: request.id, text: "The queued answer." }, Date.now()),
+      );
+    },
+  });
+  await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
+  expect(await status(channelId)).toMatchObject({
+    json: { links: [{ status: "suspended", statusReason: "bot_removed" }] },
+  });
+  bridge.child.kill("SIGTERM");
+  expect((await bridge.exit()).code).toBe(0);
+  expect(toyBox.runs).toHaveLength(1);
+  expect(slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
+  expect(slack.getMessages("C-link")).toEqual([]);
+}, 15_000);
