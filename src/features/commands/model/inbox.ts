@@ -98,7 +98,8 @@ const roleLabels: Record<AuthorRole, string | null> = {
   self: "you",
 };
 
-function presentMessage({ author, role, edited, text }: InboxMessage): string {
+/** A message in a fence labeled with its author, and whether they're on the allowlist. */
+export function presentMessage({ author, role, edited, text }: InboxMessage): string {
   if (text.trim() === "") return `A message from ${author.name} has no text.`;
   const labels = [roleLabels[role], edited ? "edited" : null].filter((label) => label !== null);
   const fence = fenceFor(text);

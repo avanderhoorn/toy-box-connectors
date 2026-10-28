@@ -34,21 +34,22 @@ const postTextSchema = z
   .refine((text) => text.trim() !== "", "Write the text on stdin, such as with a heredoc")
   .describe("The Markdown to post, read from stdin unless given here");
 
+/** At most how many of `items` a command shows, `fallback` unless set. */
+function limitSchema(most: number, fallback: number, items: string) {
+  return z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(most)
+    .default(fallback)
+    .describe(`The most ${items} to show, ${fallback} unless set`);
+}
+
 export const commands = {
   inbox: {
     description: "Read the requests waiting on you, with their threads so far, and mark them seen",
     callers: ["lead"],
-    input: z
-      .object({
-        limit: z.coerce
-          .number()
-          .int()
-          .min(1)
-          .max(50)
-          .default(10)
-          .describe("The most requests to show, 10 unless set"),
-      })
-      .strict(),
+    input: z.object({ limit: limitSchema(50, 10, "requests") }).strict(),
   },
   dismiss: {
     description: "End a request that needs no answer",
@@ -71,6 +72,20 @@ export const commands = {
     callers: ["lead"],
     input: z.object({ request: requestReferenceSchema, text: postTextSchema }).strict(),
     positionals: ["request"],
+  },
+  activity: {
+    description: "Read what changed in the Slack channel since you last marked it read",
+    callers: ["lead"],
+    input: z.object({ limit: limitSchema(500, 200, "messages") }).strict(),
+  },
+  "mark-read": {
+    description: "Mark activity read through the change it named, so the next starts after it",
+    callers: ["lead"],
+    input: z
+      .object({
+        through: z.coerce.number().int().min(1).describe("The change activity named, such as 57"),
+      })
+      .strict(),
   },
   publish: {
     description:

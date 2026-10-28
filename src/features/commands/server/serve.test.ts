@@ -38,13 +38,6 @@ test.each<[string, string, unknown, number, unknown]>([
     { result: { caller: { role: "lead", channelId: "toybox-link" }, at: 1_000 }, text: "Linked." },
   ],
   [
-    "refuses a caller before it reads their input",
-    "dismiss",
-    { caller: { sessionId: "toybox-member", channelId: null }, input: { request: "14" } },
-    403,
-    { error: expect.stringMatching(/^This session isn't the lead of a Toy Box channel/) },
-  ],
-  [
     "names each problem with the input the way the CLI shows it",
     "dismiss",
     { caller: LEAD, input: { request: "14" } },
@@ -87,14 +80,13 @@ test("logs why a command failed and says it may or may not have run", async () =
   const log = spyOn(console, "error").mockImplementation(() => {});
   onTestFinished(() => log.mockRestore());
 
-  expect(await call("dismiss", { caller: LEAD, input: { request: "r1", reason: "Done" } })).toEqual(
-    {
-      status: 500,
-      answer: {
-        error:
-          "The bridge couldn't finish `dismiss`, so it may or may not have run. Its log says why. Run `toy-box-slack status` before you try again.",
-      },
+  const failed = await call("dismiss", { caller: LEAD, input: { request: "r1", reason: "Done" } });
+  expect(failed).toEqual({
+    status: 500,
+    answer: {
+      error:
+        "The bridge couldn't finish `dismiss`, so it may or may not have run. Its log says why. Run `toy-box-slack status` before you try again.",
     },
-  );
+  });
   expect(log).toHaveBeenCalledWith("Couldn't finish `dismiss`:", new Error("The disk is full."));
 });

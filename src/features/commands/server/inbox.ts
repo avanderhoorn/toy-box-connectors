@@ -3,7 +3,13 @@
 
 import type { AuthorRole } from "@activity/model/ledger";
 import type { BridgeDatabase } from "@bridge/server/database";
-import { inboxOrder, presentInbox, type Inbox, type InboxRequest } from "@commands/model/inbox";
+import {
+  inboxOrder,
+  presentInbox,
+  type Inbox,
+  type InboxMessage,
+  type InboxRequest,
+} from "@commands/model/inbox";
 import {
   mentionedUsers,
   permalink,
@@ -28,7 +34,8 @@ export type InboxCommandOptions = {
   acknowledge?: OutboxWorker["acknowledge"];
 };
 
-type ThreadMessage = {
+/** A message the bridge keeps text for, as commands read it. */
+export type MessageRow = {
   ts: string;
   userId: string | null;
   role: AuthorRole;
@@ -74,41 +81,53 @@ async function readInboxRequest(
   workspaceUrl: string | null,
 ): Promise<InboxRequest> {
   // Deleted messages and those of people the link doesn't observe keep no text.
-  const thread = await sql<ThreadMessage[]>`
+  const thread = await sql<MessageRow[]>`
     SELECT ts, user_id AS userId, author_role AS role, edited_ts IS NOT NULL AS edited, text
     FROM messages
     WHERE channel_id = ${request.channelId} AND text IS NOT NULL
       AND (ts = ${request.rootTs} OR thread_ts = ${request.rootTs})
     ORDER BY ts
   `;
-  const names = await readPersonNames(sql, [
-    request.requesterUserId,
-    ...thread.flatMap(({ userId, text }) => [userId, ...mentionedUsers(text)]),
-  ]);
-  const person = <UserId extends string | null>(userId: UserId) => ({
-    userId,
-    name: userId === null ? "someone" : personName(names.get(userId), userId),
-  });
+  const names = await readPersonNames(sql, thread, request.requesterUserId);
   return {
     id: request.id,
-    requester: person(request.requesterUserId),
+    requester: namedPerson(names, request.requesterUserId),
     state: request.state,
     attention: request.attention,
     createdAt: request.createdAt,
     touchedAt: request.touchedAt,
     permalink: permalink(workspaceUrl, request),
-    messages: thread.map(({ userId, edited, text, ...message }) => ({
-      ...message,
-      author: person(userId),
-      edited: edited === 1,
-      text: renderSlackText(text, names),
-    })),
+    messages: thread.map((message) => messageFromRow(message, names)),
   };
 }
 
-async function readPersonNames(sql: Bun.SQL, userIds: (string | null)[]): Promise<SlackNames> {
+/** `row` as the lead reads it, with people named as `names` holds them. */
+export function messageFromRow(
+  { ts, userId, role, edited, text }: MessageRow,
+  names: SlackNames,
+): InboxMessage {
+  return {
+    ts,
+    author: namedPerson(names, userId),
+    role,
+    edited: edited === 1,
+    text: renderSlackText(text, names),
+  };
+}
+
+function namedPerson<UserId extends string | null>(names: SlackNames, userId: UserId) {
+  return { userId, name: userId === null ? "someone" : personName(names.get(userId), userId) };
+}
+
+/** The names the bridge stored for `people`, and for who wrote or is mentioned in `messages`. */
+export async function readPersonNames(
+  sql: Bun.SQL,
+  messages: MessageRow[],
+  ...people: string[]
+): Promise<SlackNames> {
   const names = new Map<string, string>();
-  for (const userId of new Set(userIds.filter((userId) => userId !== null))) {
+  const ids = messages.flatMap(({ userId, text }) => [userId, ...mentionedUsers(text)]);
+  for (const userId of new Set([...people, ...ids].filter((id) => id !== null))) {
     const name = await readSlackPersonName(sql, userId);
     if (name) names.set(userId, name);
   }

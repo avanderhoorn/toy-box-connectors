@@ -9,21 +9,10 @@ import { refusal } from "./testFixtures";
 
 const LEAD = { role: "lead", channelId: "toybox-link" } as const;
 
-test("reply refuses another channel's request the way it refuses one that doesn't exist", async () => {
+test("reply queues one answer in a request's thread, and refuses a second or another channel's request", async () => {
   const { database, now } = await createOutboxWorld();
   await createStoredLink(database, "other");
   await createStoredRequest(database, { linkId: "other", channelId: "C-other", state: "seen" });
-  const reply = replyCommand({ database, wakes: { reconsider() {} } });
-
-  for (const request of [2, 9]) {
-    expect(await refusal(reply({ request, text: "Done." }, { caller: LEAD, at: now() }))).toBe(
-      `This channel has no request r${request}. Run \`toy-box-slack inbox\` to see what waits on you.`,
-    );
-  }
-});
-
-test("reply queues one answer in the request's thread, and refuses another by naming it", async () => {
-  const { database, now } = await createOutboxWorld();
   const wakes = { reconsider: mock(() => {}) };
   const outbox = { poke: mock(() => {}) };
   const reply = replyCommand({ database, wakes, outbox });
@@ -37,6 +26,12 @@ test("reply queues one answer in the request's thread, and refuses another by na
   expect(await refusal(reply({ request: 1, text: "Again." }, lead))).toBe(
     "r1 wasn't answered. Request r1 is already reserved by o1 (queued). Run `toy-box-slack inbox` to see what waits on you.",
   );
+  // Another channel's request is refused like a missing one, so the lead learns nothing of it.
+  for (const request of [2, 9]) {
+    expect(await refusal(reply({ request, text: "Done." }, lead))).toBe(
+      `This channel has no request r${request}. Run \`toy-box-slack inbox\` to see what waits on you.`,
+    );
+  }
   expect(outbox.poke).toHaveBeenCalledTimes(1);
 });
 
@@ -47,8 +42,7 @@ test("publish posts once for the latest scheduled run of the routine that runs i
     id: "notes",
     title: "Release notes",
     schedule: "0 16 * * 5",
-    prompt:
-      "Draft this week's release notes and post them with `toy-box-slack publish --series notes`.",
+    prompt: "Post this week's release notes with `toy-box-slack publish --series notes`.",
   };
   const outbox = { poke: mock(() => {}) };
   const publish = publishCommand({
@@ -82,9 +76,8 @@ test("retract deletes the lead's post from Slack, and says why when it can't", a
   const lead = { caller: LEAD, at: world.now() };
   const retract = retractCommand({ database: world.database, bot: world.bot });
 
-  expect(
-    await refusal(retractCommand({ database: world.database, bot: null })({ post: 1 }, lead)),
-  ).toBe("o1 wasn't deleted. Slack isn't active.");
+  const offline = retractCommand({ database: world.database, bot: null });
+  expect(await refusal(offline({ post: 1 }, lead))).toBe("o1 wasn't deleted. Slack isn't active.");
   expect(await refusal(retract({ post: 2 }, lead))).toBe(
     "o2 wasn't deleted. This is not a known post belonging to this link.",
   );

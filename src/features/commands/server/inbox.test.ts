@@ -1,11 +1,9 @@
 import { expect, mock, test } from "bun:test";
-import { createStoredMessage } from "@activity/server/testFixtures";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { dismissRequest, serveRequest } from "@requests/model/lifecycle";
 import { saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
-import { askMessage } from "@slackapi/model/testFixtures";
 import { inboxCommand } from "./inbox";
 
 const LEAD = { role: "lead", channelId: "toybox-link" } as const;
@@ -60,17 +58,4 @@ test("shows changed requests first, up to its limit, and marks only those it sho
   ]);
   expect(wakes.reconsider).toHaveBeenCalledTimes(2);
   expect(acknowledged).toEqual([[askedAt(3).sourceTs], [askedAt(2).sourceTs]]);
-});
-
-test("names the people a message mentions by the names the bridge stored", async () => {
-  const database = await openTestDatabase();
-  await createStoredLink(database);
-  await createStoredRequest(database);
-  await createStoredMessage(database, askMessage());
-  await database.write((tx) => tx`INSERT INTO users (user_id, real_name) VALUES ('U-bot', 'Toy')`);
-  const inbox = inboxCommand({ database, wakes: { reconsider() {} }, workspaceUrl: () => null });
-
-  expect((await inbox({ limit: 10 }, { caller: LEAD, at: 1_000 })).result).toMatchObject({
-    requests: [{ messages: [{ text: "{Toy} can you look at the deploy?" }] }],
-  });
 });

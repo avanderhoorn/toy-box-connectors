@@ -13,6 +13,7 @@
 
 import { join } from "node:path";
 import { unconfiguredSlack, type SlackState } from "@commands/model/status";
+import { activityCommand, markReadCommand } from "@commands/server/activity";
 import { dismissCommand } from "@commands/server/dismiss";
 import { inboxCommand } from "@commands/server/inbox";
 import { publishCommand, replyCommand, retractCommand } from "@commands/server/posts";
@@ -132,6 +133,8 @@ export async function startBridge(
         }),
         dismiss: dismissCommand({ database, wakes: scheduler }),
         reply: replyCommand({ database, wakes: scheduler, outbox }),
+        activity: activityCommand({ database, workspaceUrl }),
+        "mark-read": markReadCommand({ database }),
         publish: publishCommand({
           database,
           routines: (channelId) => readToyBoxRoutines(origin, channelId),
