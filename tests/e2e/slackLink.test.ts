@@ -69,6 +69,39 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
   );
 
   suite.scenario(
+    "a restart mid-conversation answers what Alice said while the bridge was down, once",
+    async () => {
+      const [askedTs] = timestamps(1, Date.now());
+      await channel.turn(() =>
+        link.post(said(ALICE, askedTs, `<@${BOT}> does tonight's release include dark mode?`)),
+      );
+      await waitFor(() => expect(seenInSlack(link.slack, askedTs).replies).toBe(1));
+
+      // Slack sends a bridge that isn't running no event, so only catching up finds her follow-up.
+      await channel.turn(() =>
+        link.restart(() => {
+          const [followedTs] = timestamps(1, Date.now());
+          const followUp = said(ALICE, followedTs, "What else ships with it?", {
+            thread_ts: askedTs,
+          });
+          link.slack.setMessage("C0LINK", followUp);
+        }),
+      );
+
+      await waitFor(() =>
+        expect(
+          link.query("SELECT reason, state FROM requests WHERE root_ts = ? ORDER BY id", askedTs),
+        ).toEqual([
+          { reason: "mention", state: "answered" },
+          { reason: "follow_up", state: "answered" },
+        ]),
+      );
+      expect(seenInSlack(link.slack, askedTs).replies).toBe(2);
+    },
+    { turns: 2 },
+  );
+
+  suite.scenario(
     "release notes post once in the channel when their routine runs twice",
     async () => {
       // The routine publishes only what git says shipped since its previous run.

@@ -43,6 +43,8 @@ export type SlackLink = {
   post(message: FakeSlackMessage): Promise<void>;
   /** The rows `query` reads from the bridge's database as it stands. */
   query<Row>(query: string, ...bindings: SQLQueryBindings[]): Row[];
+  /** Stops the bridge as its owner would, calls `whileDown`, and serves the link again. */
+  restart(whileDown: () => void): Promise<void>;
   /** Stops the bridge, then Slack, which fails on any call it doesn't know. */
   stop(): Promise<void>;
 };
@@ -90,6 +92,19 @@ export async function linkSlack(toyBox: IsolatedToyBox, channel: TestChannel): P
     if (code !== 0) throw new Error(`The bridge exited with ${code}.`);
   }
 
+  async function startBridge() {
+    const opened = slack.connections.length;
+    bridge = serve(toyBox, slack);
+    await waitUntil(
+      "the bridge to connect to Slack",
+      () => {
+        serving();
+        return slack.connections.length > opened || undefined;
+      },
+      SLACK_TIMEOUT,
+    );
+  }
+
   const link: SlackLink = {
     slack,
 
@@ -109,6 +124,12 @@ export async function linkSlack(toyBox: IsolatedToyBox, channel: TestChannel): P
       } finally {
         database.close();
       }
+    },
+
+    async restart(whileDown) {
+      await stopBridge();
+      whileDown();
+      await startBridge();
     },
 
     stop() {
@@ -132,15 +153,7 @@ export async function linkSlack(toyBox: IsolatedToyBox, channel: TestChannel): P
       10_000,
     );
     await runAsOwner(toyBox, "passphrase");
-    bridge = serve(toyBox, slack);
-    await waitUntil(
-      "the bridge to connect to Slack",
-      () => {
-        serving();
-        return slack.activeConnections === 1 || undefined;
-      },
-      SLACK_TIMEOUT,
-    );
+    await startBridge();
     await runAsOwner(toyBox, "link", "--slack-channel", "C0LINK", "--channel", channel.id);
     await runAsOwner(toyBox, "allow", ALICE, "--channel", channel.id);
     return link;
