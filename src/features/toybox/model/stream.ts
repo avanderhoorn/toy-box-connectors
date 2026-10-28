@@ -1,11 +1,13 @@
-// What a linked channel's stream tells the bridge.
+// What a channel's stream tells the bridge.
 //
-// Each frame reads into an observation, and observations fold in order into the stream the bridge
-// keeps and the routines its link registered. A frame the bridge doesn't act on still moves the
-// revision a reconnect resumes after.
+// Each frame of a linked channel's stream reads into an observation, and observations fold in
+// order into the stream the bridge keeps and the routines its link registered. A frame the bridge
+// doesn't act on still moves the revision a reconnect resumes after. Setup reads a channel, linked
+// or not, from the snapshot a stream read from scratch starts with.
 
 import {
   agentPresenceSchema,
+  channelFrameSchema,
   memberChangeSchema,
   publishCommand,
   routineChangeSchema,
@@ -57,6 +59,24 @@ export type SeriesRoutine = {
   registeredAt: number;
 };
 
+/** A channel as the snapshot its stream starts with shows it. */
+export type ToyBoxChannelView = {
+  provider: string;
+  /** When the owner last posted among the snapshot's latest messages, or null. */
+  ownerSpokeAt: number | null;
+  routines: readonly ToyBoxRoutine[];
+};
+
+/** One frame of a channel's stream, or undefined for data the bridge can't read as one. */
+export function parseChannelFrame(data: string): ChannelFrame | undefined {
+  try {
+    const frame = channelFrameSchema.safeParse(JSON.parse(data));
+    return frame.success ? frame.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Reads one frame of a channel's stream. `leadId` is the channel's ID, which its lead shares. */
 export function observeChannelFrame(frame: ChannelFrame, leadId: string): ChannelObservation {
   switch (frame.type) {
@@ -84,6 +104,22 @@ export function observeChannelFrame(frame: ChannelFrame, leadId: string): Channe
     default:
       return { revision: frame.revision };
   }
+}
+
+/**
+ * What the first frame of a stream read from scratch shows of its channel: a snapshot's view, or
+ * null when Toy Box deleted the channel. Any other frame can't start such a read, so it shows
+ * nothing and is undefined.
+ */
+export function viewChannel(frame: ChannelFrame): ToyBoxChannelView | null | undefined {
+  if (frame.type === "deleted") return null;
+  if (frame.type !== "snapshot") return undefined;
+  const { state } = frame;
+  return {
+    provider: state.channel.model.provider,
+    ownerSpokeAt: latestOwnerMessage(state.messages) ?? null,
+    routines: state.routines,
+  };
 }
 
 /** The stream once `observation` applies. When the owner last spoke only moves forward. */

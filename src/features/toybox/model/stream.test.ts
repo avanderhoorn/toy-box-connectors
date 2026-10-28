@@ -4,7 +4,9 @@ import {
   observeChannelFrame,
   observedRoutine,
   observeSeriesRoutine,
+  parseChannelFrame,
   reduceToyBoxStream,
+  viewChannel,
   type SeriesRoutine,
   type ToyBoxStream,
 } from "./stream";
@@ -33,6 +35,20 @@ function snapshot(state: Partial<Extract<ChannelFrame, { type: "snapshot" }>["st
     },
   } satisfies ChannelFrame;
 }
+
+describe("reading a frame", () => {
+  test("data that holds a frame reads as it, without what the bridge doesn't read", () => {
+    const frame = snapshot({ routines: [routine] });
+    const sent = { ...frame, state: { ...frame.state, artifacts: [] }, extra: true };
+    expect(parseChannelFrame(JSON.stringify(sent))).toEqual(frame);
+  });
+
+  test("data that isn't JSON, or isn't a frame the bridge reads, reads as nothing", () => {
+    expect(parseChannelFrame("{")).toBeUndefined();
+    expect(parseChannelFrame(JSON.stringify({ type: "message", revision: -1 }))).toBeUndefined();
+    expect(parseChannelFrame(JSON.stringify({ type: "unknown", revision: 3 }))).toBeUndefined();
+  });
+});
 
 describe("observing a frame", () => {
   test("a snapshot sets the revision, provider, lead, routines and when the owner last spoke", () => {
@@ -149,6 +165,38 @@ describe("observing a frame", () => {
     expect(observeChannelFrame({ type: "tasks", revision: 18 }, "lead-1")).toEqual({
       revision: 18,
     });
+  });
+});
+
+describe("viewing a channel", () => {
+  test("a snapshot shows the provider, the routines and when the owner last spoke", () => {
+    const frame = snapshot({
+      channel: { model: { provider: "claude" } },
+      messages: [
+        message("user", "2026-10-27T16:05:00.000Z"),
+        message("agent", "2026-10-27T16:09:00.000Z"),
+        message("user", "2026-10-27T16:00:00.000Z"),
+      ],
+      routines: [routine],
+    });
+
+    expect(viewChannel(frame)).toEqual({
+      provider: "claude",
+      ownerSpokeAt: Date.parse("2026-10-27T16:05:00.000Z"),
+      routines: [routine],
+    });
+  });
+
+  test("a snapshot without the owner's messages shows they haven't spoken in it", () => {
+    const frame = snapshot({ messages: [message("agent", "2026-10-27T16:00:00.000Z")] });
+    expect(viewChannel(frame)?.ownerSpokeAt).toBeNull();
+  });
+
+  test("a deletion shows the channel is gone and any other frame shows nothing", () => {
+    expect(viewChannel({ type: "deleted", channelId: "lead-1" })).toBeNull();
+    expect(viewChannel({ type: "resumed", presence: {} })).toBeUndefined();
+    const owner = message("user", "2026-10-27T16:00:00.000Z");
+    expect(viewChannel({ type: "message", revision: 13, message: owner })).toBeUndefined();
   });
 });
 

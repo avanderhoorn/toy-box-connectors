@@ -10,14 +10,10 @@
 import type { BridgeDatabase } from "@bridge/server/database";
 import { suspendLink } from "@links/server/status";
 import { cancelLinkRequests, releaseHolds } from "@requests/server/lifecycle";
-import {
-  channelFrameSchema,
-  type ChannelFrame,
-  type RoutineRunOutcome,
-  type ToyBoxCatalog,
-} from "@toybox/model";
+import type { RoutineRunOutcome, ToyBoxCatalog } from "@toybox/model";
 import {
   observeChannelFrame,
+  parseChannelFrame,
   reduceToyBoxStream,
   UNREAD_TOYBOX_STREAM,
   type ChannelObservation,
@@ -171,7 +167,7 @@ export function startToyBoxClient(
 
   async function receive(follower: Follower, event: ServerSentEvent): Promise<Received> {
     const { link } = follower;
-    const frame = parseFrame(event.data);
+    const frame = parseChannelFrame(event.data);
     if (!frame) {
       // The frame still moved the revision, and a reconnect resumes after it.
       console.error(`Skipped a frame on Toy Box channel ${link.channelId} the bridge can't read.`);
@@ -285,15 +281,6 @@ export function startToyBoxClient(
       });
     },
   };
-}
-
-function parseFrame(data: string): ChannelFrame | undefined {
-  try {
-    const frame = channelFrameSchema.safeParse(JSON.parse(data));
-    return frame.success ? frame.data : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function isWorking(stream: ToyBoxStream): boolean {

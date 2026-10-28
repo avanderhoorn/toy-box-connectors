@@ -1,11 +1,13 @@
-import { expect, onTestFinished, test } from "bun:test";
+import { describe, expect, onTestFinished, test } from "bun:test";
 import {
   fetchToyBoxCatalog,
   readChannelStream,
   runToyBoxRoutine,
   ToyBoxResponseError,
 } from "@toybox/server/api";
+import { readToyBoxChannel } from "@toybox/server/channel";
 import { startFakeToyBox } from "../fakes/toybox";
+import { waitFor } from "./waitFor";
 
 function startToyBox() {
   const toyBox = startFakeToyBox();
@@ -137,4 +139,86 @@ test("a stream Toy Box never answers fails after the idle timeout", async () => 
     readFirstChunk(readChannelStream(origin, "channel", null, { signal, idleTimeout: 50 })),
   ).rejects.toThrow("Toy Box sent nothing on channel channel's stream for 50 ms.");
   expect(Date.now() - started).toBeLessThan(1_000);
+});
+
+describe("reading a channel", () => {
+  const signal = new AbortController().signal;
+
+  /** A loopback server that starts every stream with `data` and then stays quiet. */
+  function serveStream(data: string) {
+    return serveAnswer(
+      () =>
+        new Response(
+          new ReadableStream({ start: (stream) => stream.enqueue(`data: ${data}\n\n`) }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        ),
+    );
+  }
+
+  test("shows its provider, its routines and when the owner last spoke, and lets go", async () => {
+    const spokeAt = Date.parse("2026-10-27T09:00:00Z");
+    const toyBox = startFakeToyBox({ now: () => spokeAt });
+    onTestFinished(() => toyBox.stop());
+    const channelId = toyBox.addChannel({ provider: "claude" });
+    const routine = toyBox.scheduleRoutine(channelId, {
+      title: "Slack requests",
+      schedule: "0 9 * * 1-5",
+      prompt: "Run `toy-box-slack inbox`.",
+    });
+    toyBox.postOwnerMessage(channelId, "Link #release-eng");
+
+    expect(await readToyBoxChannel(new URL(toyBox.url), channelId, { signal })).toEqual({
+      provider: "claude",
+      ownerSpokeAt: spokeAt,
+      routines: [routine],
+    });
+    expect(toyBox.streamRequests).toEqual([{ channelId, after: null, answer: "snapshot" }]);
+    await waitFor(() => expect(toyBox.connections(channelId)).toBe(0));
+  });
+
+  test("a channel Toy Box deleted reads as null", async () => {
+    const { toyBox, origin } = startToyBox();
+    const channelId = toyBox.addChannel();
+    toyBox.deleteChannel(channelId);
+
+    expect(await readToyBoxChannel(origin, channelId, { signal })).toBeNull();
+  });
+
+  test("a stream that starts with anything but a snapshot fails", async () => {
+    const resumed = serveStream(JSON.stringify({ type: "resumed", presence: {} }));
+    const unreadable = serveStream("{");
+
+    await expect(readToyBoxChannel(resumed, "channel", { signal })).rejects.toThrow(
+      "Toy Box started channel channel's stream without a snapshot.",
+    );
+    await expect(readToyBoxChannel(unreadable, "channel", { signal })).rejects.toThrow(
+      "Toy Box started channel channel's stream without a snapshot.",
+    );
+  });
+
+  test("a stream Toy Box refuses or ends at once fails", async () => {
+    const { toyBox, origin } = startToyBox();
+    const channelId = toyBox.addChannel();
+    toyBox.refuseStreams(503);
+    const ended = serveAnswer(
+      () => new Response("", { headers: { "Content-Type": "text/event-stream" } }),
+    );
+
+    await expect(readToyBoxChannel(origin, channelId, { signal })).rejects.toMatchObject({
+      status: 503,
+    });
+    await expect(readToyBoxChannel(ended, "channel", { signal })).rejects.toThrow(
+      "Toy Box closed channel channel's stream before it sent anything.",
+    );
+  });
+
+  test("a read Toy Box hasn't answered when its signal aborts fails then", async () => {
+    const stalled = serveAnswer(() => new Promise<Response>(() => {}));
+    const started = Date.now();
+
+    await expect(
+      readToyBoxChannel(stalled, "channel", { signal: AbortSignal.timeout(50) }),
+    ).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
 });
