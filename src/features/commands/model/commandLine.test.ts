@@ -8,6 +8,7 @@ import {
   parseCommandLine,
   presentCommands,
   presentUsage,
+  type CommandGrammar,
   type ParsedCommandLine,
 } from "./commandLine";
 import { commandContract, type CommandContract } from "./contract";
@@ -69,6 +70,12 @@ const status = commandContract({
   result,
   present,
 });
+
+const reset = {
+  description: "Forget the owner and every link",
+  input: z.object({ yes: z.boolean().describe("Confirm it, since it can't be undone") }).strict(),
+  local: true,
+} satisfies CommandGrammar;
 
 function parse(contract: CommandContract, ...args: string[]): ParsedCommandLine {
   return parseCommandLine("reply", contract, args);
@@ -336,6 +343,68 @@ describe("help", () => {
         "",
         "Run `toy-box-slack <command> --help` to see a command's options.",
       ].join("\n"),
+    );
+  });
+});
+
+describe("a command the CLI runs itself", () => {
+  test("takes neither --channel nor --json", () => {
+    const help = "Run `toy-box-slack reset --help`.";
+    expect(parseCommandLine("reset", reset, ["--yes"])).toEqual({
+      kind: "parsed",
+      values: { yes: true },
+      channelId: null,
+      json: false,
+    });
+    expect(parseCommandLine("reset", reset, ["--yes", "--json"])).toEqual({
+      kind: "refused",
+      message: `\`reset\` has no option --json. ${help}`,
+    });
+    expect(parseCommandLine("reset", reset, ["--yes", "--channel", "c1"])).toEqual({
+      kind: "refused",
+      message: `\`reset\` has no option --channel. ${help}`,
+    });
+    expect(checkCommandInput("reset", reset, {})).toEqual({
+      kind: "refused",
+      message: `\`reset\` needs --yes. ${help}`,
+    });
+    const json = { ...reset, input: z.object({ json: z.boolean() }).strict() };
+    expect(() => commandArguments("reset", json)).toThrow(
+      "`reset` can't have an input named json, the name of a global option.",
+    );
+  });
+
+  test("shows only the options it has", () => {
+    expect(presentUsage("reset", reset)).toBe(
+      [
+        "Forget the owner and every link",
+        "",
+        "Usage: toy-box-slack reset --yes",
+        "",
+        "Options:",
+        "  --yes  Confirm it, since it can't be undone",
+      ].join("\n"),
+    );
+    const install = {
+      description: "Install the skill",
+      input: z
+        .object({ force: z.boolean().optional().describe("Replace an edited skill") })
+        .strict(),
+      local: true,
+    } satisfies CommandGrammar;
+    expect(presentUsage("install", install)).toBe(
+      [
+        "Install the skill",
+        "",
+        "Usage: toy-box-slack install [options]",
+        "",
+        "Options:",
+        "  --force  Replace an edited skill",
+      ].join("\n"),
+    );
+    const serve = { ...status, local: true } satisfies CommandGrammar;
+    expect(presentUsage("serve", serve)).toBe(
+      "Show the bridge's health\n\nUsage: toy-box-slack serve",
     );
   });
 });

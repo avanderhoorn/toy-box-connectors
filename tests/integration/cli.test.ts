@@ -169,9 +169,11 @@ test.each([
     "Name the command before its options, as in `toy-box-slack status --channel c1`. Run `toy-box-slack --help` to see the commands.",
   ],
   [["status", "--bogus"], "`status` has no option --bogus. Run `toy-box-slack status --help`."],
+  [["serve", "--bogus"], "`serve` has no option --bogus. Run `toy-box-slack serve --help`."],
+  [["serve", "--json"], "`serve` has no option --json. Run `toy-box-slack serve --help`."],
   [
-    ["serve", "--bogus"],
-    "`serve` takes no arguments. It runs the bridge for TOY_BOX_SLACK_HOME, or ~/.toy-box-slack when that's unset.",
+    ["serve", "extra"],
+    "`serve` takes no arguments, but also got extra. Run `toy-box-slack serve --help`.",
   ],
 ])(
   "refuses `toy-box-slack %j` on stderr with exit 1, before calling any bridge",

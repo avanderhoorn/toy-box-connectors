@@ -1,17 +1,18 @@
 // The command line.
 //
-// The CLI builds each command's grammar from its contract. Every input field is an option named
-// for it in kebab case, except the fields the contract takes as arguments, and every command also
-// takes --channel and --json. Parsing is strict: an option the command doesn't have, one given
-// twice, or a value that looks like the next option is refused, because a lead whose misspelled
-// option was ignored would believe the bridge did what it asked. For the same reason a command
-// line must name its command first, since citty skips an option that comes before the command.
+// Each command's grammar comes from its input schema, which is its contract's unless the CLI runs
+// the command itself. Every input field is an option named for it in kebab case, except the
+// fields the grammar takes as arguments, and every command the bridge serves also takes --channel
+// and --json. Parsing is strict: an option the command doesn't have, one given twice, or a value
+// that looks like the next option is refused, because a lead whose misspelled option was ignored
+// would believe the bridge did what it asked. For the same reason a command line must name its
+// command first, since citty skips an option that comes before the command.
 
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import type { CommandContract } from "./contract";
 
-/** The options every command takes besides its contract's. */
+/** The options every command the bridge serves takes besides its contract's. */
 export const globalOptions = {
   channel: {
     type: "string",
@@ -20,6 +21,15 @@ export const globalOptions = {
   },
   json: { type: "boolean", usage: "--json", description: "Print the bridge's answer as JSON" },
 } as const;
+
+/**
+ * What a command line is read against: a contract, or a command the CLI runs itself, which is
+ * local and takes neither --channel nor --json.
+ */
+export type CommandGrammar = Pick<
+  CommandContract,
+  "description" | "input" | "positionals" | "stdin"
+> & { local?: true };
 
 /** One input field as the CLI takes it. */
 export type CommandArgument = {
@@ -41,15 +51,17 @@ export type ParsedCommandLine =
   | { kind: "refused"; message: string };
 
 /**
- * The arguments `contract` takes, positionals first in order. Throws for a field the CLI can't
- * take, so a contract can't ship with an input no command line can give it.
+ * The arguments `grammar` takes, positionals first in order. Throws for a field the CLI can't
+ * take, so a command can't ship with an input no command line can give it.
  */
-export function commandArguments(name: string, contract: CommandContract): CommandArgument[] {
-  const positionals: readonly string[] = contract.positionals ?? [];
-  const fields = Object.entries(contract.input.shape as Record<string, z.ZodType>);
+export function commandArguments(name: string, grammar: CommandGrammar): CommandArgument[] {
+  const positionals: readonly string[] = grammar.positionals ?? [];
+  const fields = Object.entries(grammar.input.shape as Record<string, z.ZodType>);
   const described = fields.map(([field, schema]) => {
     if (field in globalOptions) {
-      throw new Error(`\`${name}\` can't have an input named ${field}, every command takes it.`);
+      throw new Error(
+        `\`${name}\` can't have an input named ${field}, the name of a global option.`,
+      );
     }
     return describeArgument(name, field, schema, positionals.includes(field));
   });
@@ -60,8 +72,8 @@ export function commandArguments(name: string, contract: CommandContract): Comma
       throw new Error(`\`${name}\` can take a list only as its last argument.`);
     }
   }
-  if (contract.stdin !== undefined) {
-    const argument = described.find((candidate) => candidate.field === contract.stdin);
+  if (grammar.stdin !== undefined) {
+    const argument = described.find((candidate) => candidate.field === grammar.stdin);
     if (!argument || argument.positional || argument.type !== "string" || argument.multiple) {
       throw new Error(`\`${name}\` can read only a text option from stdin.`);
     }
@@ -73,20 +85,21 @@ export function commandArguments(name: string, contract: CommandContract): Comma
   );
 }
 
-/** Reads `args`, which follow the command's name, into the values its contract will check. */
+/** Reads `args`, which follow the command's name, into the values its grammar will check. */
 export function parseCommandLine(
   name: string,
-  contract: CommandContract,
+  grammar: CommandGrammar,
   args: readonly string[],
 ): ParsedCommandLine {
-  const commandArgs = commandArguments(name, contract);
+  const commandArgs = commandArguments(name, grammar);
+  const globals = grammar.local ? [] : Object.entries(globalOptions);
   const byOption = new Map(
     commandArgs
       .filter((argument) => !argument.positional)
       .map((arg) => [kebabCase(arg.field), arg]),
   );
   const options = Object.fromEntries([
-    ...Object.entries(globalOptions).map(([option, { type }]) => [option, { type }]),
+    ...globals.map(([option, { type }]) => [option, { type }]),
     ...[...byOption].map(([option, { type, multiple }]) => [
       option,
       { type: type === "boolean" ? "boolean" : "string", multiple },
@@ -117,7 +130,7 @@ export function parseCommandLine(
     }
     const { name: option, rawName, value, inlineValue } = token;
     const argument = byOption.get(option);
-    const known = option in globalOptions || argument !== undefined;
+    const known = argument !== undefined || globals.some(([global]) => global === option);
     if (!known || !rawName.startsWith("--")) return refuse(`\`${name}\` has no option ${rawName}.`);
     const multiple = argument?.multiple ?? false;
     if (seen.has(option) && !multiple) return refuse(`${rawName} appears more than once.`);
@@ -174,25 +187,25 @@ export function parseCommandLine(
 }
 
 /**
- * The input `values` give the command, checked against its contract. Says what's missing or wrong
+ * The input `values` give the command, checked against its grammar. Says what's missing or wrong
  * by the option or argument the caller wrote.
  */
 export function checkCommandInput(
   name: string,
-  contract: CommandContract,
+  grammar: CommandGrammar,
   values: Record<string, unknown>,
 ): { kind: "checked"; input: unknown } | { kind: "refused"; message: string } {
-  const parsed = contract.input.safeParse(values);
+  const parsed = grammar.input.safeParse(values);
   if (parsed.success) return { kind: "checked", input: parsed.data };
   const labels = new Map(
-    commandArguments(name, contract).map((argument) => [argument.field, argument.label]),
+    commandArguments(name, grammar).map((argument) => [argument.field, argument.label]),
   );
   const problems = parsed.error.issues.map((issue) => {
     const field = issue.path[0];
     const label = typeof field === "string" ? labels.get(field) : undefined;
     if (label === undefined) return issue.message;
     if (issue.code === "invalid_type" && values[field as string] === undefined) {
-      const stdin = field === contract.stdin ? ", or its text on stdin" : "";
+      const stdin = field === grammar.stdin ? ", or its text on stdin" : "";
       return `\`${name}\` needs ${label}${stdin}`;
     }
     return `${label}: ${issue.message}`;
@@ -228,42 +241,36 @@ export function commandNameProblem(
 }
 
 /** `toy-box-slack <name> --help`: what the command does, how to write it and what each part means. */
-export function presentUsage(name: string, contract: CommandContract): string {
-  const takes = commandArguments(name, contract);
+export function presentUsage(name: string, grammar: CommandGrammar): string {
+  const takes = commandArguments(name, grammar);
   const positionals = takes.filter((argument) => argument.positional);
   const options = takes.filter((argument) => !argument.positional);
+  const written = options.filter(
+    (argument) => argument.required && argument.field !== grammar.stdin,
+  );
+  const globals = grammar.local
+    ? []
+    : Object.values(globalOptions).map(({ usage, description }): HelpRow => [usage, description]);
   const line = [
     `toy-box-slack ${name}`,
     ...positionals.map((argument) =>
       argument.required ? syntax(argument) : `[${syntax(argument)}]`,
     ),
-    ...options
-      .filter((argument) => argument.required && argument.field !== contract.stdin)
-      .map(syntax),
-    "[options]",
+    ...written.map(syntax),
+    ...(written.length < options.length || globals.length > 0 ? ["[options]"] : []),
   ];
   const describe = (argument: CommandArgument): HelpRow => {
-    if (argument.field !== contract.stdin) return [syntax(argument), argument.description ?? ""];
+    if (argument.field !== grammar.stdin) return [syntax(argument), argument.description ?? ""];
     const from = argument.description ? `${argument.description}, from` : "From";
     return [syntax(argument), `${from} stdin by default`];
   };
-  return [
-    contract.description,
-    `Usage: ${line.join(" ")}`,
-    presentSections([
-      ["Arguments:", positionals.map(describe)],
-      [
-        "Options:",
-        [
-          ...options.map(describe),
-          ...Object.values(globalOptions).map(({ usage, description }): HelpRow => [
-            usage,
-            description,
-          ]),
-        ],
-      ],
-    ]),
-  ].join("\n\n");
+  const sections = presentSections([
+    ["Arguments:", positionals.map(describe)],
+    ["Options:", [...options.map(describe), ...globals]],
+  ]);
+  return [grammar.description, `Usage: ${line.join(" ")}`, ...(sections ? [sections] : [])].join(
+    "\n\n",
+  );
 }
 
 /** `toy-box-slack --help`: what the CLI does and every command it has. */
