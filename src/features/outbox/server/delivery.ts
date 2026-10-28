@@ -61,10 +61,12 @@ export async function linkWasRemoved(tx: Bun.SQL, linkId: string | null): Promis
   return !link;
 }
 
-async function purgeRemovedLinkItem(tx: Bun.SQL, item: OutboxItem): Promise<void> {
+/** Retire a settled or forgotten orphan without discarding another pending card operation. */
+export async function purgeRemovedLinkItem(tx: Bun.SQL, item: OutboxItem): Promise<void> {
   if (!(await linkWasRemoved(tx, item.linkId))) return;
-  if (["queued", "sending", "delivery_unknown", "stray"].includes(item.state)) {
-    if (item.kind === "card" || item.state !== "queued") return;
+  const current = await readOutboxItem(tx, item.id);
+  if (current && ["queued", "sending", "delivery_unknown", "stray"].includes(current.state)) {
+    if (current.kind === "card" || current.state !== "queued") return;
   }
   if (item.kind === "card") {
     if (item.phase === "post" && item.state === "sent") return;

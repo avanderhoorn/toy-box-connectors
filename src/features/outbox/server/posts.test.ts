@@ -265,6 +265,46 @@ test.each([false, true])(
   },
 );
 
+test.each(["channel_refused", "last_pass", "stopped"] as const)(
+  "disposing of an orphan card's unknown stale update also retires its approval: %s",
+  async (ending) => {
+    const { database, slack, bot, delivery, approval, latestUpdate, now, advance } =
+      await postedCard(100);
+    await database.write(async (tx) => {
+      await staleApprovals(tx, [approval], "link_changed", now());
+      await tx`DELETE FROM links`;
+    });
+    const update = await latestUpdate();
+    slack.failNext("chat.update", { lostResponse: true });
+    expect(await delivery.updateCard(update.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "delivery_unknown" },
+    });
+    const message = slack.getMessages("C-link").find((message) => message.ts === approval.card.ts);
+    if (!message) throw new Error("The fixture needs its card.");
+    const { metadata, ...withoutMetadata } = message;
+    expect(metadata).toBeDefined();
+    slack.setMessage("C-link", withoutMetadata);
+    if (ending === "channel_refused") {
+      slack.failNext("conversations.history", { error: "not_in_channel" });
+    } else {
+      await database.write(
+        (tx) => tx`UPDATE outbox SET reconcile_pass = ${ending === "last_pass" ? 2 : 3}
+        WHERE id = ${update.id}`,
+      );
+    }
+    advance(120_000);
+    const reconciliation = createReconciliation(database, bot, { now });
+    onTestFinished(() => reconciliation.close());
+    expect(await reconciliation.reconcile(update.id)).toEqual({ kind: "changed" });
+    expect(await database.read((sql) => readApproval(sql, approval.id))).toBeNull();
+    expect(await database.read((sql) => sql`SELECT id FROM outbox WHERE link_id = 'link'`)).toEqual(
+      [],
+    );
+    expect(slack.calls.filter((call) => call.method === "chat.delete")).toEqual([]);
+  },
+);
+
 test.each(["sent", "delivery_unknown", "queued", "failed"] as const)(
   "an older card update settling as %s cannot discard the unlink update",
   async (state) => {

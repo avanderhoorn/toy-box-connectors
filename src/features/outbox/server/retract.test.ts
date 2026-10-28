@@ -1,6 +1,6 @@
 import { expect, onTestFinished, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import { createStoredLink } from "@links/server/testFixtures";
+import { createStoredApproval, createStoredLink } from "@links/server/testFixtures";
 import { readRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { channelFacts } from "@slackapi/model/testFixtures";
@@ -605,26 +605,153 @@ test("unlink keeps only a redacted target until confirmed withdrawal purges both
   expect(slack.calls.map((call) => call.method)).toEqual(["chat.postMessage", "chat.delete"]);
 });
 
-test("a failed orphan withdrawal retains a redacted stray and its exact refusal for the operator", async () => {
+test.each([false, true])(
+  "a failed orphan withdrawal audits the manual deletion and purges both rows: misplaced=%s",
+  async (misplaced) => {
+    const { database, slack, original, operation, retract, readOriginal, read, now } = await setup({
+      misplaced,
+    });
+    await database.write(async (tx) => {
+      await tx`UPDATE outbox SET payload = '{"redacted":true}' WHERE id = ${original.id}`;
+      await tx`DELETE FROM requests`;
+      await tx`DELETE FROM links`;
+    });
+    slack.failNext("chat.delete", { error: "cant_delete_message" });
+    expect(await retract(operation.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "failed", error: "cant_delete_message" },
+    });
+    expect(await read()).toBeNull();
+    expect(await readOriginal()).toBeNull();
+    expect(
+      await database.read(
+        (sql) => sql`SELECT at, actor, action, link_id, approval_id, subject FROM audit`,
+      ),
+    ).toEqual([
+      {
+        at: now(),
+        actor: "bridge",
+        action: "abandon_post",
+        link_id: original.linkId,
+        approval_id: null,
+        subject: `${original.channelId}/${original.slackTs}`,
+      },
+    ]);
+    expect(slack.getMessages("C-link").some((message) => message.ts === original.slackTs)).toBe(
+      true,
+    );
+  },
+);
+
+test("a locally refused orphan withdrawal audits its proved target without sending unsafe arguments", async () => {
   const { database, slack, original, operation, retract, readOriginal, read } = await setup();
   await database.write(async (tx) => {
-    await tx`UPDATE outbox SET payload = '{"redacted":true}' WHERE id = ${original.id}`;
-    await tx`DELETE FROM requests`;
     await tx`DELETE FROM links`;
+    await tx`UPDATE outbox SET payload = ${JSON.stringify({ target: original.id, file: "F-not-allowed" })}
+      WHERE id = ${operation.id}`;
+  });
+  expect(await retract(operation.id)).toMatchObject({
+    kind: "settled",
+    item: { state: "failed", error: "invalid_retract_payload", attempts: 0 },
+  });
+  expect(await read()).toBeNull();
+  expect(await readOriginal()).toBeNull();
+  expect(slack.calls.map((call) => call.method)).toEqual(["chat.postMessage"]);
+  expect(await database.read((sql) => sql`SELECT action, subject FROM audit`)).toEqual([
+    { action: "abandon_post", subject: `${original.channelId}/${original.slackTs}` },
+  ]);
+});
+
+test("a failed orphan card withdrawal is audited even when its original link ID was null", async () => {
+  const { database, slack, original, operation, retract, readOriginal, read } = await setup();
+  await database.write(async (tx) => {
+    await tx`UPDATE outbox SET kind = 'card', phase = 'post', approval_id = 'removed-card',
+      link_id = NULL, request_id = NULL, thread_ts = NULL WHERE id = ${original.id}`;
+    await tx`UPDATE outbox SET link_id = NULL, request_id = NULL, thread_ts = NULL
+      WHERE id = ${operation.id}`;
   });
   slack.failNext("chat.delete", { error: "cant_delete_message" });
   expect(await retract(operation.id)).toMatchObject({
     kind: "settled",
-    item: { state: "failed", error: "cant_delete_message" },
+    item: { state: "failed" },
   });
-  expect(await read()).toMatchObject({ state: "failed" });
-  expect(await readOriginal()).toMatchObject({
-    state: "stray",
-    payload: { redacted: true },
-    payloadHash: original.payloadHash,
-    slackTs: original.slackTs,
-    error: "cant_delete_message",
+  expect(await read()).toBeNull();
+  expect(await readOriginal()).toBeNull();
+  expect(await database.read((sql) => sql`SELECT action, approval_id, subject FROM audit`)).toEqual(
+    [
+      {
+        action: "abandon_post",
+        approval_id: "removed-card",
+        subject: `${original.channelId}/${original.slackTs}`,
+      },
+    ],
+  );
+});
+
+test.each([
+  { state: "sent" },
+  { slack_ts: "1.000100" },
+  { link_id: "new" },
+  { channel_id: "C-new" },
+  { request_id: 999 },
+  { thread_ts: "1700000100.000200" },
+  { payload_hash: "new" },
+  { attempts: 2 },
+])("a permanent failure never abandons a target changed during deletion: %j", async (changes) => {
+  const { database, slack, bot, original, operation, now, readOriginal, read } = await setup();
+  await database.write((tx) => tx`DELETE FROM links`);
+  const received = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const held: BotClient = {
+    cooldown: (method) => bot.cooldown(method),
+    async call(method, run) {
+      const result = await bot.call(method, run);
+      received.resolve();
+      await release.promise;
+      return result;
+    },
+  };
+  slack.failNext("chat.delete", { error: "cant_delete_message" });
+  const pending = createRetraction(database, held, { now }).retract(operation.id);
+  await received.promise;
+  let changed;
+  try {
+    await database.write((tx) => tx`UPDATE outbox SET ${tx(changes)} WHERE id = ${original.id}`);
+    changed = await readOriginal();
+  } finally {
+    release.resolve();
+    expect(await pending).toMatchObject({ kind: "settled", item: { state: "failed" } });
+  }
+  expect(await readOriginal()).toEqual(changed);
+  expect(await read()).toBeNull();
+  expect(await database.read((sql) => sql`SELECT id FROM audit`)).toEqual([]);
+});
+
+test("abandoning a post commits its audit and both deletions together", async () => {
+  const { database, slack, operation, retract, readOriginal, read, now, advance } = await setup();
+  await database.write(async (tx) => {
+    await tx`DELETE FROM links`;
+    await tx.unsafe(`CREATE TRIGGER refuse_abandon_audit
+      BEFORE INSERT ON audit WHEN NEW.action = 'abandon_post'
+      BEGIN SELECT RAISE(ABORT, 'abandon audit failed'); END`);
   });
+  slack.failNext("chat.delete", { error: "cant_delete_message" });
+  await expect(retract(operation.id)).rejects.toThrow("abandon audit failed");
+  expect(await read()).toMatchObject({ state: "sending" });
+  expect(await readOriginal()).toMatchObject({ state: "stray", error: "wrong_thread" });
+  expect(await database.read((sql) => sql`SELECT id FROM audit`)).toEqual([]);
+  await database.write(async (tx) => {
+    await tx.unsafe("DROP TRIGGER refuse_abandon_audit");
+    await recoverOutboxAttempts(tx, now());
+  });
+  advance(10_000);
+  slack.failNext("chat.delete", { error: "cant_delete_message" });
+  await retract(operation.id);
+  expect(await read()).toBeNull();
+  expect(await readOriginal()).toBeNull();
+  expect(await database.read((sql) => sql`SELECT action FROM audit`)).toEqual([
+    { action: "abandon_post" },
+  ]);
 });
 
 test.each([
@@ -680,6 +807,7 @@ test.each([
 
 test("withdrawing a linkless stray card keeps both rows instead of treating it as unlinked", async () => {
   const { database, original, operation, retract, readOriginal, read } = await setup();
+  await createStoredApproval(database, { id: "card", linkId: null, action: "link" });
   await database.write(async (tx) => {
     await tx`UPDATE outbox SET kind = 'card', phase = 'post', approval_id = 'card',
       link_id = NULL, request_id = NULL, thread_ts = NULL WHERE id = ${original.id}`;

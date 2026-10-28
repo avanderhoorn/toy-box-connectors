@@ -11,7 +11,7 @@ import { readInstallation } from "@slackapi/server/installation";
 import { ZodError } from "zod";
 import { reconciliationReceipt } from "../model/delivery";
 import { advanceReconciliation, readOutboxItem, type OutboxItem } from "./database";
-import { linkWasRemoved, settleDelivery } from "./delivery";
+import { linkWasRemoved, purgeRemovedLinkItem, settleDelivery } from "./delivery";
 import type { PostStep } from "./posts";
 
 type Preparation =
@@ -284,7 +284,7 @@ export function createReconciliation(
     return database.write(async (tx) => {
       const at = now();
       const changed = await tx`
-        UPDATE outbox SET next_attempt_at = ${at}, updated_at = ${at}
+        UPDATE outbox SET next_attempt_at = ${at}, error = NULL, updated_at = ${at}
         WHERE id = ${item.id} AND state = 'delivery_unknown' AND attempts = ${item.attempts}
           AND payload_hash = ${item.payloadHash} AND reconcile_pass = ${item.reconcilePass}
           AND channel_id = ${item.channelId} AND error IS ${item.error}
@@ -346,9 +346,13 @@ async function forgetStoppedOrphan(tx: Bun.SQL, item: OutboxItem): Promise<boole
     DELETE FROM outbox WHERE id = ${item.id} AND state = 'delivery_unknown'
       AND attempts = ${item.attempts} AND payload_hash = ${item.payloadHash}
       AND reconcile_pass = ${item.reconcilePass}
+      AND link_id IS ${item.linkId} AND channel_id = ${item.channelId}
+      AND thread_ts IS ${item.threadTs}
     RETURNING id
   `;
-  return deleted.length > 0;
+  if (deleted.length === 0) return false;
+  await purgeRemovedLinkItem(tx, item);
+  return true;
 }
 
 function sameRead(left: OutboxItem, right: OutboxItem): boolean {

@@ -1,7 +1,9 @@
 import type { BridgeDatabase } from "@bridge/server/database";
+import { readApproval } from "@links/server/approvals";
+import { audit } from "@links/server/audit";
 import { suspendChannelLinks } from "@links/server/lifecycle";
 import { readRequest } from "@requests/server/database";
-import { slackTsSchema } from "@slackapi/model/ts";
+import { slackTsSchema, type SlackTs } from "@slackapi/model/ts";
 import type { BotClient } from "@slackapi/server/botClient";
 import { readInstallation } from "@slackapi/server/installation";
 import { z } from "zod";
@@ -14,7 +16,12 @@ import {
   type OutboxItem,
   type OutboxSettlement,
 } from "./database";
-import { cancelThreadRequest, deferQueuedDelivery, settleQueuedDelivery } from "./delivery";
+import {
+  cancelThreadRequest,
+  deferQueuedDelivery,
+  linkWasRemoved,
+  settleQueuedDelivery,
+} from "./delivery";
 import type { PostStep } from "./posts";
 
 const payloadSchema = z
@@ -94,13 +101,7 @@ export function createRetraction(
     }
     const target = await readOutboxItem(tx, parsed.data.target);
     if (!target) return refuse(tx, item, "dropped", "target_missing", at);
-    if (
-      target.channelId !== item.channelId ||
-      target.linkId !== item.linkId ||
-      target.requestId !== item.requestId ||
-      target.threadTs !== item.threadTs ||
-      (parsed.data.ts !== undefined && parsed.data.ts !== target.slackTs)
-    ) {
+    if (!sameTarget(item, target, parsed.data.ts)) {
       return refuse(tx, item, "failed", "target_mismatch", at);
     }
     if (
@@ -109,13 +110,7 @@ export function createRetraction(
     ) {
       return refuse(tx, item, "dropped", "already_withdrawn", at);
     }
-    if (
-      !["reply", "progress", "publication", "card"].includes(target.kind) ||
-      !["sent", "stray"].includes(target.state) ||
-      target.slackTs === null ||
-      target.evidence === null ||
-      (target.kind === "card" && (target.state !== "stray" || target.phase !== "post"))
-    ) {
+    if (!canRetract(target)) {
       return refuse(tx, item, "failed", "target_unconfirmed", at);
     }
     const snapshot = item.attempts > 0 ? item.payload : { ...item.payload, ts: target.slackTs };
@@ -154,6 +149,9 @@ export function createRetraction(
             error = CASE WHEN state = 'stray' THEN 'misplaced_reply_withdrawn' ELSE error END,
             next_attempt_at = NULL, updated_at = ${at}
           WHERE id = ${target.id} AND state IN ('sent', 'stray') AND slack_ts = ${target.slackTs}
+            AND link_id IS ${target.linkId} AND channel_id = ${target.channelId}
+            AND request_id IS ${target.requestId} AND thread_ts IS ${target.threadTs}
+            AND attempts = ${target.attempts} AND payload_hash = ${target.payloadHash}
           RETURNING request_id
         `;
         if (changed.length > 0 && target.state === "stray") {
@@ -174,17 +172,23 @@ export function createRetraction(
             await settleRequestAnswer(tx, target.requestId, at);
           }
         }
-        if (changed.length > 0 && target.linkId !== null) {
-          const [link] = await tx`SELECT id FROM links WHERE id = ${target.linkId}`;
-          if (!link) {
-            await tx`DELETE FROM outbox WHERE id IN (${item.id}, ${target.id})`;
-          }
+        if (changed.length > 0 && (await orphanedTarget(tx, target))) {
+          await tx`DELETE FROM outbox WHERE id IN (${item.id}, ${target.id})`;
         }
       } else if (settled.state === "failed") {
-        await tx`
-          UPDATE outbox SET error = ${settled.error}, updated_at = ${at}
-          WHERE id = ${target.id} AND state = 'stray' AND slack_ts = ${target.slackTs}
-        `;
+        if (target.state === "stray") {
+          await tx`
+            UPDATE outbox SET error = ${settled.error}, updated_at = ${at}
+            WHERE id = ${target.id} AND state = 'stray' AND slack_ts = ${target.slackTs}
+              AND link_id IS ${target.linkId} AND channel_id = ${target.channelId}
+              AND request_id IS ${target.requestId} AND thread_ts IS ${target.threadTs}
+              AND attempts = ${target.attempts} AND payload_hash = ${target.payloadHash}
+          `;
+        }
+        await abandonOrphan(tx, item, target, at);
+        if (await orphanedTarget(tx, target)) {
+          await tx`DELETE FROM outbox WHERE id = ${item.id}`;
+        }
       }
       return { kind: "settled", item: settled };
     });
@@ -201,5 +205,82 @@ async function refuse(
   now: number,
 ): Promise<PostStep> {
   const settled = await settleQueuedDelivery(tx, item, state, error, now);
+  if (settled) {
+    const parsed = payloadSchema.safeParse({
+      target: item.payload.target,
+      ...(item.payload.ts === undefined ? {} : { ts: item.payload.ts }),
+    });
+    const target = parsed.success ? await readOutboxItem(tx, parsed.data.target) : null;
+    if (
+      parsed.success &&
+      (item.attempts === 0 || parsed.data.ts !== undefined) &&
+      target &&
+      sameTarget(item, target, parsed.data.ts) &&
+      canRetract(target)
+    ) {
+      await abandonOrphan(tx, item, target, now);
+    } else if (await linkWasRemoved(tx, item.linkId)) {
+      await tx`DELETE FROM outbox WHERE id = ${item.id}`;
+    }
+  }
   return settled ? { kind: "settled", item: settled } : { kind: "changed" };
+}
+
+function sameTarget(item: OutboxItem, target: OutboxItem, ts?: SlackTs): boolean {
+  return (
+    target.channelId === item.channelId &&
+    target.linkId === item.linkId &&
+    target.requestId === item.requestId &&
+    target.threadTs === item.threadTs &&
+    (ts === undefined || ts === target.slackTs)
+  );
+}
+
+function canRetract(target: OutboxItem): boolean {
+  return (
+    ["reply", "progress", "publication", "card"].includes(target.kind) &&
+    ["sent", "stray"].includes(target.state) &&
+    target.slackTs !== null &&
+    target.evidence !== null &&
+    (target.kind !== "card" || (target.state === "stray" && target.phase === "post"))
+  );
+}
+
+async function orphanedTarget(tx: Bun.SQL, target: OutboxItem): Promise<boolean> {
+  return target.kind === "card"
+    ? target.approvalId === null || (await readApproval(tx, target.approvalId)) === null
+    : linkWasRemoved(tx, target.linkId);
+}
+
+async function abandonOrphan(
+  tx: Bun.SQL,
+  item: OutboxItem,
+  target: OutboxItem,
+  now: number,
+): Promise<void> {
+  const current = await readOutboxItem(tx, target.id);
+  if (
+    !current ||
+    current.state !== target.state ||
+    current.slackTs !== target.slackTs ||
+    current.attempts !== target.attempts ||
+    current.payloadHash !== target.payloadHash ||
+    !sameTarget(item, current) ||
+    !canRetract(current) ||
+    !(await orphanedTarget(tx, current))
+  ) {
+    return;
+  }
+  await audit(
+    tx,
+    {
+      actor: "bridge",
+      action: "abandon_post",
+      linkId: target.linkId,
+      approvalId: target.approvalId,
+      subject: `${target.channelId}/${target.slackTs}`,
+    },
+    now,
+  );
+  await tx`DELETE FROM outbox WHERE id IN (${item.id}, ${target.id})`;
 }
