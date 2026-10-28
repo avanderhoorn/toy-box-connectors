@@ -1,93 +1,64 @@
-import { describe, expect, test } from "bun:test";
-import type { BridgeDatabase } from "@bridge/server/database";
+import { expect, mock, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import type { ChannelCaller } from "@commands/model/callers";
+import { CommandRefusedError } from "@commands/model/protocol";
 import { createStoredLink } from "@links/server/testFixtures";
-import { readRequest } from "@requests/server/database";
+import { serveRequest } from "@requests/model/lifecycle";
+import { readRequest, saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { dismissCommand } from "./dismiss";
 
-const AT = 1_700_002_000_000;
+const LEAD = { caller: { role: "lead", channelId: "toybox-link" }, at: 1_000 } as const;
 
-const lead: ChannelCaller = { role: "lead", channelId: "toybox-link", sessionId: "lead-session" };
-const revised = { state: "seen", seenAt: 1, inputRev: 2, servedRev: 2 } as const;
-
-async function openLinked(): Promise<BridgeDatabase> {
+/** r1 is a request the lead read, and r2 one the other channel's lead read. */
+async function startDismissing() {
   const database = await openTestDatabase();
   await createStoredLink(database);
-  return database;
-}
-
-/** Dismiss for the tests' link, counting how often it asks the wake scheduler to decide again. */
-function dismissFor(database: BridgeDatabase) {
-  let reconsidered = 0;
-  const dismiss = dismissCommand({ database, wakes: { reconsider: () => void reconsidered++ } });
-  return {
-    dismiss: (request: number, revision: number, caller = lead) =>
-      dismiss({ request, revision, reason: "Duplicate of r12" }, { caller, at: AT }),
-    reconsidered: () => reconsidered,
-  };
-}
-
-function readStored(database: BridgeDatabase) {
-  return database.read((sql) => readRequest(sql, 1));
-}
-
-function readOutbox(database: BridgeDatabase) {
-  return database.read((sql) => sql`SELECT kind, request_id, payload FROM outbox ORDER BY number`);
-}
-
-describe("dismissing a request", () => {
-  test("closes the revision the lead read and takes back 👀, then asks for a new wake decision", async () => {
-    const database = await openLinked();
-    await createStoredRequest(database, { ...revised, heldAt: 1, holdReason: "Asked the owner" });
-    const { dismiss, reconsidered } = dismissFor(database);
-
-    expect(await dismiss(1, 2)).toEqual({ request: 1 });
-    expect(await readStored(database)).toMatchObject({
-      state: "dismissed",
-      closedReason: "Duplicate of r12",
-      heldAt: null,
-      holdReason: null,
-    });
-    expect(await readOutbox(database)).toEqual([
-      {
-        kind: "reaction",
-        request_id: 1,
-        payload: '{"action":"remove","name":"eyes","timestamp":"1700000100.000100"}',
-      },
-    ]);
-    expect(reconsidered()).toBe(1);
+  await createStoredLink(database, "other");
+  const mine = await createStoredRequest(database);
+  const theirs = await createStoredRequest(database, { linkId: "other", channelId: "C-other" });
+  await database.write(async (transaction) => {
+    for (const request of [mine, theirs]) await saveRequest(transaction, serveRequest(request, 5));
   });
+  const wakes = { reconsider: mock(() => {}) };
+  return { database, wakes, dismiss: dismissCommand({ database, wakes }) };
+}
 
-  test("refuses a revision the lead didn't read, changing nothing", async () => {
-    const database = await openLinked();
-    const request = await createStoredRequest(database, revised);
-    const { dismiss, reconsidered } = dismissFor(database);
+async function refusal(answer: Promise<unknown>): Promise<string> {
+  const error = await answer.catch((error: unknown) => error);
+  expect(error).toBeInstanceOf(CommandRefusedError);
+  return (error as Error).message;
+}
 
-    await expect(dismiss(1, 1)).rejects.toMatchObject({
-      rule: "stale_revision",
-      message:
-        "r1 changed since you read revision 1. Run `toy-box-slack thread r1` to read revision 2.",
-    });
-    await expect(dismiss(1, 3)).rejects.toMatchObject({ rule: "unknown_revision" });
-    expect(await readStored(database)).toEqual(request);
-    expect(await readOutbox(database)).toEqual([]);
-    expect(reconsidered()).toBe(0);
+test("ends a request the lead read, which keeps the lead's reason", async () => {
+  const { database, wakes, dismiss } = await startDismissing();
+
+  expect(await dismiss({ request: 1, reason: "Answered in standup" }, LEAD)).toEqual({
+    result: { request: "r1", state: "dismissed" },
+    text: "Dismissed r1.",
   });
-
-  test("refuses a request it can't dismiss before it looks at the revision", async () => {
-    const database = await openLinked();
-    await createStoredRequest(database, { ...revised, state: "open", seenAt: null });
-    await createStoredLink(database, "other");
-    await createStoredRequest(database, { ...revised, linkId: "other" });
-    const { dismiss } = dismissFor(database);
-
-    await expect(dismiss(1, 1)).rejects.toMatchObject({ rule: "unread_request" });
-    await expect(dismiss(2, 2)).rejects.toMatchObject({ rule: "unknown_request" });
-    await expect(dismiss(1, 2, { ...lead, channelId: "toybox-unlinked" })).rejects.toMatchObject({
-      rule: "not_linked",
-    });
-    expect(await readOutbox(database)).toEqual([]);
+  expect(await database.read((sql) => readRequest(sql, 1))).toMatchObject({
+    state: "dismissed",
+    closedReason: "Answered in standup",
   });
+  expect(wakes.reconsider).toHaveBeenCalledTimes(1);
+});
+
+test("refuses another channel's request the way it refuses one that doesn't exist", async () => {
+  const { database, dismiss } = await startDismissing();
+
+  for (const request of [2, 9]) {
+    expect(await refusal(dismiss({ request, reason: "Done" }, LEAD))).toBe(
+      `This channel has no request r${request}. Run \`toy-box-slack inbox\` to see what waits on you.`,
+    );
+  }
+  expect(await database.read((sql) => readRequest(sql, 2))).toMatchObject({ state: "seen" });
+});
+
+test("says why a request couldn't end", async () => {
+  const { dismiss } = await startDismissing();
+  await dismiss({ request: 1, reason: "Done" }, LEAD);
+
+  expect(await refusal(dismiss({ request: 1, reason: "Done" }, LEAD))).toMatch(
+    /^r1 wasn't dismissed\. A request that's dismissed can't .+ Run `toy-box-slack inbox` to see what waits on you\.$/,
+  );
 });

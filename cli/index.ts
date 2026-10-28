@@ -1,36 +1,41 @@
 #!/usr/bin/env -S bun --no-env-file
 
 // Bun would otherwise load a .env file from whatever folder the CLI runs in, where a project's
-// NITRO_PORT or TOY_BOX_SLACK_HOME would change who the caller seems to be or which bridge it
-// reaches.
+// COPILOT_AGENT_SESSION_ID or TOY_BOX_SLACK_HOME would change who the caller seems to be or which
+// bridge it reaches.
 
-import { z } from "zod";
-import { localCommand, runCli, socketCommands } from "@commands/client/cli";
+import { defineCommand, runMain } from "citty";
+import { socketCommands } from "@commands/client/cli";
 import { installBundledSkill } from "@commands/client/skill";
 
 import { version } from "../package.json";
 
-const serve = localCommand({
-  description: "Run the bridge in the foreground until SIGTERM or SIGINT",
-  input: z.object({}).strict(),
+const serve = defineCommand({
+  meta: { name: "serve", description: "Run the bridge in the foreground until SIGTERM or SIGINT" },
   async run() {
     // Loaded on demand so the commands the lead runs don't load the bridge.
     const { serveBridge } = await import("@bridge/server/bridge");
-    return await serveBridge();
+    process.exitCode = await serveBridge();
   },
 });
 
-const installSkill = localCommand({
-  description: "Install the toy-box-slack skill where Copilot leads find it",
-  input: z.object({}).strict(),
-  run: () => installBundledSkill(),
+const installSkill = defineCommand({
+  meta: {
+    name: "install-skill",
+    description: "Install the toy-box-slack skill where Copilot leads find it",
+  },
+  async run() {
+    process.exitCode = await installBundledSkill();
+  },
 });
 
-await runCli(
-  {
+const main = defineCommand({
+  meta: {
+    name: "toy-box-slack",
     version,
     description: "Let a Toy Box channel's lead watch and answer a Slack channel",
-    commands: { ...socketCommands(), serve, "install-skill": installSkill },
   },
-  process.argv.slice(2),
-);
+  subCommands: { ...socketCommands(), serve, "install-skill": installSkill },
+});
+
+await runMain(main);

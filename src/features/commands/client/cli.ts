@@ -1,134 +1,138 @@
-// The toy-box-slack command line.
+// The CLI.
 //
-// citty dispatches each command and answers --help and --version. Every command reads its command
-// line with the same strict grammar, so a mistake is refused the same way whichever end runs it: a
-// command the bridge serves takes its grammar from its contract, and a command the CLI runs
-// itself, such as serve, declares its own. citty skips an option written before the command and
-// takes any key an object has as a command name, such as `toString`, so the CLI refuses a command
-// line that doesn't start with one of its commands before citty reads it.
+// Every command the bridge serves becomes a citty command whose options are its input's fields,
+// plus --channel and --json. The CLI forwards the text it read with what its environment says about
+// the caller, prints the answer, and exits 0 when the command ran, 1 when it didn't or may not
+// have, and 2 when no bridge is running. It keeps no state, and never talks to Slack or Toy Box.
 
-import { defineCommand, runMain, type CommandDef, type CommandMeta } from "citty";
-import type { z } from "zod";
-import { commandContracts } from "@commands/model";
+import { homedir } from "node:os";
+import { defineCommand, type ArgsDef, type CommandDef } from "citty";
+import { resolveDataFolder } from "@bridge/server/dataFolder";
+import { BridgeRefusedError } from "@bridge/server/refusal";
+import { commandSocketPath } from "@bridge/server/socket";
+import { commands, optionName, type CommandSpec } from "@commands/model";
+import { readCallerFacts } from "@commands/model/callers";
 import {
-  checkCommandInput,
-  commandNameProblem,
-  parseCommandLine,
-  presentCommands,
-  presentUsage,
-  type CommandGrammar,
-} from "@commands/model/commandLine";
-import type { CommandContract } from "@commands/model/contract";
-import { explain } from "@commands/model/outcome";
-import { printOutcome, printToProcess, runCommandLine, type Print } from "./run";
+  COMMAND_TIMEOUT,
+  commandErrorSchema,
+  commandPath,
+  type CommandAnswer,
+  type CommandCall,
+} from "@commands/model/protocol";
 
-/** One command the CLI offers: the grammar its command line is read with, and how it runs. */
-export type CliCommand = {
-  grammar: CommandGrammar;
-  /** Runs it as `name` for `args`, which follow its name, and resolves with the exit code. */
-  run(name: string, args: readonly string[]): Promise<number>;
+export type ExitCode = 0 | 1 | 2;
+
+/** How a call went: its exit code, the Markdown to print, and what --json prints instead. */
+export type CallOutcome = { exitCode: ExitCode; text: string; json: unknown };
+
+export type CallOptions = {
+  /** The Toy Box channel --channel names. */
+  channelId?: string | null;
+  env?: Record<string, string | undefined>;
+  home?: string;
+  /** How long to wait for the bridge's answer, in milliseconds. */
+  timeout?: number;
 };
 
-/** What `toy-box-slack --help` and `--version` say, and the commands it has. */
-export type Cli = {
-  version: string;
-  description: string;
-  commands: Record<string, CliCommand>;
-};
-
-/** A command for each command `contracts` names, except steps, which runs it over the socket. */
-export function socketCommands(
-  contracts: Record<string, CommandContract> = commandContracts,
-): Record<string, CliCommand> {
-  const offered = Object.entries(contracts).filter(([, contract]) => !contract.step);
-  return Object.fromEntries(
-    offered.map(([name, contract]) => [
-      name,
-      { grammar: contract, run: (name, args) => runCommandLine(name, contract, args) },
-    ]),
-  );
-}
-
-/**
- * A command the CLI runs itself, such as serve, with a grammar like a contract's but without
- * --channel and --json. Its command line is read as strictly as any other, and `run` gets the
- * input its schema parsed.
- */
-export function localCommand<Input extends z.ZodObject>(
-  {
-    run,
-    ...grammar
-  }: Pick<CommandContract<Input>, "description" | "input" | "positionals"> & {
-    run: (input: z.output<Input>) => Promise<number>;
+const sharedArgs = {
+  channel: {
+    type: "string",
+    description: "The Toy Box channel to act for, when you run it at a terminal",
   },
-  { print = printToProcess }: { print?: Print } = {},
-): CliCommand {
-  const local: CommandGrammar = { ...grammar, local: true };
-  return {
-    grammar: local,
-    async run(name, args) {
-      const parsed = parseCommandLine(name, local, args);
-      const checked =
-        parsed.kind === "parsed" ? checkCommandInput(name, local, parsed.values) : parsed;
-      if (checked.kind === "refused") {
-        return printOutcome(explain(1, checked.message), false, print);
-      }
-      return await run(checked.input as z.output<Input>);
-    },
-  };
-}
+  json: { type: "boolean", description: "Print the result as JSON" },
+} as const satisfies ArgsDef;
 
-/** Runs the command `args` name, and sets the exit code it ends with. */
-export async function runCli(
-  { version, description, commands }: Cli,
-  args: string[],
-): Promise<void> {
-  const problem = commandNameProblem(args, Object.keys(commands));
-  if (problem !== null) {
-    process.exitCode = printOutcome(explain(1, problem), args.includes("--json"), printToProcess);
-    return;
-  }
-  const subCommands = Object.fromEntries(
-    Object.entries(commands).map(([name, command]) => [
-      name,
-      defineCommand({
-        meta: { name, description: command.grammar.description },
-        async run({ rawArgs }) {
-          process.exitCode = await command.run(name, rawArgs);
-        },
-      }),
-    ]),
+// Errors that mean nothing listens on the socket, so the call never reached a bridge.
+const notListening = new Set(["ENOENT", "ENOTDIR", "ENAMETOOLONG", "ECONNREFUSED", "ENOTSOCK"]);
+
+/** A citty command for each command the bridge serves. */
+export function socketCommands(): Record<string, CommandDef> {
+  return Object.fromEntries(
+    Object.entries(commands).map(([name, spec]) => [name, socketCommand(name, spec)]),
   );
-  const main = defineCommand({
-    meta: { name: "toy-box-slack", version, description },
-    subCommands,
-  });
-  await runMain(main, {
-    rawArgs: args,
-    async showUsage(command) {
-      const help = presentHelp((await metaOf(command))?.name, description, commands);
-      printToProcess("stdout", `${help}\n`);
+}
+
+/** Calls `name` on the bridge with `input`, as `toy-box-slack <name>` does. */
+export async function callBridge(
+  name: string,
+  input: Record<string, unknown>,
+  {
+    channelId = null,
+    env = process.env,
+    home = homedir(),
+    timeout = COMMAND_TIMEOUT,
+  }: CallOptions = {},
+): Promise<CallOutcome> {
+  let dataFolder: string;
+  try {
+    dataFolder = resolveDataFolder(env, home);
+  } catch (error) {
+    if (!(error instanceof BridgeRefusedError)) throw error;
+    return failed(1, error.message);
+  }
+  const call: CommandCall = { caller: readCallerFacts(env, channelId), input };
+  let response: Response;
+  try {
+    response = await fetch(`http://localhost${commandPath(name)}`, {
+      unix: commandSocketPath(dataFolder),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(call),
+      keepalive: false,
+      signal: AbortSignal.timeout(timeout),
+    });
+  } catch (error) {
+    if (notListening.has((error as { code?: string } | null)?.code ?? "")) {
+      return failed(
+        2,
+        `No bridge is running for ${dataFolder}, so \`${name}\` didn't run. Start it with \`toy-box-slack serve\`.`,
+      );
+    }
+    return failed(1, unanswered(name));
+  }
+  const body: unknown = await response.json().catch(() => undefined);
+  if (response.ok && isAnswer(body)) return { exitCode: 0, text: body.text, json: body.result };
+  const error = commandErrorSchema.safeParse(body);
+  return failed(1, error.success ? error.data.error : unanswered(name));
+}
+
+/** Prints `outcome` as the CLI does, as JSON on stdout with --json. */
+export function printOutcome({ exitCode, text, json }: CallOutcome, asJson: boolean): void {
+  if (asJson) process.stdout.write(`${JSON.stringify(json, null, 2)}\n`);
+  else process[exitCode === 0 ? "stdout" : "stderr"].write(`${text}\n`);
+}
+
+function socketCommand(name: string, spec: CommandSpec): CommandDef {
+  const fields = Object.entries(spec.input.shape);
+  const args: ArgsDef = { ...sharedArgs };
+  for (const [field, schema] of fields) {
+    const { description } = schema;
+    args[optionName(field)] = spec.positionals?.includes(field)
+      ? { type: "positional", description, required: !schema.safeParse(undefined).success }
+      : { type: "string", description };
+  }
+  return defineCommand({
+    meta: { name, description: spec.description },
+    args,
+    async run({ args: read }) {
+      const input: Record<string, unknown> = {};
+      for (const [field] of fields) input[field] = read[optionName(field)];
+      const channelId = typeof read.channel === "string" ? read.channel : null;
+      const outcome = await callBridge(name, input, { channelId });
+      printOutcome(outcome, read.json === true);
+      process.exitCode = outcome.exitCode;
     },
   });
 }
 
-// The help for the command citty found, or for the CLI when it found none of ours.
-function presentHelp(
-  name: string | undefined,
-  description: string,
-  commands: Record<string, CliCommand>,
-): string {
-  if (name !== undefined && Object.hasOwn(commands, name)) {
-    return presentUsage(name, commands[name].grammar);
-  }
-  const rows = Object.entries(commands).map(([name, command]) => ({
-    name,
-    description: command.grammar.description,
-  }));
-  return presentCommands(description, rows);
+function failed(exitCode: ExitCode, error: string): CallOutcome {
+  return { exitCode, text: error, json: { error } };
 }
 
-async function metaOf(command: Pick<CommandDef, "meta">): Promise<CommandMeta | undefined> {
-  const { meta } = command;
-  return typeof meta === "function" ? await meta() : await meta;
+function unanswered(name: string): string {
+  return `The bridge didn't answer \`${name}\`, so it may or may not have run. Run \`toy-box-slack status\` before you try again.`;
+}
+
+function isAnswer(body: unknown): body is CommandAnswer {
+  return typeof body === "object" && body !== null && "text" in body && "result" in body;
 }

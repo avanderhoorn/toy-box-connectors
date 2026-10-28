@@ -11,7 +11,7 @@ import { createStoredInstallation } from "@slackapi/server/testFixtures";
 /**
  * Persist an active Link fixture so rows that belong to a Link can be stored. It watches C-{id},
  * which the owner approved as a private channel of T-home. `columns` replace the fixture's, such as
- * its settings or a Toy Box channel and routine a fake serves.
+ * its settings or a Toy Box channel a fake serves.
  */
 export function createStoredLink(
   database: BridgeDatabase,
@@ -19,7 +19,6 @@ export function createStoredLink(
   columns: {
     toybox_channel_id?: string;
     slack_channel_id?: string;
-    requests_routine_id?: string;
     status?: "active" | "paused" | "suspended";
     status_reason?: string | null;
     request_mode?: "mention" | "all";
@@ -34,8 +33,6 @@ export function createStoredLink(
     slack_channel_id: `C-${id}`,
     status: "active",
     approved_audience: JSON.stringify(approved ?? privateAudience()),
-    requests_routine_id: `routine-${id}`,
-    routine_state: "present",
     linked_at_ts: "1700000000.000100",
     created_at: 0,
     updated_at: 0,
@@ -62,10 +59,6 @@ export async function fillEveryTable(database: BridgeDatabase): Promise<void> {
     await transaction`INSERT INTO channel_aliases VALUES ('C-old', 'C-link', 0)`;
     await transaction`INSERT INTO users (user_id) VALUES ('U-carol')`;
     await transaction`INSERT INTO user_aliases VALUES ('W-carol', 'U-carol')`;
-    await transaction`
-      INSERT INTO link_routines VALUES ('link', 'release-notes', 'routine-notes', 'present', 'week',
-        '0 9 * * 1', 0)
-    `;
     await transaction`INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-carol', 0)`;
     await transaction`
       INSERT INTO threads (channel_id, thread_ts, tracked_reason)
@@ -82,13 +75,11 @@ export async function fillEveryTable(database: BridgeDatabase): Promise<void> {
         ('F-kept', 'C-link', '1700000100.000100', 'fetched', 'F-kept/report.pdf', 0),
         ('F-indexed', 'C-link', '1700000100.000100', 'indexed', NULL, NULL)
     `;
-    await transaction`INSERT INTO wake_state (link_id) VALUES ('link')`;
-    await transaction`INSERT INTO wakes (link_id, at, kind, outcome) VALUES ('link', 0, 'requests', 'ran')`;
+    await transaction`INSERT INTO wakes (link_id, at, outcome) VALUES ('link', 0, 'ran')`;
     await transaction`
       INSERT INTO request_messages (request_id, channel_id, ts)
       VALUES (1, 'C-link', '1700000100.000200')
     `;
-    await transaction`INSERT INTO toybox_streams (toybox_channel_id) VALUES ('toybox-link')`;
   });
 }
 

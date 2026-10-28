@@ -1,10 +1,10 @@
 # Links
 
-Links hold the owner's settings for each Toy Box channel's Slack connection: which Slack channel it watches, who may make requests, and which routines the lead registered.
+Links hold the owner's settings for each Toy Box channel's Slack connection: which Slack channel it watches and who may make requests.
 
 ## Domain model
 
-A link binds one Toy Box channel to one Slack channel. Its allowlist names Slack people by exact user ID, and only they can make the lead act. Request mode is `mention` by default or `all`, and observe mode is `requesters` by default or `channel`. A link waits for its requests routine before it becomes active. It keeps its channel's audience as the owner approved it, and the bridge suspends it when Slack or Toy Box makes continuing unsafe.
+A link binds one Toy Box channel to one Slack channel. Its allowlist names Slack people by exact user ID, and only they can make the lead act. Request mode is `mention` by default or `all`, and observe mode is `requesters` by default or `channel`. It keeps its channel's audience as the owner approved it, and the bridge suspends it when Slack or Toy Box makes continuing unsafe.
 
 ## Boundaries and invariants
 

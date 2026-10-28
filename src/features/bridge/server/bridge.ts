@@ -3,27 +3,22 @@
 // The bridge prepares its data folder, reads its settings, takes the
 // single-bridge lock, and only then opens `bridge.db`, so a second bridge stops
 // before it opens anything.
-// Then it starts its work: following each linked Toy Box channel, connecting to
-// Slack once both tokens are set, waking leads while it can use Slack, and
-// answering commands on its socket. It lets go of everything in the reverse
-// order, so it stops taking commands before anything they use stops.
+// Then it starts its work: connecting to Slack once both tokens are set, waking
+// leads, and answering commands on its socket. It lets go of everything in the
+// reverse order, so it stops taking commands before anything they use stops.
 //
 // A part that fails in a way retrying can't fix, such as a storage error,
 // reports it through one fatal path, and the bridge exits so launchd restarts
 // it.
 
 import { join } from "node:path";
-import { commandContracts } from "@commands/model";
 import { unconfiguredSlack, type SlackState } from "@commands/model/status";
-import { isSlackUsable } from "@commands/model/withoutSlack";
 import { dismissCommand } from "@commands/server/dismiss";
-import { holdCommand } from "@commands/server/hold";
 import { inboxCommand } from "@commands/server/inbox";
-import { routinesCommand } from "@commands/server/routines";
 import { serveCommands } from "@commands/server/serve";
 import { statusCommand } from "@commands/server/status";
 import { createBotClient } from "@slackapi/server/botClient";
-import { startToyBoxClient, type ToyBoxClient } from "@toybox/server";
+import { wakeLead } from "@toybox/server";
 import { startWakeScheduler, type WakeScheduler } from "@wakes/server";
 import { prepareDataFolder, resolveDataFolder } from "./dataFolder";
 import { openBridgeDatabase, type BridgeDatabase } from "./database";
@@ -72,7 +67,6 @@ export async function startBridge(
   const lock = await acquireBridgeLock(join(dataFolder, "bridge.lock"));
   const failure = Promise.withResolvers<unknown>();
   let database: BridgeDatabase | undefined;
-  let toyBox: ToyBoxClient | undefined;
   let scheduler: WakeScheduler | undefined;
   let slack: SlackSupervisor | undefined;
   let socket: CommandSocket | undefined;
@@ -82,7 +76,6 @@ export async function startBridge(
       await socket?.stop();
       await scheduler?.stop();
       await slack?.stop();
-      await toyBox?.stop();
       await database?.close();
     } finally {
       await lock.release();
@@ -92,15 +85,8 @@ export async function startBridge(
   try {
     database = await openBridgeDatabase(join(dataFolder, "bridge.db"));
     const filesFolder = join(dataFolder, "files");
-    toyBox = startToyBoxClient(database, {
-      origin: settings.toyBoxOrigin,
-      onChange: () => scheduler?.reconsider(),
-      onError: failure.resolve,
-      timings: settings.wakeTimings,
-    });
     // Slack is supervised exactly when both tokens are set.
     const slackState = (): SlackState => unconfiguredSlack(settings) ?? slack!.state();
-    const slackUsable = () => isSlackUsable(slackState().connection);
     const { botToken, appToken, slackApiUrl } = settings;
     if (botToken && appToken) {
       const bot = createBotClient(database, botToken, {
@@ -116,34 +102,23 @@ export async function startBridge(
         timings: settings.wakeTimings,
       });
     }
-    scheduler = startWakeScheduler(database, toyBox, {
-      slackUsable,
+    const origin = settings.toyBoxOrigin;
+    scheduler = startWakeScheduler(database, (channelId) => wakeLead(origin, channelId), {
       onError: failure.resolve,
       timings: settings.wakeTimings,
     });
-    const origin = settings.toyBoxOrigin;
     socket = listenForCommands(
       commandSocketPath(dataFolder),
-      serveCommands({
-        contracts: commandContracts,
-        handlers: {
-          status: statusCommand({ database, origin, slack: slackState, toyBox, wakes: scheduler }),
-          inbox: inboxCommand({
-            database,
-            wakes: scheduler,
-            workspaceUrl: () => slack?.workspaceUrl() ?? null,
-          }),
-          hold: holdCommand({ database, wakes: scheduler }),
-          dismiss: dismissCommand({ database, wakes: scheduler }),
-          routines: routinesCommand({ database }),
-        },
-        database,
-        origin,
-        toyBox,
-        slack: slackState,
+      serveCommands(database, {
+        inbox: inboxCommand({
+          database,
+          wakes: scheduler,
+          workspaceUrl: () => slack?.workspaceUrl() ?? null,
+        }),
+        dismiss: dismissCommand({ database, wakes: scheduler }),
+        status: statusCommand({ database, slack: slackState, timings: settings.wakeTimings }),
       }),
     );
-    await toyBox.followLinks();
     return { failed: failure.promise, stop };
   } catch (error) {
     await stop();

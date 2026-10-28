@@ -1,32 +1,41 @@
-// A running bridge with one link, which follows a channel in a fake Toy Box.
+// A running bridge with one link, whose lead leads a channel in a fake Toy Box.
 
 import { onTestFinished } from "bun:test";
 import { join } from "node:path";
-import { z } from "zod";
 import { prepareDataFolder } from "@bridge/server/dataFolder";
 import { openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
 import { commandSocketPath } from "@bridge/server/socket";
 import { createTestFolder } from "@bridge/server/testFixtures";
-import type { CallerFacts } from "@commands/model/callers";
-import { inboxResultSchema } from "@commands/model/inbox";
-import { commandPath, commandRefusalSchema, commandResultSchema } from "@commands/model/protocol";
-import { statusResultSchema } from "@commands/model/status";
+import { callBridge } from "@commands/client/cli";
+import type { Inbox } from "@commands/model/inbox";
 import { createStoredLink } from "@links/server/testFixtures";
-import { routineTemplates } from "@toybox/model/routines";
+import { createStoredRequest } from "@requests/server/testFixtures";
 import { startFakeToyBox } from "../fakes/toybox";
 import { spawnBridge } from "./bridgeProcess";
 
-const answerSchema = z.union([commandResultSchema(statusResultSchema), commandRefusalSchema]);
+/** The routine a lead registers so the bridge can wake it. */
+export const REQUESTS_ROUTINE = {
+  title: "Slack requests",
+  schedule: "0 9 * * 1-5",
+  prompt: "Run `toy-box-slack inbox` and answer what's waiting.",
+};
+
+const DAY = 24 * 60 * 60_000;
+
+/** Stores a request on the link that arrived just now, so it waits on the lead for a day. */
+export function storeNewRequest(database: BridgeDatabase) {
+  const at = Date.now();
+  return createStoredRequest(database, { createdAt: at, changedAt: at, expiresAt: at + DAY });
+}
 
 /** Settings of a stored link, such as its request mode. */
 export type LinkColumns = NonNullable<Parameters<typeof createStoredLink>[2]>;
 
 /**
- * A bridge running for a data folder whose link follows a fake Toy Box channel and watches C-link,
- * with `env` added to its environment. The channel's requests routine is the template. The link
- * allows the people in `allowed`, and `link` changes its settings. `prepare` changes the data
- * folder and its database before the bridge opens them. Once the bridge stops, `serve` starts
- * another over the same data folder.
+ * A bridge running for a data folder whose link watches C-link for a fake Toy Box channel that has
+ * the requests routine, with `env` added to its environment. The link allows the people in
+ * `allowed`, and `link` changes its settings. `prepare` changes the database before the bridge
+ * opens it. Once the bridge stops, `serve` starts another over the same data folder.
  */
 export async function startLinkedBridge({
   env = {},
@@ -37,22 +46,18 @@ export async function startLinkedBridge({
   env?: Record<string, string>;
   link?: LinkColumns;
   allowed?: readonly string[];
-  prepare?: (database: BridgeDatabase, dataFolder: string) => Promise<unknown>;
+  prepare?: (database: BridgeDatabase) => Promise<unknown>;
 } = {}) {
   const toyBox = startFakeToyBox();
   onTestFinished(() => toyBox.stop());
   const channelId = toyBox.addChannel();
-  const routine = toyBox.scheduleRoutine(channelId, routineTemplates.requests);
+  const routine = toyBox.scheduleRoutine(channelId, REQUESTS_ROUTINE);
   const home = createTestFolder();
   const dataFolder = join(home, ".toy-box-slack");
   prepareDataFolder(dataFolder);
   const database = await openBridgeDatabase(join(dataFolder, "bridge.db"));
   try {
-    await createStoredLink(database, "link", {
-      toybox_channel_id: channelId,
-      requests_routine_id: routine.id,
-      ...link,
-    });
+    await createStoredLink(database, "link", { toybox_channel_id: channelId, ...link });
     await database.write(async (transaction) => {
       for (const userId of allowed) {
         await transaction`
@@ -60,13 +65,11 @@ export async function startLinkedBridge({
         `;
       }
     });
-    await prepare?.(database, dataFolder);
+    await prepare?.(database);
   } finally {
     await database.close();
   }
   const bridge = await serve(env);
-  const socket = commandSocketPath(dataFolder);
-  const port = Number(new URL(toyBox.url).port);
 
   /** Runs a bridge for the data folder with `added` in its environment, once it says it's running. */
   async function serve(added: Record<string, string>) {
@@ -75,33 +78,10 @@ export async function startLinkedBridge({
     return started;
   }
 
-  /**
-   * Calls `status` the way the CLI does for `sessionId`, which runs in the fake Toy Box like
-   * every agent, or for the operator at a terminal when it's null.
-   */
-  async function status(sessionId: string | null, facts: Partial<CallerFacts> = {}) {
-    const response = await fetch(`http://localhost${commandPath("status")}`, {
-      unix: socket,
-      method: "POST",
-      body: JSON.stringify({
-        caller: { sessionId, toyBoxPort: sessionId && port, channelId: null, ...facts },
-        input: {},
-      }),
-    });
-    return { status: response.status, answer: answerSchema.parse(await response.json()) };
-  }
-
-  /** Calls `inbox` the way the CLI does for the channel's lead, which reads what it shows. */
-  async function inbox() {
-    const response = await fetch(`http://localhost${commandPath("inbox")}`, {
-      unix: socket,
-      method: "POST",
-      body: JSON.stringify({
-        caller: { sessionId: channelId, toyBoxPort: port, channelId: null },
-        input: {},
-      }),
-    });
-    return commandResultSchema(inboxResultSchema).parse(await response.json()).result;
+  /** Calls `name` the way the CLI does, in session `sessionId`, or at a terminal when it's null. */
+  function call(name: string, sessionId: string | null, channel: string | null = null) {
+    const env = { COPILOT_AGENT_SESSION_ID: sessionId ?? undefined };
+    return callBridge(name, {}, { channelId: channel, env, home });
   }
 
   return {
@@ -111,10 +91,12 @@ export async function startLinkedBridge({
     bridge,
     home,
     dataFolder,
-    socket,
-    port,
+    socket: commandSocketPath(dataFolder),
     serve,
-    status,
-    inbox,
+    /** Status for `sessionId`, or for the owner at a terminal, of the link --channel names. */
+    status: (sessionId: string | null, channel: string | null = null) =>
+      call("status", sessionId, channel),
+    /** What inbox shows the channel's lead, which marks what it shows read. */
+    inbox: async () => (await call("inbox", channelId)).json as Inbox,
   };
 }

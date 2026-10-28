@@ -1,80 +1,23 @@
-// The status command.
+// What status shows.
 //
-// Status is where every banner points. It says whether Slack is connected and, for each link in
-// view, whether the bridge follows its Toy Box channel, has every message, can wake its lead and
-// still has the routines it runs, each with what to do about anything that's wrong. The lead and
-// members see their own channel's link, and the operator sees every link unless it names one.
+// Status is where the lead or the owner looks when Slack goes quiet. It says whether Slack is
+// connected and, for each link in view, its settings, who it answers, the requests waiting and what
+// the bridge last decided about waking the lead, each with what to do about anything that's wrong.
 
-import { z } from "zod";
-import { publishCommand, REQUESTS_COMMAND } from "@toybox/model";
-import { RELEASE_NOTES_SERIES } from "@toybox/model/routines";
-import { coverageSchema, describeSuspension, slackConnectionSchema } from "./banner";
-import { commandContract, type PresentContext } from "./contract";
+import { suspensions, type SuspendReason } from "@links/model/status";
+import { STALL_AFTER, type WakeDecision, type WakeRun } from "@wakes/model";
+import { ago, count, duration, joinNames } from "./wording";
 
-const wakeBlockSchema = z.enum(["link_inactive", "routine_missing", "provider", "refused"]);
-
-const wakeSchema = z
-  .discriminatedUnion("kind", [
-    z
-      .object({
-        kind: z.literal("wake"),
-        reason: z.enum(["requests", "reminder", "catch_up"]),
-      })
-      .strict(),
-    z
-      .object({
-        kind: z.literal("wait"),
-        until: z.union([z.number().int(), z.enum(["lead_idle", "toy_box", "slack"])]),
-      })
-      .strict(),
-    z.object({ kind: z.literal("idle") }).strict(),
-    z.object({ kind: z.literal("blocked"), reason: wakeBlockSchema }).strict(),
-    z.object({ kind: z.literal("stalled") }).strict(),
-  ])
-  .describe("What the bridge last decided about waking the lead");
-
-const routineStatusSchema = z
-  .object({
-    series: z
-      .string()
-      .nullable()
-      .describe("The publication series it posts, or null for the requests routine"),
-    routineId: z.string(),
-    period: z
-      .enum(["day", "week"])
-      .nullable()
-      .describe("How often the series publishes, or null for the requests routine"),
-    state: z
-      .enum(["present", "drifted", "missing"])
-      .describe(
-        "present; drifted once its prompt no longer runs its command; missing once deleted",
-      ),
-  })
-  .strict();
-
-const linkStatusSchema = z
-  .object({
-    id: z.string(),
-    toyBoxChannelId: z.string(),
-    slackChannelId: z.string(),
-    status: z.enum(["active", "paused", "suspended"]),
-    statusReason: z.string().nullable().describe("Why the bridge suspended the link"),
-    coverage: coverageSchema,
-    following: z.boolean().describe("Whether the bridge is connected to the channel's stream"),
-    wake: wakeSchema.nullable().describe("Null until the bridge first decides"),
-    routines: z.array(routineStatusSchema).describe("The requests routine first"),
-  })
-  .strict();
-export type LinkStatus = z.output<typeof linkStatusSchema>;
+export type SlackConnection =
+  | "connected"
+  | "connecting"
+  | "reconnecting"
+  | "unconfigured"
+  | "auth_failed"
+  | "refused";
 
 /** The Slack connection, and what to do about it when something's wrong. */
-export const slackStateSchema = z
-  .object({
-    connection: slackConnectionSchema,
-    problem: z.string().nullable().describe("What's wrong with Slack and how to fix it"),
-  })
-  .strict();
-export type SlackState = z.output<typeof slackStateSchema>;
+export type SlackState = { connection: SlackConnection; problem: string | null };
 
 /** Slack's state while a token is missing, naming each one, or null once both are set. */
 export function unconfiguredSlack(tokens: {
@@ -93,45 +36,37 @@ export function unconfiguredSlack(tokens: {
   };
 }
 
-export const statusResultSchema = z
-  .object({
-    slack: slackStateSchema,
-    toyBox: z.string().describe("The origin of the Toy Box the bridge serves"),
-    channelId: z.string().nullable().describe("The Toy Box channel in view, or null for all"),
-    links: z.array(linkStatusSchema),
-  })
-  .strict();
-export type StatusResult = z.output<typeof statusResultSchema>;
+export type LinkStatus = {
+  toyBoxChannelId: string;
+  /** The Slack channel, as #name. */
+  slackChannel: string;
+  status: "active" | "paused" | "suspended";
+  statusReason: string | null;
+  requestMode: "mention" | "all";
+  observe: "requesters" | "channel";
+  /** The names of the people the link answers. */
+  allowlist: string[];
+  pending: number;
+  /** Requests the lead has read but not answered. */
+  read: number;
+  wake: WakeDecision;
+  /** Toy Box's answer to the latest wake, or null before the first. */
+  lastWake: WakeRun | null;
+};
 
-export const statusContract = commandContract({
-  description: "Show Slack's connection and the health of each link",
-  roles: ["lead", "member", "operator"],
-  scope: "bridge",
-  withoutSlack: true,
-  input: z.object({}).strict(),
-  result: statusResultSchema,
-  present: presentStatus,
-});
+export type Status = { slack: SlackState; links: LinkStatus[] };
 
 /** Status as Markdown, a section for Slack and one for each link. */
-export function presentStatus(status: StatusResult, { at }: PresentContext): string {
-  const sections = [presentSlack(status.slack), `Toy Box: ${status.toyBox}`];
-  if (status.links.length === 0) {
-    sections.push(
-      status.channelId === null
-        ? "No Toy Box channel is linked to Slack yet."
-        : `Toy Box channel ${status.channelId} isn't linked to Slack. Run \`toy-box-slack link --slack-channel <id> --routine <id>\` to link it.`,
-    );
-  }
-  for (const link of status.links) sections.push(presentLink(link, at));
+export function presentStatus({ slack, links }: Status, at: number): string {
+  const sections = [
+    `## Slack\n${[connections[slack.connection], slack.problem].filter(Boolean).join(" ")}`,
+  ];
+  if (links.length === 0) sections.push("No Toy Box channel is linked to Slack yet.");
+  for (const link of links) sections.push(presentLink(link, at));
   return sections.join("\n\n");
 }
 
-function presentSlack({ connection, problem }: SlackState): string {
-  return `## Slack\n${[slackStates[connection], problem].filter(Boolean).join(" ")}`;
-}
-
-const slackStates: Record<SlackState["connection"], string> = {
+const connections: Record<SlackConnection, string> = {
   connected: "Connected.",
   connecting: "Connecting.",
   reconnecting: "Reconnecting after the connection dropped.",
@@ -141,82 +76,50 @@ const slackStates: Record<SlackState["connection"], string> = {
 };
 
 function presentLink(link: LinkStatus, at: number): string {
+  const asks = link.requestMode === "all" ? "posts or mentions the bot" : "mentions the bot";
+  const people = link.allowlist.length === 0 ? "nobody yet" : joinNames(link.allowlist);
   return [
-    `## Toy Box channel ${link.toyBoxChannelId} and Slack channel ${link.slackChannelId}`,
+    `## ${link.slackChannel} and Toy Box channel ${link.toyBoxChannelId}`,
     `- Link: ${presentLinkState(link)}`,
-    `- Coverage: ${coveragePhrases[link.coverage]}`,
-    `- Toy Box: ${link.following ? "following the channel" : "not following the channel's stream yet, retrying"}`,
-    `- Wakes: ${link.wake === null ? "not decided yet" : presentWake(link.wake, at)}`,
-    ...link.routines.map((routine) => `- ${presentRoutine(routine)}`),
+    `- Answers: ${people}, when one ${asks}. Threads show ${link.observe === "channel" ? "everyone" : "only the people it answers"}.`,
+    `- Requests: ${link.pending} new or changed, ${link.read} read and not answered.`,
+    `- Wakes: ${presentWake(link, at)}`,
   ].join("\n");
 }
 
 function presentLinkState({ status, statusReason }: LinkStatus): string {
-  switch (status) {
-    case "active":
-      return "active.";
-    case "paused":
-      return "paused, so nothing new opens and posts wait. Have the owner run `toy-box-slack resume`.";
-    case "suspended": {
-      const { because, fix } = describeSuspension(statusReason);
-      return `suspended ${because}, so nothing new opens and posts wait. ${fix}`;
-    }
+  if (status === "active") return "active.";
+  if (status === "paused") {
+    return "paused, so nothing new opens and nothing posts. Have the owner run `toy-box-slack resume`.";
   }
+  const suspension = suspensions[statusReason as SuspendReason];
+  return suspension
+    ? `suspended ${suspension.because}, so nothing new opens and nothing posts. ${suspension.fix}`
+    : "suspended, so nothing new opens and nothing posts. Have the owner run `toy-box-slack resume`.";
 }
 
-const coveragePhrases: Record<LinkStatus["coverage"], string> = {
-  complete: "complete.",
-  repairing: "repairing, reading back what the bridge may have missed.",
-  partial: "partial, a repair couldn't finish, so some messages may be missing.",
-};
-
-function presentWake(wake: NonNullable<LinkStatus["wake"]>, at: number): string {
+function presentWake({ wake, lastWake }: LinkStatus, at: number): string {
+  const last =
+    lastWake && lastWake.outcome !== "ran"
+      ? ` ${unwoken[lastWake.outcome]} ${ago(at - lastWake.at)}.`
+      : "";
   switch (wake.kind) {
     case "wake":
-      return "waking the lead now.";
+      return `waking the lead now.${last}`;
     case "wait":
-      if (wake.until === "lead_idle") return "waiting for the lead's turn to end.";
-      if (wake.until === "toy_box") return "waiting for the channel's Toy Box stream.";
-      if (wake.until === "slack") return "waiting until the bridge can use Slack.";
-      return `next wake in about ${Math.max(Math.ceil((wake.until - at) / 60_000), 1)} min.`;
+      return `next wake in ${duration(wake.until - at)}.${last}`;
     case "idle":
-      return "nothing is waiting for the lead.";
+      return `nothing waits for the lead.${last}`;
     case "stalled":
-      return "stalled. The lead was woken several times without running `toy-box-slack inbox`, so the bridge won't wake it again until a request changes.";
+      return `stalled, since the lead was woken ${count(STALL_AFTER, "time")} without running \`toy-box-slack inbox\`. Wakes wait for something new in Slack.${last}`;
     case "blocked":
-      return wakeBlocks[wake.reason];
+      return `blocked until a new request, because Toy Box refused the last wake. The bridge's log says why.`;
   }
 }
 
-const wakeBlocks: Record<z.output<typeof wakeBlockSchema>, string> = {
-  link_inactive: "off while the link isn't active.",
-  routine_missing:
-    "blocked, because the requests routine is gone. Register a new one from `toy-box-slack routines --template requests`.",
-  provider:
-    "blocked for good, because the channel's lead doesn't run on Copilot. Create a Copilot channel and link that instead.",
-  refused:
-    "blocked, because Toy Box refused to run the requests routine. Register a new one from `toy-box-slack routines --template requests`.",
+const unwoken: Record<Exclude<WakeRun["outcome"], "ran">, string> = {
+  missing:
+    "No routine in this Toy Box channel runs `toy-box-slack inbox`, or the channel was deleted. Create that routine, or run `toy-box-slack unlink` if the channel is gone. Last checked",
+  failed: "Toy Box didn't answer the last wake, so the bridge retries. It last tried",
+  refused: "Toy Box refused the last wake",
 };
-
-function presentRoutine({ series, routineId, period, state }: LinkStatus["routines"][number]) {
-  const name = series === null ? "Requests routine" : `Routine for ${series}`;
-  const command = series === null ? REQUESTS_COMMAND : publishCommand(series);
-  const register = registerStep(series, period);
-  switch (state) {
-    case "present":
-      return `${name}: ${routineId}.`;
-    case "drifted":
-      return `${name}: ${routineId} no longer runs \`${command}\`. Put that back in its prompt in Toy Box, or register another ${register}.`;
-    case "missing":
-      return `${name}: ${routineId} was deleted. Register a new one ${register}.`;
-  }
-}
-
-// A routine from a template is registered again from it, since the template says how to give the
-// bridge its ID.
-function registerStep(series: string | null, period: "day" | "week" | null): string {
-  if (series === null) return "from `toy-box-slack routines --template requests`";
-  if (series === RELEASE_NOTES_SERIES)
-    return "from `toy-box-slack routines --template release-notes`";
-  return `with \`toy-box-slack routine --publish <id> --series ${series} --period ${period ?? "day"}\``;
-}

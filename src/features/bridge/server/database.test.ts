@@ -70,7 +70,6 @@ describe("openBridgeDatabase", () => {
       "cursors",
       "files",
       "installation",
-      "link_routines",
       "links",
       "messages",
       "outbox",
@@ -80,10 +79,8 @@ describe("openBridgeDatabase", () => {
       "request_messages",
       "requests",
       "threads",
-      "toybox_streams",
       "user_aliases",
       "users",
-      "wake_state",
       "wakes",
     ]);
     expect(

@@ -1,63 +1,48 @@
 // The wake scheduler.
 //
-// A pass expires the requests that waited their lifetime, so nobody is reminded of them, then reads
-// everything wake decisions need, plans, starts each run the plan names, and records each run's
-// outcome with what it changes. A pass follows any change to what a decision reads, the end of the
-// earliest wait, and at least every minute, so a new publication period or a Mac that slept is
-// noticed. Passes run one at a time, and a channel whose run is in flight or just landed isn't
-// woken again until its turn can show in presence. Nobody is woken while the bridge can't use
-// Slack.
+// A pass expires the requests that waited their lifetime, so nobody is reminded of them, prunes the
+// run log, then reads every link and wakes each lead its decision says to, one at a time,
+// recording each run's outcome. A pass follows any change to what a decision reads, every run,
+// the end of the earliest wait, and at least every minute, so a Mac that slept is noticed.
 
 import type { BridgeDatabase } from "@bridge/server/database";
 import { expireRequests } from "@requests/server/lifecycle";
 import type { RoutineRunOutcome } from "@toybox/model";
-import type { ToyBoxClient } from "@toybox/server";
-import { defaultWakeTimings, type WakeDecision, type WakeTimings } from "@wakes/model";
-import { planWakes, type Wake } from "@wakes/model/plan";
-import { readWakePass, recordWake } from "./database";
+import { decideWake, defaultWakeTimings, type WakeTimings } from "@wakes/model";
+import { pruneWakes, readLinkWakes, recordWake } from "./database";
 
 export interface WakeScheduler {
   /** Decides again, because something a wake decision reads changed. */
   reconsider(): void;
-  /** What the latest pass decided about waking a link's lead, or null before one has. */
-  decision(linkId: string): WakeDecision | null;
-  /** Stops once the pass and the runs in flight have recorded what they did. */
+  /** Stops once the pass in progress has recorded what it did. */
   stop(): Promise<void>;
 }
 
 export type WakeSchedulerOptions = {
-  /** Whether the bridge can use Slack now. Call `reconsider` when it changes. */
-  slackUsable: () => boolean;
   /** Called when the scheduler stops on an error that deciding again can't fix. */
   onError?: (error: unknown) => void;
   now?: () => number;
   timings?: WakeTimings;
 };
 
+/** Runs the routine that wakes the lead of a Toy Box channel. */
+export type WakeLead = (channelId: string) => Promise<RoutineRunOutcome>;
+
 /** The longest the scheduler goes without a pass. */
 const MAX_WAIT = 60_000;
 
 const unwoken: Record<Exclude<RoutineRunOutcome, "ran">, string> = {
-  missing: "Toy Box has no such routine",
-  refused: "Toy Box refused to run it",
-  failed: "Toy Box didn't answer, so the wake will retry",
+  missing: "no routine in the channel runs `toy-box-slack inbox`",
+  failed: "Toy Box didn't run the routine, so the wake will retry",
+  refused: "Toy Box refused to run the routine, so wakes wait for a new request",
 };
 
 /** Starts deciding at once, and again whenever `reconsider` is called. */
 export function startWakeScheduler(
   database: BridgeDatabase,
-  toyBox: Pick<ToyBoxClient, "view" | "runRoutine">,
-  {
-    slackUsable,
-    onError = () => {},
-    now = Date.now,
-    timings = defaultWakeTimings,
-  }: WakeSchedulerOptions,
+  wakeLead: WakeLead,
+  { onError = () => {}, now = Date.now, timings = defaultWakeTimings }: WakeSchedulerOptions = {},
 ): WakeScheduler {
-  // Infinity while a channel's run is in flight, then when its turn should show in presence.
-  const busyUntil = new Map<string, number>();
-  let decisions = new Map<string, WakeDecision>();
-  const runs = new Set<Promise<void>>();
   let timer: Timer | undefined;
   let deciding: Promise<void> | undefined;
   let again = false;
@@ -86,46 +71,28 @@ export function startWakeScheduler(
   async function decide() {
     clearTimeout(timer);
     const at = now();
-    await database.write((transaction) => expireRequests(transaction, at));
-    const pass = await database.read((sql) => readWakePass(sql, at));
-    if (stopped) return;
-    for (const [channelId, until] of busyUntil) if (until <= at) busyUntil.delete(channelId);
-    const plan = planWakes(at, pass, slackUsable(), toyBox.view, busyUntil, timings);
-    // A link whose channel is busy keeps the decision that started the run.
-    const previous = decisions;
-    decisions = new Map();
-    for (const { id } of pass.links) {
-      const decision = plan.decisions.get(id) ?? previous.get(id);
-      if (decision) decisions.set(id, decision);
+    await database.write(async (transaction) => {
+      await expireRequests(transaction, at);
+      await pruneWakes(transaction, at);
+    });
+    let next = at + MAX_WAIT;
+    for (const link of await database.read(readLinkWakes)) {
+      if (stopped) return;
+      const decision = decideWake(at, link, timings);
+      if (decision.kind === "wait") next = Math.min(next, decision.until);
+      if (decision.kind !== "wake") continue;
+      // A run covers what changed before it started, so it's logged at its start.
+      const startedAt = now();
+      const outcome = await wakeLead(link.channelId);
+      await database.write((transaction) => recordWake(transaction, link.id, startedAt, outcome));
+      if (outcome !== "ran") {
+        console.error(
+          `Couldn't wake the lead of Toy Box channel ${link.channelId}: ${unwoken[outcome]}.`,
+        );
+      }
+      again = true;
     }
-    for (const wake of plan.wakes) start(wake);
-    const wait = Math.min((plan.decideAt ?? Infinity) - now(), MAX_WAIT);
-    timer = setTimeout(reconsider, Math.max(wait, 0));
-  }
-
-  function start(wake: Wake) {
-    busyUntil.set(wake.channelId, Infinity);
-    const run = runWake(wake)
-      .catch(fail)
-      .finally(() => {
-        runs.delete(run);
-        reconsider();
-      });
-    runs.add(run);
-  }
-
-  async function runWake(wake: Wake) {
-    const outcome = await toyBox.runRoutine(wake.channelId, wake.routineId);
-    const at = now();
-    await database.write((transaction) => recordWake(transaction, wake, outcome, at, timings));
-    if (outcome === "ran") {
-      busyUntil.set(wake.channelId, at + timings.settle);
-      return;
-    }
-    busyUntil.delete(wake.channelId);
-    console.error(
-      `Couldn't wake the lead of Toy Box channel ${wake.channelId} with routine ${wake.routineId}: ${unwoken[outcome]}.`,
-    );
+    timer = setTimeout(reconsider, Math.max(next - now(), 0));
   }
 
   function fail(error: unknown) {
@@ -139,14 +106,10 @@ export function startWakeScheduler(
   reconsider();
   return {
     reconsider,
-    decision(linkId) {
-      return decisions.get(linkId) ?? null;
-    },
     async stop() {
       stopped = true;
       clearTimeout(timer);
       await deciding;
-      await Promise.all(runs);
     },
   };
 }

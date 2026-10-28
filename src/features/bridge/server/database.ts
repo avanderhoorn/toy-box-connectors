@@ -16,7 +16,6 @@ import {
 } from "@outbox/server/schema";
 import { initializeRequestSchema, rebuildRequestSchema } from "@requests/server/schema";
 import { initializeSlackApiSchema } from "@slackapi/server/schema";
-import { initializeToyBoxSchema } from "@toybox/server/schema";
 import { initializeWakeSchema } from "@wakes/server/schema";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
 import { BridgeRefusedError } from "./refusal";
@@ -38,7 +37,6 @@ export const bridgeMigrations: readonly Migration[] = [
     await initializeActivitySchema(transaction);
     await initializeRequestSchema(transaction);
     await initializeWakeSchema(transaction);
-    await initializeToyBoxSchema(transaction);
     await initializeOutboxSchema(transaction);
   },
   addOutboxDeliverySchema,

@@ -13,24 +13,9 @@ export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
       status              TEXT NOT NULL CHECK (status IN ('active', 'paused', 'suspended')),
       status_reason       TEXT,
       approved_audience   TEXT NOT NULL CHECK (json_valid(approved_audience)),
-      requests_routine_id TEXT NOT NULL,
-      routine_state       TEXT NOT NULL CHECK (routine_state IN ('present', 'drifted', 'missing')),
       linked_at_ts        TEXT NOT NULL,
       created_at          INTEGER NOT NULL,
       updated_at          INTEGER NOT NULL
-    );
-
-    -- A series owes catch-ups only for runs scheduled at or after registered_at, which a new
-    -- schedule moves forward.
-    CREATE TABLE link_routines (
-      link_id       TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE,
-      series        TEXT NOT NULL,
-      routine_id    TEXT NOT NULL,
-      routine_state TEXT NOT NULL CHECK (routine_state IN ('present', 'drifted', 'missing')),
-      period        TEXT NOT NULL CHECK (period IN ('day', 'week')),
-      schedule      TEXT NOT NULL,
-      registered_at INTEGER NOT NULL,
-      PRIMARY KEY (link_id, series)
     );
 
     CREATE TABLE allowlist (

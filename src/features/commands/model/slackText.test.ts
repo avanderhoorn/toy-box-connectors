@@ -1,12 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   fenceFor,
-  neutralizeMentions,
   oneLine,
   personName,
   renderSlackText,
   slackReferences,
-  withoutLeadingMention,
   type SlackNames,
 } from "./slackText";
 
@@ -109,15 +107,6 @@ test("slackReferences collects the people and channels a text names, once each",
   });
 });
 
-test("withoutLeadingMention drops only the bot's mention that opens a message", () => {
-  expect(withoutLeadingMention("<@U0BOT> can you help?", "U0BOT")).toBe("can you help?");
-  expect(withoutLeadingMention("  <@U0BOT|toy-box>, can you help?", "U0BOT")).toBe("can you help?");
-  expect(withoutLeadingMention("<@U0ALICE> can you help?", "U0BOT")).toBe(
-    "<@U0ALICE> can you help?",
-  );
-  expect(withoutLeadingMention("can you help <@U0BOT>?", "U0BOT")).toBe("can you help <@U0BOT>?");
-});
-
 describe("personName", () => {
   test("can't pass for a label the bridge adds", () => {
     expect(personName("Mallory (owner)", "U0M")).toBe("Mallory owner");
@@ -149,9 +138,9 @@ test("oneLine cuts between graphemes", () => {
   expect(oneLine("short", 5)).toBe("short");
 });
 
-test("neutralizeMentions is idempotent", () => {
-  const once = neutralizeMentions("@lead and @everyone");
-  expect(neutralizeMentions(once)).toBe(once);
+test("oneLine neutralizes a mention once, however often it's applied", () => {
+  const once = oneLine("@lead and @everyone", 80);
+  expect(oneLine(once, 80)).toBe(once);
 });
 
 test("fenceFor is longer than any run of backticks in the text", () => {

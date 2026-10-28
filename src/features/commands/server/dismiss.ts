@@ -1,29 +1,46 @@
 // The dismiss command.
 //
-// Dismiss checks the request and the revision the lead quotes, then closes the request, in one
-// transaction, so input that arrives in between makes it refuse rather than close over text the
-// lead never read. It then asks the wake scheduler to decide again, since the request no longer
-// waits on the lead.
+// Dismiss ends a request that needs no answer, and the request keeps the lead's reason. The
+// lifecycle refuses a request the lead hasn't read as it stands, so none ends over text the lead
+// didn't see.
 
-import { CommandRefusedError, type CommandHandler } from "@commands/model/contract";
-import type { dismissContract } from "@commands/model/dismiss";
-import { requestStateProblem, revisionProblem } from "@commands/model/requests";
-import { dismissStoredRequest } from "@requests/server/lifecycle";
-import { readCallerRequest, type RequestCommandOptions } from "./requests";
+import type { BridgeDatabase } from "@bridge/server/database";
+import { CommandRefusedError } from "@commands/model/protocol";
+import { dismissRequest, RequestStateError } from "@requests/model/lifecycle";
+import { readRequest, saveRequest } from "@requests/server/database";
+import type { WakeScheduler } from "@wakes/server";
+import { readCallerLink } from "./link";
+import type { CommandHandler } from "./serve";
 
-/** Dismiss for the caller's channel, which closes one request without an answer. */
+export type DismissCommandOptions = {
+  database: BridgeDatabase;
+  wakes: Pick<WakeScheduler, "reconsider">;
+};
+
 export function dismissCommand({
   database,
   wakes,
-}: RequestCommandOptions): CommandHandler<typeof dismissContract> {
-  return async ({ request: id, revision, reason }, { caller, at }) => {
+}: DismissCommandOptions): CommandHandler<"dismiss"> {
+  return async ({ request: id, reason }, { caller }) => {
     await database.write(async (transaction) => {
-      const request = await readCallerRequest(transaction, caller, id);
-      const problem = requestStateProblem(request) ?? revisionProblem(request, revision);
-      if (problem) throw new CommandRefusedError(problem.rule, problem.message);
-      await dismissStoredRequest(transaction, request, reason, at);
+      const link = await readCallerLink(transaction, caller);
+      const request = await readRequest(transaction, id);
+      // Another link's request is refused like a missing one, so a lead learns nothing of it.
+      if (request === null || request.linkId !== link.id) {
+        throw new CommandRefusedError(
+          `This channel has no request r${id}. Run \`toy-box-slack inbox\` to see what waits on you.`,
+        );
+      }
+      try {
+        await saveRequest(transaction, dismissRequest(request, reason));
+      } catch (error) {
+        if (!(error instanceof RequestStateError)) throw error;
+        throw new CommandRefusedError(
+          `r${id} wasn't dismissed. ${error.message} Run \`toy-box-slack inbox\` to see what waits on you.`,
+        );
+      }
     });
     wakes.reconsider();
-    return { request: id };
+    return { result: { request: `r${id}`, state: "dismissed" }, text: `Dismissed r${id}.` };
   };
 }

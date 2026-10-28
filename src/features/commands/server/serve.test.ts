@@ -1,342 +1,102 @@
-import { describe, expect, onTestFinished, spyOn, test } from "bun:test";
-import { z } from "zod";
-import type { BridgeDatabase } from "@bridge/server/database";
+import { expect, onTestFinished, spyOn, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import type { CallerFacts } from "@commands/model/callers";
-import {
-  commandContract,
-  CommandRefusedError,
-  type CommandHandlersFor,
-} from "@commands/model/contract";
-import { commandPath, type CommandRefusal } from "@commands/model/protocol";
-import type { SlackState } from "@commands/model/status";
+import { commandPath, CommandRefusedError } from "@commands/model/protocol";
 import { createStoredLink } from "@links/server/testFixtures";
-import type { ToyBoxCatalog } from "@toybox/model";
 import { serveCommands } from "./serve";
 
-const AT = Date.parse("2026-10-27T16:00:00Z");
+const LEAD = { sessionId: "toybox-link", channelId: null };
 
-const catalog: ToyBoxCatalog = {
-  version: 1,
-  channels: [{ id: "toybox-link", name: "Release engineering", model: { provider: "copilot" } }],
-  members: [{ id: "agent-reviewer", channelId: "toybox-link", name: "Reviewer" }],
-  working: [],
-};
-
-const lead = { sessionId: "toybox-link", toyBoxPort: 3000, channelId: null };
-const member = { sessionId: "agent-reviewer", toyBoxPort: 3000, channelId: null };
-const operator = { sessionId: null, toyBoxPort: null, channelId: "toybox-link" };
-
-const done = z.object({ done: z.string() }).strict();
-const contracts = {
-  pause: commandContract({
-    description: "Pause the channel's link",
-    roles: ["lead", "operator"],
-    scope: "channel",
-    input: z.object({ note: z.string().optional().describe("Why it's paused") }).strict(),
-    result: done,
-    present: (result) => result.done,
-  }),
-  peek: commandContract({
-    description: "Look at the bridge, even without Slack",
-    roles: ["lead", "member", "operator"],
-    scope: "bridge",
-    withoutSlack: true,
-    input: z.object({}).strict(),
-    result: done,
-    present: (result) => result.done,
-  }),
-  sweep: commandContract({
-    description: "Something only the operator may do, even without Slack",
-    roles: ["operator"],
-    scope: "bridge",
-    withoutSlack: true,
-    input: z.object({}).strict(),
-    result: done,
-    present: (result) => result.done,
-  }),
-};
-type Handlers = CommandHandlersFor<typeof contracts>;
-
-/** Any answer, loosely, so a test can compare it whole or pick at it. */
-type Answer = Partial<CommandRefusal> & { result?: unknown; error?: string };
-
-type ServerOptions = {
-  catalog?: ToyBoxCatalog | null;
-  loadCatalog?: () => Promise<ToyBoxCatalog>;
-  slack?: SlackState;
-  pause?: (database: BridgeDatabase) => Handlers["pause"];
-};
-
-async function startServer(options: ServerOptions = {}) {
+/** Calls a bridge whose status answers, whose inbox refuses, and whose dismiss fails. */
+async function call(name: string, body: unknown) {
   const database = await openTestDatabase();
   await createStoredLink(database);
-  let loads = 0;
-  const pause = options.pause ?? pauseLink;
-  const answer = serveCommands({
-    contracts,
-    handlers: {
-      pause: pause(database),
-      peek: async (_input, { caller }) => ({ done: `${caller.role} looked` }),
-      sweep: async () => ({ done: "swept" }),
-    },
+  const serve = serveCommands(
     database,
-    origin: new URL("http://127.0.0.1:3000"),
-    toyBox: {
-      catalog: () => (options.catalog === undefined ? catalog : options.catalog),
-      loadCatalog: () => {
-        loads += 1;
-        return options.loadCatalog?.() ?? Promise.resolve(catalog);
+    {
+      status: async (_, context) => ({ result: context, text: "Linked." }),
+      inbox: async () => {
+        throw new CommandRefusedError("Run it later.");
+      },
+      dismiss: async () => {
+        throw new Error("The disk is full.");
       },
     },
-    slack: () => options.slack ?? { connection: "connected", problem: null },
-    now: () => AT,
-  });
-
-  async function call(name: string, caller: CallerFacts, input: unknown = {}) {
-    const response = await answer(
-      new Request(`http://bridge${commandPath(name)}`, {
-        method: "POST",
-        body: JSON.stringify({ caller, input }),
-      }),
-    );
-    return { status: response.status, body: (await response.json()) as Answer };
-  }
-
-  return { answer, call, database, loads: () => loads };
-}
-
-function pauseLink(database: BridgeDatabase): Handlers["pause"] {
-  return async (_input, { caller, at }) => {
-    await database.write(
-      (transaction) => transaction`
-        UPDATE links SET status = 'paused', updated_at = ${at}
-        WHERE toybox_channel_id = ${caller.channelId}
-      `,
-    );
-    return { done: `paused ${caller.channelId}` };
-  };
-}
-
-function quietLog() {
-  const log = spyOn(console, "error").mockImplementation(() => {});
-  onTestFinished(() => log.mockRestore());
-  return log;
-}
-
-describe("answering a call", () => {
-  test("runs the command for whoever's calling, and reads the banner after it", async () => {
-    const { call } = await startServer();
-
-    expect(await call("pause", lead)).toEqual({
-      status: 200,
-      body: {
-        version: 1,
-        at: AT,
-        banner: {
-          slack: "connected",
-          coverage: "complete",
-          warnings: [{ kind: "link_inactive", status: "paused", reason: null }],
-          restore: null,
-        },
-        result: { done: "paused toybox-link" },
-      },
-    });
-    expect((await call("peek", member)).body.result).toEqual({ done: "member looked" });
-    expect((await call("pause", operator)).body.result).toEqual({ done: "paused toybox-link" });
-  });
-
-  test("looks a session up once more before believing it's a stranger", async () => {
-    const { call, loads } = await startServer({ catalog: null });
-
-    expect((await call("peek", member)).body.result).toEqual({ done: "member looked" });
-    expect(loads()).toBe(1);
-    expect(await call("peek", { ...member, sessionId: "agent-stranger" })).toEqual({
-      status: 403,
-      body: {
-        version: 1,
-        at: AT,
-        banner: null,
-        refused: {
-          rule: "unknown_session",
-          message:
-            "Session agent-stranger isn't the lead or a member of a channel in the Toy Box at http://127.0.0.1:3000, so the bridge won't act for it.",
-        },
-      },
-    });
-    expect(loads()).toBe(2);
-  });
-
-  test("tells a refused caller nothing about any channel", async () => {
-    const { call, loads } = await startServer();
-
-    const refused = async (name: string, caller: CallerFacts) => {
-      const { status, body } = await call(name, caller);
-      expect(body.banner).toBeNull();
-      return { status, rule: body.refused?.rule };
-    };
-    expect(await refused("peek", { ...lead, toyBoxPort: 3100 })).toEqual({
-      status: 403,
-      rule: "toy_box_port",
-    });
-    expect(await refused("pause", { ...lead, channelId: "toybox-other" })).toEqual({
-      status: 403,
-      rule: "channel_mismatch",
-    });
-    expect(await refused("pause", member)).toEqual({ status: 403, rule: "role" });
-    expect(await refused("sweep", lead)).toEqual({ status: 403, rule: "role" });
-    expect(await refused("pause", { ...operator, channelId: null })).toEqual({
-      status: 403,
-      rule: "channel_required",
-    });
-    expect(loads()).toBe(0);
-  });
-
-  test("says so when it can't reach Toy Box to tell who's calling", async () => {
-    const log = quietLog();
-    const { call } = await startServer({
-      catalog: null,
-      loadCatalog: () => Promise.reject(new Error("connect ECONNREFUSED")),
-    });
-
-    expect(await call("peek", member)).toEqual({
-      status: 503,
-      body: {
-        version: 1,
-        at: AT,
-        banner: null,
-        refused: {
-          rule: "toy_box_unreachable",
-          message:
-            "The bridge couldn't reach the Toy Box at http://127.0.0.1:3000 to tell who you are. Check that Toy Box is running, then try again.",
-        },
-      },
-    });
-    expect(log).toHaveBeenCalledTimes(1);
-    expect((await call("peek", operator)).status).toBe(200);
-  });
-
-  test.each([
-    ["connecting", null],
-    ["unconfigured", "SLACK_APP_TOKEN isn't set."],
-    ["auth_failed", "Slack rejected the bot token."],
-    ["refused", "The tokens belong to another Slack app."],
-  ] as const)(
-    "runs only what doesn't need Slack while Slack is %s",
-    async (connection, problem) => {
-      const { call } = await startServer({ slack: { connection, problem } });
-
-      const { status, body } = await call("pause", lead);
-      expect(status).toBe(503);
-      expect(body.banner?.slack).toBe(connection);
-      expect(body.refused?.rule).toBe("slack_unavailable");
-      expect(body.refused?.message).toStartWith(
-        "`pause` needs Slack, which the bridge can't use right now.",
-      );
-      expect(body.refused?.message).toContain(problem ?? "still connecting");
-      expect((await call("peek", lead)).status).toBe(200);
-    },
+    () => 1_000,
   );
-
-  test("names what the caller may still run while it can't use Slack", async () => {
-    const { call } = await startServer({ slack: { connection: "connecting", problem: null } });
-
-    expect((await call("pause", operator)).body.refused?.message).toBe(
-      "`pause` needs Slack, which the bridge can't use right now. It's still connecting to Slack, so try again in a minute. Until then it runs only `peek` and `sweep`.",
-    );
-    expect((await call("pause", lead)).body.refused?.message).toEndWith(
-      "Until then it runs only `peek`.",
-    );
-    expect((await call("sweep", operator)).status).toBe(200);
+  const request = new Request(`http://bridge${commandPath(name)}`, {
+    method: "POST",
+    body: JSON.stringify(body),
   });
+  const response = await serve(request);
+  return { status: response.status, answer: await response.json() };
+}
 
-  test("runs every command while Slack reconnects, so posts wait for it", async () => {
-    const { call } = await startServer({ slack: { connection: "reconnecting", problem: null } });
-
-    expect((await call("pause", lead)).status).toBe(200);
-  });
-
-  test("refuses input its contract doesn't take, naming the option", async () => {
-    const { call, database } = await startServer();
-
-    const { status, body } = await call("pause", lead, { note: 5 });
-    expect(status).toBe(422);
-    expect(body.banner?.warnings).toEqual([]);
-    expect(body.refused?.rule).toBe("invalid_input");
-    expect(body.refused?.message).toStartWith("--note: ");
-    expect(body.refused?.message).toEndWith("Run `toy-box-slack pause --help`.");
-    const [link] = await database.read((sql) => sql`SELECT status FROM links`);
-    expect(link).toEqual({ status: "active" });
-  });
-
-  test("answers a handler's refusal with the banner", async () => {
-    const { call } = await startServer({
-      pause: () => async () => {
-        throw new CommandRefusedError("already_paused", "The link is already paused.");
-      },
-    });
-
-    const { status, body } = await call("pause", lead);
-    expect(status).toBe(409);
-    expect(body.banner?.slack).toBe("connected");
-    expect(body.refused).toEqual({
-      rule: "already_paused",
-      message: "The link is already paused.",
-    });
-  });
-
-  test("logs anything else that goes wrong, and tells the caller where to look", async () => {
-    const log = quietLog();
-    const failing = async (pause: ServerOptions["pause"]) =>
-      (await startServer({ pause })).call("pause", lead);
-    const answer = {
-      status: 500,
-      body: {
-        error:
-          "The bridge couldn't finish `pause`, so it may or may not have run. Its log says why. Check `toy-box-slack status` before you run `pause` again.",
-      },
-    };
-
-    expect(await failing(() => () => Promise.reject(new Error("disk I/O error")))).toEqual(answer);
-    expect(await failing(() => async () => ({ done: 7 }) as never)).toEqual(answer);
-    expect(log).toHaveBeenCalledTimes(2);
-  });
+test.each<[string, string, unknown, number, unknown]>([
+  [
+    "runs a command for the caller it resolved",
+    "status",
+    { caller: LEAD, input: {} },
+    200,
+    { result: { caller: { role: "lead", channelId: "toybox-link" }, at: 1_000 }, text: "Linked." },
+  ],
+  [
+    "refuses a caller before it reads their input",
+    "dismiss",
+    { caller: { sessionId: "toybox-member", channelId: null }, input: { request: "14" } },
+    403,
+    { error: expect.stringMatching(/^This session isn't the lead of a Toy Box channel/) },
+  ],
+  [
+    "names each problem with the input the way the CLI shows it",
+    "dismiss",
+    { caller: LEAD, input: { request: "14" } },
+    422,
+    {
+      error:
+        "`dismiss` didn't run. <request>: Write it as inbox shows it, such as r14. --reason: Missing. Run `toy-box-slack dismiss --help` to see what it takes.",
+    },
+  ],
+  [
+    "passes on a command's refusal",
+    "inbox",
+    { caller: LEAD, input: {} },
+    409,
+    { error: "Run it later." },
+  ],
+  [
+    "refuses a call it can't read without running it",
+    "status",
+    { caller: { ...LEAD, role: "lead" }, input: {} },
+    400,
+    {
+      error: expect.stringMatching(
+        /^The bridge couldn't read the call to `status`, so it didn't run\./,
+      ),
+    },
+  ],
+  [
+    "serves no command an object inherits",
+    "toString",
+    { caller: LEAD, input: {} },
+    404,
+    { error: expect.stringMatching(/^The bridge has no command at \/v1\/commands\/toString\./) },
+  ],
+])("%s", async (_, name, body, status, answer) => {
+  expect(await call(name, body)).toEqual({ status, answer });
 });
 
-describe("requests that aren't calls", () => {
-  test("are answered with what's wrong", async () => {
-    const { answer } = await startServer();
-    const request = async (path: string, init: RequestInit = {}) => {
-      const response = await answer(new Request(`http://bridge${path}`, init));
-      const body = (await response.json()) as Answer;
-      return { status: response.status, allow: response.headers.get("Allow"), ...body };
-    };
-    const post = (body: string) => ({ method: "POST", body });
+test("logs why a command failed and says it may or may not have run", async () => {
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => log.mockRestore());
 
-    expect(await request("/v1/commands/unlink", post("{}"))).toEqual({
-      status: 404,
-      allow: null,
-      error: "The bridge has no command at /v1/commands/unlink.",
-    });
-    expect((await request("/v1/commands/constructor", post("{}"))).status).toBe(404);
-    expect((await request("/", post("{}"))).status).toBe(404);
-    expect(await request("/v1/commands/peek")).toEqual({
-      status: 405,
-      allow: "POST",
-      error: "Commands take POST, not GET.",
-    });
-    const unreadable = {
-      status: 400,
-      allow: null,
-      error:
-        "The bridge couldn't read the call to `peek`, so it didn't run. That happens when the CLI runs another release of toy-box-slack. Whoever runs the bridge can restart it to run the same release as the CLI.",
-    };
-    expect(await request("/v1/commands/peek", post("not json"))).toEqual(unreadable);
-    expect(await request("/v1/commands/peek", post(JSON.stringify({ input: {} })))).toEqual(
-      unreadable,
-    );
-    expect(
-      await request("/v1/commands/peek", post(JSON.stringify({ caller: operator, input: [] }))),
-    ).toEqual(unreadable);
-  });
+  expect(await call("dismiss", { caller: LEAD, input: { request: "r1", reason: "Done" } })).toEqual(
+    {
+      status: 500,
+      answer: {
+        error:
+          "The bridge couldn't finish `dismiss`, so it may or may not have run. Its log says why. Run `toy-box-slack status` before you try again.",
+      },
+    },
+  );
+  expect(log).toHaveBeenCalledWith("Couldn't finish `dismiss`:", new Error("The disk is full."));
 });

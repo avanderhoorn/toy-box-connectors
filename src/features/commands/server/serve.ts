@@ -1,138 +1,88 @@
 // Answering calls on the bridge's socket.
 //
-// Each call is one POST to a command's path, carrying what the caller's environment says about it
-// and the values the CLI read. The bridge works out who's calling before anything else, so a caller
-// it won't act for learns nothing about any channel. Then it checks the values against the
-// command's contract and runs the handler. The banner is read last, so an answer shows what its
-// command changed.
+// Each call is one POST to a command's path. The bridge works out who's calling before anything
+// else, so a caller it won't act for learns nothing about any channel. Then it parses the values
+// with the command's input schema and runs the command.
 
+import type { z } from "zod";
 import type { BridgeDatabase } from "@bridge/server/database";
-import {
-  permitCaller,
-  resolveCaller,
-  type Caller,
-  type CallerFacts,
-  type CallerResolution,
-} from "@commands/model/callers";
-import { checkCommandInput } from "@commands/model/commandLine";
-import {
-  CommandRefusedError,
-  type CommandCall,
-  type CommandContract,
-  type CommandHandler,
-  type CommandHandlersFor,
-} from "@commands/model/contract";
+import { commands, inputProblem, type CommandName, type CommandSpec } from "@commands/model";
+import { resolveCaller, type Caller } from "@commands/model/callers";
 import {
   commandAt,
-  commandRequestSchema,
-  PROTOCOL_VERSION,
-  type CommandRefusal,
-  type Refusal,
+  commandCallSchema,
+  CommandRefusedError,
+  type CommandAnswer,
 } from "@commands/model/protocol";
-import type { SlackState } from "@commands/model/status";
-import { isSlackUsable, refuseWithoutSlack } from "@commands/model/withoutSlack";
-import type { ToyBoxClient } from "@toybox/server";
-import { readBanner } from "./banner";
 
-export type CommandServerOptions<Contracts extends Record<string, CommandContract>> = {
-  /** Every command the bridge serves, and the handler that runs each. */
-  contracts: Contracts;
-  handlers: CommandHandlersFor<Contracts>;
-  database: BridgeDatabase;
-  /** The Toy Box the bridge serves. A caller running in another is refused. */
-  origin: URL;
-  toyBox: Pick<ToyBoxClient, "catalog" | "loadCatalog">;
-  slack: () => SlackState;
-  now?: () => number;
+const ANOTHER_RELEASE =
+  "That happens when the CLI runs another release of toy-box-slack, which restarting the bridge fixes.";
+
+/** What a command learns about its call besides its input. */
+export type CommandContext = {
+  caller: Caller;
+  /** When the bridge took the call. Commands read the time from here. */
+  at: number;
 };
 
-/** Answers each request on the bridge's socket. */
-export function serveCommands<Contracts extends Record<string, CommandContract>>({
-  contracts,
-  handlers,
-  database,
-  origin,
-  toyBox,
-  slack,
-  now = Date.now,
-}: CommandServerOptions<Contracts>): (request: Request) => Promise<Response> {
-  // A session missing from the catalog may have joined since the bridge read it.
-  async function identify(facts: CallerFacts): Promise<CallerResolution> {
-    const known = resolveCaller(facts, { origin, catalog: toyBox.catalog() });
-    if (known.kind === "caller" || known.rule !== "unknown_session") return known;
-    try {
-      return resolveCaller(facts, { origin, catalog: await toyBox.loadCatalog() });
-    } catch (error) {
-      console.error("Couldn't read Toy Box's channels to tell who's calling:", error);
-      return {
-        kind: "refused",
-        rule: "toy_box_unreachable",
-        message: `The bridge couldn't reach the Toy Box at ${origin.origin} to tell who you are. Check that Toy Box is running, then try again.`,
-      };
-    }
-  }
+/** Runs one command with the input its schema parsed. */
+export type CommandHandler<Name extends CommandName> = (
+  input: z.output<(typeof commands)[Name]["input"]>,
+  context: CommandContext,
+) => Promise<CommandAnswer>;
 
+export type CommandHandlers = { [Name in CommandName]: CommandHandler<Name> };
+
+/** Answers each request on the bridge's socket. */
+export function serveCommands(
+  database: BridgeDatabase,
+  handlers: CommandHandlers,
+  now = Date.now,
+): (request: Request) => Promise<Response> {
   return async (request) => {
-    const path = new URL(request.url).pathname;
-    const name = commandAt(path);
-    if (name === null || !Object.hasOwn(contracts, name)) {
-      return Response.json({ error: `The bridge has no command at ${path}.` }, { status: 404 });
-    }
-    if (request.method !== "POST") {
+    const { pathname } = new URL(request.url);
+    const name = commandAt(pathname);
+    if (name === null || !Object.hasOwn(commands, name)) {
       return Response.json(
-        { error: `Commands take POST, not ${request.method}.` },
-        { status: 405, headers: { Allow: "POST" } },
+        { error: `The bridge has no command at ${pathname}. ${ANOTHER_RELEASE}` },
+        { status: 404 },
       );
     }
-    const call = commandRequestSchema.safeParse(await request.json().catch(() => undefined));
+    const call = commandCallSchema.safeParse(await request.json().catch(() => undefined));
     if (!call.success) {
       return Response.json(
         {
-          error: `The bridge couldn't read the call to \`${name}\`, so it didn't run. That happens when the CLI runs another release of toy-box-slack. Whoever runs the bridge can restart it to run the same release as the CLI.`,
+          error: `The bridge couldn't read the call to \`${name}\`, so it didn't run. ${ANOTHER_RELEASE}`,
         },
         { status: 400 },
       );
     }
 
-    const at = now();
-    const contract: CommandContract = contracts[name]!;
-    const identified = await identify(call.data.caller);
-    const permitted =
-      identified.kind === "caller"
-        ? permitCaller(identified.caller, { name, ...contract })
-        : identified;
-    if (permitted.kind === "refused") {
-      return refuse(permitted.rule === "toy_box_unreachable" ? 503 : 403, at, null, permitted);
-    }
-    const { caller } = permitted;
-
+    const spec: CommandSpec = commands[name as CommandName];
     try {
-      const state = slack();
-      const banner = () =>
-        database.read((sql) => readBanner(sql, caller, { slack: slack().connection, at }));
-      if (!contract.withoutSlack && !isSlackUsable(state.connection)) {
-        const refusal = refuseWithoutSlack(`\`${name}\``, state, contracts, caller.role);
-        return refuse(503, at, await banner(), refusal);
+      const linked = await database.read(readLinkedChannels);
+      const resolved = resolveCaller(call.data.caller, linked, name, spec.callers);
+      if (resolved.kind === "refused") {
+        return Response.json({ error: resolved.message }, { status: 403 });
       }
-
-      const checked = checkCommandInput(name, contract, call.data.input);
-      if (checked.kind === "refused") {
-        return refuse(422, at, await banner(), { rule: "invalid_input", message: checked.message });
+      const input = spec.input.safeParse(call.data.input);
+      if (!input.success) {
+        const error = inputProblem(name, spec, call.data.input, input.error);
+        return Response.json({ error }, { status: 422 });
       }
-      try {
-        const result = contract.result.parse(
-          await runHandler(handlers[name], checked.input, { caller, at }),
-        );
-        return Response.json({ version: PROTOCOL_VERSION, at, banner: await banner(), result });
-      } catch (error) {
-        if (!(error instanceof CommandRefusedError)) throw error;
-        return refuse(409, at, await banner(), { rule: error.rule, message: error.message });
-      }
+      // The schema that parsed the input is the one the handler's type reads.
+      const handler = handlers[name as CommandName] as CommandHandler<CommandName>;
+      return Response.json(
+        await handler(input.data as never, { caller: resolved.caller, at: now() }),
+      );
     } catch (error) {
+      if (error instanceof CommandRefusedError) {
+        return Response.json({ error: error.message }, { status: 409 });
+      }
       console.error(`Couldn't finish \`${name}\`:`, error);
       return Response.json(
         {
-          error: `The bridge couldn't finish \`${name}\`, so it may or may not have run. Its log says why. Check \`toy-box-slack status\` before you run \`${name}\` again.`,
+          error: `The bridge couldn't finish \`${name}\`, so it may or may not have run. Its log says why. Run \`toy-box-slack status\` before you try again.`,
         },
         { status: 500 },
       );
@@ -140,22 +90,9 @@ export function serveCommands<Contracts extends Record<string, CommandContract>>
   };
 }
 
-// The contract parsed the input, and permitCaller gave a channel command a caller with a channel.
-function runHandler(handler: unknown, input: unknown, call: { caller: Caller; at: number }) {
-  return (handler as CommandHandler<CommandContract>)(input as never, call as CommandCall);
-}
-
-function refuse(
-  status: number,
-  at: number,
-  banner: CommandRefusal["banner"],
-  { rule, message }: Refusal,
-): Response {
-  const refusal: CommandRefusal = {
-    version: PROTOCOL_VERSION,
-    at,
-    banner,
-    refused: { rule, message },
-  };
-  return Response.json(refusal, { status });
+async function readLinkedChannels(sql: Bun.SQL): Promise<Set<string>> {
+  const links = await sql<{ channelId: string }[]>`
+    SELECT toybox_channel_id AS channelId FROM links
+  `;
+  return new Set(links.map((link) => link.channelId));
 }

@@ -63,13 +63,6 @@ export function renderSlackText(text: string, names: SlackNames): string {
   return neutralizePieces(pieces.map((piece) => ({ ...piece, text: stripControls(piece.text) })));
 }
 
-/** Text without the mention of `userId` it opens with, as people address the bot. */
-export function withoutLeadingMention(text: string, userId: string): string {
-  const trimmed = text.trimStart();
-  const opening = /^<@([^|>]*)(?:\|[^>]*)?>[\s,:]*/.exec(trimmed);
-  return opening?.[1] === userId ? trimmed.slice(opening[0].length) : text;
-}
-
 /**
  * A person's name, made safe to print beside the labels the bridge adds: one line, no bracket and
  * no field separator. Someone the bridge can't name shows by their user ID.
@@ -90,11 +83,6 @@ export function oneLine(text: string, limit: number): string {
     .trim()
     .replaceAll("`", "'");
   return cut(neutralizeMentions(flat), limit);
-}
-
-/** Puts a zero-width space after every @ that Toy Box would read as a mention. */
-export function neutralizeMentions(text: string): string {
-  return text.replace(mentionPattern, "$1@\u200b");
 }
 
 /** A code fence longer than any run of backticks in `text`, so nothing in it can close the fence. */
@@ -160,6 +148,11 @@ function neutralizePieces(pieces: readonly Piece[]): string {
     const inUrl = urls.some(([start, end]) => at >= start && at < end);
     return `${before}${inUrl ? "%40" : "@\u200b"}`;
   });
+}
+
+// Puts a zero-width space after every @ that Toy Box would read as a mention, once.
+function neutralizeMentions(text: string): string {
+  return text.replace(mentionPattern, "$1@\u200b");
 }
 
 function unescape(text: string): string {

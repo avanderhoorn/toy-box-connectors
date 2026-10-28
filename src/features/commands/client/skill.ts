@@ -9,8 +9,9 @@
 import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { explain, type ExitCode } from "@commands/model/outcome";
-import { printOutcome, printToProcess, type Print } from "./run";
+
+/** Where the installer prints. */
+export type Print = (stream: "stdout" | "stderr", text: string) => void;
 
 /** The skill's name, which names its folder too. */
 export const SKILL_NAME = "toy-box-slack";
@@ -58,10 +59,13 @@ export type InstallOptions = {
 export async function installBundledSkill({
   env = process.env,
   home = homedir(),
-  print = printToProcess,
-}: InstallOptions = {}): Promise<ExitCode> {
+  print = (stream, text) => process[stream].write(text),
+}: InstallOptions = {}): Promise<0 | 1> {
   const folder = resolveSkillsFolder(env, home);
-  if (folder.kind === "refused") return printOutcome(explain(1, folder.message), false, print);
+  if (folder.kind === "refused") {
+    print("stderr", `${folder.message}\n`);
+    return 1;
+  }
   const path = await installSkill(await Bun.file(BUNDLED_SKILL).text(), folder.path);
   print("stdout", `${presentInstalled(path, Boolean(env.COPILOT_HOME))}\n`);
   return 0;

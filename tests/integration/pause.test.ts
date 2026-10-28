@@ -1,5 +1,5 @@
-// A rare event in Slack pauses a link until the owner resumes it. Every command's banner says why,
-// and what an allowed person asks while it's paused doesn't reach the lead.
+// A rare event in Slack pauses a link until the owner resumes it. Status says why, and what an
+// allowed person asks while it's paused doesn't reach the lead.
 
 import { expect, test } from "bun:test";
 import { ALICE, BOT, connectedBridge, posted, said, timestamps } from "./connectedBridge";
@@ -51,9 +51,9 @@ test.each([
     await post(said(ALICE, askedTs, `<@${BOT}> can you check the deploy?`));
 
     expect(await status(channelId)).toMatchObject({
-      answer: { banner: { warnings: [{ kind: "link_inactive", status: "suspended", reason }] } },
+      json: { links: [{ status: "suspended", statusReason: reason }] },
     });
-    expect(await inbox()).toMatchObject({ requests: [] });
+    expect(await inbox()).toMatchObject({ linkStatus: "suspended", requests: [] });
     expect(await stop()).toEqual({ code: 0, stderr: saying() });
   },
 );
