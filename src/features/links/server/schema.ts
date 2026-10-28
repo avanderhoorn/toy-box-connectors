@@ -30,6 +30,8 @@ export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
     -- Every open claim indexes the same constant, so at most one can be open.
     CREATE UNIQUE INDEX claims_one_open ON claims((1)) WHERE state IN ('live', 'posted', 'admitted');
 
+    -- approved_audience holds both channels' audiences as the owner last approved them, which every
+    -- later read of either channel is judged against.
     CREATE TABLE links (
       id                  TEXT PRIMARY KEY,
       toybox_channel_id   TEXT NOT NULL UNIQUE,
@@ -40,6 +42,7 @@ export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
         CHECK (observe IN ('requesters', 'channel')),
       status              TEXT NOT NULL CHECK (status IN ('active', 'paused', 'suspended')),
       status_reason       TEXT,
+      approved_audience   TEXT NOT NULL CHECK (json_valid(approved_audience)),
       requests_routine_id TEXT NOT NULL,
       routine_state       TEXT NOT NULL CHECK (routine_state IN ('present', 'drifted', 'missing')),
       linked_at_ts        TEXT NOT NULL,

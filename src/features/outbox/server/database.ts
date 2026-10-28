@@ -77,6 +77,18 @@ export async function queueCard(
   await queueItem(transaction, { kind: "card", ...card, payload: {} }, now);
 }
 
+/**
+ * Readdresses every item for a channel, sent or not, to the new ID Slack gave it, so a post still
+ * to send, an update or a retraction reaches the channel.
+ */
+export async function moveOutboxChannel(
+  transaction: Bun.SQL,
+  oldId: string,
+  newId: string,
+): Promise<void> {
+  await transaction`UPDATE outbox SET channel_id = ${newId} WHERE channel_id = ${oldId}`;
+}
+
 /** Queues an item after every item before it. Returns the ID and number it's known by. */
 export async function queueItem(
   transaction: Bun.SQL,

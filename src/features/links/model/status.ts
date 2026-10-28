@@ -1,0 +1,60 @@
+import type { ChannelSuspendReason } from "./audience";
+
+// Why a link is suspended.
+//
+// The bridge suspends a link when Slack or Toy Box makes continuing unsafe, and the link keeps its
+// settings and data until someone resumes or unlinks it. Resuming can widen who reads the lead
+// again, so it waits for the owner's click, and a link whose Toy Box channel was deleted ends only
+// with unlink. Each reason says why after "suspended", and what ends it, for the banner and status.
+
+/** Why the bridge suspended a link. */
+export type SuspendReason =
+  /** Its Toy Box channel was deleted, which nothing but unlink ends. */
+  | "toybox_channel_deleted"
+  /** Slack gave one of its channels a new ID, as it can when a channel is shared. */
+  | "channel_id_changed"
+  | ChannelSuspendReason;
+
+/** Why a link is suspended, as a clause that reads after "suspended", and what ends it. */
+export type Suspension = { because: string; fix: string };
+
+const resume = "then run `toy-box-slack resume` for the owner to approve in Slack.";
+
+export const suspensions: Record<SuspendReason, Suspension> = {
+  toybox_channel_deleted: {
+    because: "because its Toy Box channel was deleted",
+    fix: "Run `toy-box-slack unlink` to remove the link.",
+  },
+  channel_id_changed: {
+    because: "because Slack gave its channel a new ID",
+    fix: "Run `toy-box-slack resume` for the owner to approve the channel as Slack has it now.",
+  },
+  channel_not_found: {
+    because: "because Slack can't find its channel",
+    fix: `If the channel still exists, invite the bot back, ${resume}`,
+  },
+  channel_archived: {
+    because: "because its Slack channel was archived",
+    fix: `Unarchive the channel with the bot in it, ${resume}`,
+  },
+  bot_removed: {
+    because: "because the bot was removed from its Slack channel",
+    fix: `Invite the bot back to the channel, ${resume}`,
+  },
+  channel_restricted: {
+    because: "because a Slack admin setting stops the bot posting in its channel",
+    fix: `Ask a Slack admin to let the bot post there, ${resume}`,
+  },
+  channel_external: {
+    because: "because its Slack channel is shared with another organization",
+    fix: `Stop sharing the channel outside the organization, ${resume}`,
+  },
+  channel_made_public: {
+    because: "because its Slack channel was made public",
+    fix: "Run `toy-box-slack resume` for the owner to approve who can read it now.",
+  },
+  workspace_joined: {
+    because: "because a workspace the owner didn't approve joined its Slack channel",
+    fix: "Run `toy-box-slack resume` for the owner to approve who can read it now.",
+  },
+};

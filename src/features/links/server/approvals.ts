@@ -1,6 +1,9 @@
 import {
+  approvalStates,
   clickedApprovalId,
   decide,
+  isOpen,
+  staleApproval,
   type Approval,
   type ApprovalAction,
   type ApprovalState,
@@ -66,6 +69,46 @@ export type ClickResult =
 export async function readApproval(sql: Bun.SQL, approvalId: string): Promise<Approval | null> {
   const [row] = await sql<ApprovalRow[]>`SELECT * FROM approvals WHERE id = ${approvalId}`;
   return row ? approvalFromRow(row) : null;
+}
+
+/** A link's approvals that wait for the owner or for apply, oldest first. */
+export async function readOpenApprovals(sql: Bun.SQL, linkId: string): Promise<Approval[]> {
+  const rows = await sql<ApprovalRow[]>`
+    SELECT * FROM approvals WHERE link_id = ${linkId} AND state IN ${sql(openStates)}
+    ORDER BY number
+  `;
+  return rows.map(approvalFromRow);
+}
+
+/**
+ * Marks open approvals stale for `reason`, queues the update that shows it on each card and audits
+ * each. Returns them as they're stored now.
+ */
+export async function staleApprovals(
+  transaction: Bun.SQL,
+  approvals: readonly Approval[],
+  reason: StaleReason,
+  now: number,
+): Promise<Approval[]> {
+  const staled: Approval[] = [];
+  for (const approval of approvals) {
+    const stale = staleApproval(approval, reason);
+    await saveApproval(transaction, stale);
+    await queueUpdate(transaction, stale, now);
+    await audit(
+      transaction,
+      {
+        actor: "bridge",
+        action: "stale",
+        linkId: stale.linkId,
+        approvalId: stale.id,
+        subject: reason,
+      },
+      now,
+    );
+    staled.push(stale);
+  }
+  return staled;
 }
 
 /** Stores a changed approval. */
@@ -135,16 +178,7 @@ export async function takeClick(
     case "settled": {
       const settled = decision.approval;
       await saveApproval(transaction, settled);
-      await queueCard(
-        transaction,
-        {
-          approvalId: settled.id,
-          linkId: settled.linkId,
-          channelId: settled.card.channelId,
-          phase: "update",
-        },
-        now,
-      );
+      await queueUpdate(transaction, settled, now);
       await audit(
         transaction,
         {
@@ -159,6 +193,22 @@ export async function takeClick(
       return { kind: "settled", approvalId: settled.id, state: settled.state };
     }
   }
+}
+
+const openStates = approvalStates.filter(isOpen);
+
+/** Queues the update that shows an approval's card as the approval is when it's sent. */
+function queueUpdate(transaction: Bun.SQL, approval: Approval, now: number): Promise<void> {
+  return queueCard(
+    transaction,
+    {
+      approvalId: approval.id,
+      linkId: approval.linkId,
+      channelId: approval.card.channelId,
+      phase: "update",
+    },
+    now,
+  );
 }
 
 const clickAction = {

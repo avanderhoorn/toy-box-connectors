@@ -112,3 +112,21 @@ export async function invalidateChannelInfo(
     WHERE channel_id = ${channelId} AND (invalidated_at IS NULL OR invalidated_at < ${now})
   `;
 }
+
+/**
+ * Records that Slack moved a channel from `oldId` to `newId`. Aliases of the old ID follow it, so
+ * each names a current ID, and a channel moved back to an ID it had before loses that alias.
+ */
+export async function recordChannelAlias(
+  transaction: Bun.SQL,
+  oldId: string,
+  newId: string,
+  now: number,
+): Promise<void> {
+  await transaction`DELETE FROM channel_aliases WHERE old_id = ${newId}`;
+  await transaction`UPDATE channel_aliases SET channel_id = ${newId} WHERE channel_id = ${oldId}`;
+  await transaction`
+    INSERT INTO channel_aliases (old_id, channel_id, changed_at) VALUES (${oldId}, ${newId}, ${now})
+    ON CONFLICT(old_id) DO UPDATE SET channel_id = excluded.channel_id, changed_at = excluded.changed_at
+  `;
+}

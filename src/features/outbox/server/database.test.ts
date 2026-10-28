@@ -1,7 +1,13 @@
 import { expect, test } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import { cancelQueuedRequestItems, queueCard, queueItem, queueReaction } from "./database";
+import {
+  cancelQueuedRequestItems,
+  moveOutboxChannel,
+  queueCard,
+  queueItem,
+  queueReaction,
+} from "./database";
 import { createStoredOutboxItem } from "./testFixtures";
 
 test("cancelling a request's items takes back only its queued replies and progress", async () => {
@@ -21,6 +27,29 @@ test("cancelling a request's items takes back only its queued replies and progre
     { number: 3, state: "sending", updated_at: 0 },
     { number: 4, state: "queued", updated_at: 0 },
     { number: 5, state: "queued", updated_at: 0 },
+  ]);
+});
+
+test("a channel's new ID readdresses every item for it, sent or not, and nothing else", async () => {
+  const database = await openTestDatabase();
+  await createStoredOutboxItem(database, 1);
+  await createStoredOutboxItem(database, 2, {
+    request_id: 2,
+    state: "sent",
+    slack_ts: "1700000200.000100",
+  });
+  await createStoredOutboxItem(database, 3, { request_id: 3, channel_id: "C-other" });
+
+  await database.write((transaction) => moveOutboxChannel(transaction, "C-link", "C-new"));
+
+  expect(
+    await database.read(
+      (sql) => sql`SELECT number, channel_id, state, updated_at FROM outbox ORDER BY number`,
+    ),
+  ).toEqual([
+    { number: 1, channel_id: "C-new", state: "queued", updated_at: 0 },
+    { number: 2, channel_id: "C-new", state: "sent", updated_at: 0 },
+    { number: 3, channel_id: "C-other", state: "queued", updated_at: 0 },
   ]);
 });
 

@@ -1,6 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { channelFacts } from "@slackapi/model/testFixtures";
-import { audienceOf, audienceProblem, judgeChannel, widening, type Audience } from "./audience";
+import {
+  audienceOf,
+  audienceProblem,
+  judgeChannel,
+  judgeLinkChannel,
+  signalSuspends,
+  widening,
+  type Audience,
+  type ChannelSuspendReason,
+} from "./audience";
 
 const home = { teamId: "T-home", enterpriseId: null };
 const orgHome = { teamId: "T-home", enterpriseId: "E-org" };
@@ -229,5 +238,115 @@ describe("judging a fresh read of a linked channel", () => {
         orgHome,
       ),
     ).toEqual({ kind: "held", reason: "workspaces_unknown" });
+  });
+});
+
+describe("judging a read for a link that uses the channel", () => {
+  const watched = { monitored: true, publish: false };
+  const publishedTo = { monitored: false, publish: true };
+  const both = { monitored: true, publish: true };
+  const privateWatchedPublicPublish = {
+    monitored: audience(),
+    publish: audience({ kind: "public" }),
+  };
+
+  test("each role is judged against the audience the owner approved for it", () => {
+    const madePublic = channelFacts({ kind: "public" });
+    expect(judgeLinkChannel(privateWatchedPublicPublish, watched, madePublic, home)).toEqual({
+      kind: "suspended",
+      reason: "channel_made_public",
+    });
+    expect(judgeLinkChannel(privateWatchedPublicPublish, publishedTo, madePublic, home)).toEqual({
+      kind: "approved",
+    });
+  });
+
+  test("a channel used in both roles is suspended when either role would be", () => {
+    expect(
+      judgeLinkChannel(privateWatchedPublicPublish, both, channelFacts({ kind: "public" }), home),
+    ).toEqual({ kind: "suspended", reason: "channel_made_public" });
+    const orgShared = audience({
+      orgShared: true,
+      enterpriseId: "E-org",
+      workspaces: ["T-home", "T-sibling"],
+    });
+    expect(
+      judgeLinkChannel(
+        { monitored: { ...orgShared, kind: "public" }, publish: orgShared },
+        both,
+        channelFacts({
+          kind: "public",
+          isOrgShared: true,
+          enterpriseId: "E-org",
+          sharedTeamIds: [],
+        }),
+        orgHome,
+      ),
+    ).toEqual({ kind: "suspended", reason: "channel_made_public" });
+  });
+
+  test("a hold in either role holds a link that isn't suspended", () => {
+    const orgShared = audience({
+      orgShared: true,
+      enterpriseId: "E-org",
+      workspaces: ["T-home", "T-sibling"],
+    });
+    expect(
+      judgeLinkChannel(
+        { monitored: orgShared, publish: orgShared },
+        both,
+        channelFacts({ isOrgShared: true, enterpriseId: "E-org", sharedTeamIds: [] }),
+        orgHome,
+      ),
+    ).toEqual({ kind: "held", reason: "workspaces_unknown" });
+  });
+
+  test("a channel Slack can't find suspends every link that uses it", () => {
+    expect(judgeLinkChannel(privateWatchedPublicPublish, publishedTo, null, home)).toEqual({
+      kind: "suspended",
+      reason: "channel_not_found",
+    });
+  });
+});
+
+describe("whether a lifecycle signal suspends a link", () => {
+  const publicEverywhere = {
+    monitored: audience({ kind: "public" }),
+    publish: audience({ kind: "public" }),
+  };
+
+  test("every signal but a channel made public suspends, whatever was approved", () => {
+    const reasons: ChannelSuspendReason[] = [
+      "channel_not_found",
+      "channel_archived",
+      "bot_removed",
+      "channel_restricted",
+      "channel_external",
+      "workspace_joined",
+    ];
+    for (const reason of reasons) {
+      expect(signalSuspends(publicEverywhere, { monitored: true, publish: false }, reason)).toBe(
+        true,
+      );
+      expect(signalSuspends(publicEverywhere, { monitored: false, publish: true }, reason)).toBe(
+        true,
+      );
+    }
+  });
+
+  test("a channel made public suspends a link only where the owner approved it private", () => {
+    const privateWatched = { monitored: audience(), publish: audience({ kind: "public" }) };
+    expect(
+      signalSuspends(privateWatched, { monitored: true, publish: false }, "channel_made_public"),
+    ).toBe(true);
+    expect(
+      signalSuspends(privateWatched, { monitored: false, publish: true }, "channel_made_public"),
+    ).toBe(false);
+    expect(
+      signalSuspends(privateWatched, { monitored: true, publish: true }, "channel_made_public"),
+    ).toBe(true);
+    expect(
+      signalSuspends(publicEverywhere, { monitored: true, publish: true }, "channel_made_public"),
+    ).toBe(false);
   });
 });

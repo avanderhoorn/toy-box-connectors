@@ -1,3 +1,4 @@
+import type { ApprovedAudience, ChannelRoles } from "@links/model/audience";
 import type { SlackTs } from "@slackapi/model/ts";
 
 // Stored links.
@@ -27,4 +28,29 @@ export async function readChannelLink(
     SELECT user_id FROM allowlist WHERE link_id = ${link.id}
   `;
   return { ...link, allowlist: new Set(allowed.map((entry) => entry.user_id)) };
+}
+
+/** A link that uses a channel, the roles it uses it in, and the audiences the owner approved. */
+export type ChannelUse = ChannelRoles & { linkId: string; approved: ApprovedAudience };
+
+/** Every link that watches a channel or publishes to it, whatever its status. */
+export async function readChannelUses(sql: Bun.SQL, channelId: string): Promise<ChannelUse[]> {
+  const rows = await sql<
+    {
+      id: string;
+      slack_channel_id: string;
+      publish_channel_id: string;
+      approved_audience: string;
+    }[]
+  >`
+    SELECT id, slack_channel_id, publish_channel_id, approved_audience FROM links
+    WHERE slack_channel_id = ${channelId} OR publish_channel_id = ${channelId}
+    ORDER BY id
+  `;
+  return rows.map((row) => ({
+    linkId: row.id,
+    monitored: row.slack_channel_id === channelId,
+    publish: row.publish_channel_id === channelId,
+    approved: JSON.parse(row.approved_audience) as ApprovedAudience,
+  }));
 }

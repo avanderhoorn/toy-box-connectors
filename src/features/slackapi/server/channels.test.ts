@@ -1,7 +1,12 @@
 import { expect, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { channelFacts } from "@slackapi/model/testFixtures";
-import { invalidateChannelInfo, readChannelInfo, writeChannelInfo } from "./channels";
+import {
+  invalidateChannelInfo,
+  readChannelInfo,
+  recordChannelAlias,
+  writeChannelInfo,
+} from "./channels";
 
 test("a channel's facts read back as they were written, with when they were read", async () => {
   const database = await openTestDatabase();
@@ -128,4 +133,24 @@ test("a read that began before the stored one never replaces it", async () => {
     refreshedAt: 2_000,
     invalidatedAt: null,
   });
+});
+
+test("each alias names the channel's current ID, however many times it moves", async () => {
+  const database = await openTestDatabase();
+  const readAliases = () =>
+    database.read((sql) => sql`SELECT * FROM channel_aliases ORDER BY old_id`);
+
+  await database.write((transaction) => recordChannelAlias(transaction, "C-1", "C-2", 1_000));
+  await database.write((transaction) => recordChannelAlias(transaction, "C-2", "C-3", 2_000));
+  expect(await readAliases()).toEqual([
+    { old_id: "C-1", channel_id: "C-3", changed_at: 1_000 },
+    { old_id: "C-2", channel_id: "C-3", changed_at: 2_000 },
+  ]);
+
+  // Moved back to an ID it had, the channel answers to it again.
+  await database.write((transaction) => recordChannelAlias(transaction, "C-3", "C-1", 3_000));
+  expect(await readAliases()).toEqual([
+    { old_id: "C-2", channel_id: "C-1", changed_at: 2_000 },
+    { old_id: "C-3", channel_id: "C-1", changed_at: 3_000 },
+  ]);
 });
