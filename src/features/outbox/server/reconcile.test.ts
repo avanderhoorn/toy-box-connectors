@@ -178,6 +178,9 @@ test("publication roots page from the attempt rather than the queue time", async
     inclusive: "true",
     include_all_metadata: "true",
   });
+  for (const call of reads.slice(1)) {
+    expect(call.args).toMatchObject({ oldest: reads[0]!.args.oldest, cursor: expect.any(String) });
+  }
   expect(stored!.attemptStartedAt).toBe(now() - 10_000);
 });
 
@@ -895,6 +898,47 @@ test("a read whose channel moved starts over from its first page with a fresh ba
   expect(slack.calls.at(-1)!.args).toMatchObject({ channel: "C-moved" });
   expect(slack.calls.at(-1)!.args).not.toHaveProperty("cursor");
 });
+
+test("a read whose channel moves between pages stops before reading the old channel again", async () => {
+  const { database, slack, bot, item, now, read } = await setup({ pageSize: 1 });
+  slack.addChannel({ id: "C-moved", is_private: true, members: ["U-owner", "U-bot"] });
+  let moved = false;
+  const moving: BotClient = {
+    cooldown: (method) => bot.cooldown(method),
+    async call(method, run) {
+      const result = await bot.call(method, run);
+      if (!moved) {
+        moved = true;
+        await database.write((tx) => changeChannelId(tx, "C-link", "C-moved", now()));
+      }
+      return result;
+    },
+  };
+  const service = createReconciliation(database, moving, { now });
+  onTestFinished(() => service.close());
+  expect(await service.reconcile(item.id)).toEqual({ kind: "changed" });
+  expect(slack.calls.map((call) => call.method)).toEqual([
+    "chat.postMessage",
+    "conversations.replies",
+  ]);
+  expect(await read()).toMatchObject({
+    state: "delivery_unknown",
+    channelId: "C-moved",
+    reconcilePass: 0,
+  });
+});
+
+test.each(["sent", "stray"] as const)(
+  "an item that settled as %s is never read for again",
+  async (state) => {
+    const { slack, item, advance, reconcile } = await setup({ misplaced: state === "stray" });
+    expect(await reconcile(item.id)).toMatchObject({ kind: "settled", item: { state } });
+    advance(120_000);
+    const count = slack.calls.length;
+    expect(await reconcile(item.id)).toEqual({ kind: "changed" });
+    expect(slack.calls).toHaveLength(count);
+  },
+);
 
 test("an edit whose thread is gone spends its pass rather than retrying the thread", async () => {
   const { database, slack, item, posted, reconcile } = await setup();

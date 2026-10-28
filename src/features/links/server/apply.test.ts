@@ -471,6 +471,22 @@ describe("applying an approved change", () => {
       { link_id: "link", user_id: "U-dave", label: null, added_at: 7 },
     ]);
   });
+
+  test("an owner the channel lists under another of their IDs is still in it", async () => {
+    const database = await linked();
+    await database.write(
+      (transaction) => transaction`
+        INSERT INTO user_aliases (alias_id, user_id) VALUES ('W-owner', 'U-owner')
+      `,
+    );
+    const facts = world();
+    const approval = await approve(database, facts, allowCarol);
+    facts.members["C-link"] = ["W-owner", "U-dave"];
+
+    expect(await attempt(database, fakeFactsReader(facts).reader, approval)).toEqual(
+      applied(approval),
+    );
+  });
 });
 
 describe("an approved change that can't apply", () => {

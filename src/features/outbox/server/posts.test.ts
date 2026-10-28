@@ -974,6 +974,34 @@ describe("approval card updates", () => {
     expect(slack.calls).toEqual([]);
   });
 
+  test("an update never waits on another card's unproved post", async () => {
+    const { database, slack, delivery, now } = await setup();
+    const other = await createStoredApproval(database, {
+      id: "approval-2",
+      number: 2,
+      card: { channelId: "C-link", ts: null },
+    });
+    const approval = await createStoredApproval(database, {
+      card: { channelId: "C-link", ts: null },
+    });
+    await database.write(async (tx) => {
+      await queueCard(
+        tx,
+        { approvalId: other.id, linkId: "link", channelId: "C-link", phase: "post" },
+        now(),
+      );
+      await staleApprovals(tx, [approval], "link_changed", now());
+    });
+    const update = (await database.read((sql) => readReadyOutbox(sql, now()))).find(
+      (item) => item.phase === "update",
+    )!;
+    expect(await delivery.updateCard(update.id)).toMatchObject({
+      kind: "settled",
+      item: { state: "dropped", error: "card_post_terminal" },
+    });
+    expect(slack.calls).toEqual([]);
+  });
+
   test("the edit handler refuses a queued initial card post", async () => {
     const { database, slack, delivery, now } = await setup();
     const approval = await createStoredApproval(database, {
