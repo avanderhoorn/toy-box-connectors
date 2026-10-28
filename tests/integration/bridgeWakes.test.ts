@@ -107,3 +107,22 @@ test("a storage error stops the bridge with exit code 1 so launchd restarts it",
   expect(stderr).toEndWith("toy-box-slack is stopping after an error\n");
   expect(toyBox.runs).toHaveLength(1);
 }, 15_000);
+
+test("a storage error while following Toy Box stops the bridge with exit code 1 too", async () => {
+  const { toyBox, channelId, home, env } = await linkFakeChannel((database) =>
+    database.write(
+      (transaction) => transaction`
+        CREATE TRIGGER full_disk BEFORE INSERT ON toybox_streams
+        BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END
+      `,
+    ),
+  );
+
+  const { code, stderr } = await spawnBridge(home, env).exit();
+
+  expect(code).toBe(1);
+  expect(stderr).toContain(`Stopped following Toy Box channel ${channelId}:`);
+  expect(stderr).toContain("database or disk is full");
+  expect(stderr).toEndWith("toy-box-slack is stopping after an error\n");
+  expect(toyBox.runs).toEqual([]);
+}, 15_000);
