@@ -20,6 +20,7 @@ import {
   type OutboxItem,
   type OutboxSettlement,
 } from "./database";
+import { settleQueuedDelivery } from "./delivery";
 import { initializeOutboxSchema } from "./schema";
 
 async function item(database: BridgeDatabase, reference: string | number): Promise<OutboxItem> {
@@ -69,6 +70,22 @@ async function unknown(database: BridgeDatabase, sending: OutboxItem): Promise<O
   expect(result).not.toBeNull();
   return result!;
 }
+
+test.each([{ attempts: 1 }, { payload_hash: "edited" }])(
+  "a local refusal cannot overwrite a changed queue snapshot: %j",
+  async (changes) => {
+    const database = await openTestDatabase();
+    const queued = await queue(database);
+    await database.write((tx) => tx`UPDATE outbox SET ${tx(changes)} WHERE id = ${queued.id}`);
+    const changed = await item(database, queued.id);
+    expect(
+      await database.write((tx) =>
+        settleQueuedDelivery(tx, queued, "failed", "local_refusal", 1_000),
+      ),
+    ).toBeNull();
+    expect(await item(database, queued.id)).toEqual(changed);
+  },
+);
 
 describe("durable attempts", () => {
   test("reads every stored value by opaque ID or the number the lead sees", async () => {

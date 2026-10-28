@@ -14,7 +14,7 @@ import {
   type OutboxItem,
   type OutboxSettlement,
 } from "./database";
-import { deferQueuedDelivery, settleQueuedDelivery } from "./delivery";
+import { cancelThreadRequest, deferQueuedDelivery, settleQueuedDelivery } from "./delivery";
 import type { PostStep } from "./posts";
 
 const payloadSchema = z
@@ -156,6 +156,9 @@ export function createRetraction(
           WHERE id = ${target.id} AND state IN ('sent', 'stray') AND slack_ts = ${target.slackTs}
           RETURNING request_id
         `;
+        if (changed.length > 0 && target.state === "stray") {
+          await cancelThreadRequest(tx, target, at);
+        }
         if (
           changed.length > 0 &&
           target.kind === "reply" &&
@@ -171,7 +174,7 @@ export function createRetraction(
             await settleRequestAnswer(tx, target.requestId, at);
           }
         }
-        if (target.linkId !== null) {
+        if (changed.length > 0 && target.linkId !== null) {
           const [link] = await tx`SELECT id FROM links WHERE id = ${target.linkId}`;
           if (!link) {
             await tx`DELETE FROM outbox WHERE id IN (${item.id}, ${target.id})`;

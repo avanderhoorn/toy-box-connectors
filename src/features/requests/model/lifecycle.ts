@@ -33,7 +33,8 @@ export type CancelReason =
   | "mention_removed"
   | "requester_denied"
   | "link_removed"
-  | "channel_deleted";
+  | "channel_deleted"
+  | "thread_gone";
 
 const transitions: Record<RequestState, readonly RequestState[]> = {
   open: ["seen", "cancelled", "expired"],

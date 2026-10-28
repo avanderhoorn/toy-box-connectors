@@ -114,6 +114,7 @@ const cancelReasons: Record<CancelReason, string> = {
   requester_denied: "the person who asked is no longer allowed",
   link_removed: "this channel was unlinked from Slack",
   channel_deleted: "its Slack channel was deleted",
+  thread_gone: "Slack could not deliver to its thread",
 };
 
 const DAY = 24 * 60 * 60_000;

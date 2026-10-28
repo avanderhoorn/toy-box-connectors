@@ -94,6 +94,7 @@ describe("how a request ended", () => {
     ["requester_denied", "cancelled because the person who asked is no longer allowed"],
     ["link_removed", "cancelled because this channel was unlinked from Slack"],
     ["channel_deleted", "cancelled because its Slack channel was deleted"],
+    ["thread_gone", "cancelled because Slack could not deliver to its thread"],
     [null, "cancelled"],
     ["constructor", "cancelled"],
   ])("cancelled for %p reads as why", (closedReason, clause) => {

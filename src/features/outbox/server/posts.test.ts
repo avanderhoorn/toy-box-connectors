@@ -587,9 +587,13 @@ describe("uncertain and rejected writes", () => {
       kind: "settled",
       item: { state: "stray", error: "wrong_thread", evidence: "response" },
     });
-    expect(await readRequestState()).toMatchObject({ state: "answering" });
+    expect(await readRequestState()).toMatchObject({
+      state: "cancelled",
+      closedReason: "thread_gone",
+      attention: null,
+    });
     const cleanup = await database.read(
-      (sql) => sql`SELECT kind, state, payload FROM outbox WHERE kind <> 'reply'`,
+      (sql) => sql`SELECT kind, state, payload FROM outbox WHERE kind = 'retract'`,
     );
     expect(cleanup).toEqual([
       { kind: "retract", state: "queued", payload: JSON.stringify({ target: queued.id }) },
@@ -692,19 +696,28 @@ describe("uncertain and rejected writes", () => {
     },
   );
 
-  test("a thread-local refusal returns the request as failed without suspending its link", async () => {
+  test.each([
+    "thread_not_found",
+    "restricted_action_thread_locked",
+    "cannot_reply_to_message",
+    "restricted_action_non_threadable_channel",
+  ])("a %s cancels the request without suspending its link", async (error) => {
     const { database, slack, queue, delivery, readRequestState } = await setup();
-    slack.failNext("chat.postMessage", { error: "thread_not_found" });
+    slack.failNext("chat.postMessage", { error });
     const queued = await queue();
 
     expect(await delivery.post(queued.id)).toMatchObject({
       kind: "settled",
-      item: { state: "failed", error: "thread_not_found" },
+      item: { state: "failed", error },
     });
     expect(await readRequestState()).toMatchObject({
-      state: "in_progress",
-      attention: "reply_failed",
+      state: "cancelled",
+      closedReason: "thread_gone",
+      attention: null,
     });
+    expect(
+      await database.read((sql) => sql`SELECT payload FROM outbox WHERE kind = 'reaction'`),
+    ).toEqual([{ payload: expect.stringContaining('"action":"remove","name":"eyes"') }]);
     expect(await database.read((sql) => sql`SELECT status FROM links`)).toEqual([
       { status: "active" },
     ]);

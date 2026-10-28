@@ -330,8 +330,9 @@ test("a deleted channel suspends its link, cancels its requests and is never fol
     { id: 1, state: "cancelled", closed_reason: "channel_deleted" },
     { id: 2, state: "answered", closed_reason: null },
   ]);
-  expect(await database.read((sql) => sql`SELECT state FROM outbox`)).toEqual([
+  expect(await database.read((sql) => sql`SELECT state FROM outbox ORDER BY number`)).toEqual([
     { state: "cancelled" },
+    { state: "queued" },
   ]);
   expect(client.view(channelId)).toEqual({ connected: false, provider: null, leadWorking: false });
   expect(changes.at(-1)).toBe("link");

@@ -198,7 +198,7 @@ test.each(["publication", "card", "misplaced_reply"] as const)(
   },
 );
 
-test("a lost reply response can be correlated at root and queues withdrawal without answering", async () => {
+test("a lost reply response correlated at root cancels its request before withdrawal", async () => {
   const { database, slack, item, reconcile, request } = await setup({ misplaced: true });
   expect(await reconcile(item.id)).toMatchObject({
     kind: "settled",
@@ -210,7 +210,9 @@ test("a lost reply response can be correlated at root and queues withdrawal with
     "conversations.history",
   ]);
   expect(await database.read((sql) => readRequest(sql, request.id))).toMatchObject({
-    state: "answering",
+    state: "cancelled",
+    closedReason: "thread_gone",
+    attention: null,
   });
   expect(
     await database.read((sql) => sql`SELECT payload FROM outbox WHERE kind = 'retract'`),

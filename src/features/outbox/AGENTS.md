@@ -34,8 +34,8 @@ even when they retain our identity and metadata.
 client. It scans the whole intended thread, then roots since the attempt for a misplaced reply,
 or roots since the attempt for a publication or initial card. Those root bounds subtract the
 shared five-minute gap overlap to absorb ordinary skew between the Mac and Slack's clock.
-An edit reads its already proved
-target, even when that message predates the attempt. Only exact own-bot/app metadata proves it.
+An edit reads its already proved target, even when that message predates the attempt.
+Only exact own-bot/app metadata proves it.
 Positive proof can finish immediately. A complete miss advances one of the three original
 deadlines, never requeues a post, and exhaustion leaves the item unknown.
 thread_not_found completes its thread scope, but a post still finishes its root correlation scan.
@@ -53,6 +53,11 @@ an empty page from an exhausted cursor.
 
 `server/delivery.ts` commits both response and read proof through the same settlement path:
 the initial card ts, misplaced cleanup and request settlement cannot be lost between them.
+A thread refusal (thread_not_found, restricted_action_thread_locked, cannot_reply_to_message
+or restricted_action_non_threadable_channel), or a reply proved outside its thread, cancels
+its active request as thread_gone immediately and queues removal of its eyes reaction.
+It never waits for withdrawal, which may fail. Thread-only and non-threadable channel
+restrictions remain item-local, since they do not prevent every kind of post.
 A card update with no proved ts waits only while an initial post is queued, sending or unknown.
 Without such a post it is dropped explicitly. The queue runner must revisit these waits when a
 post settles, including a manual resolution.
@@ -65,7 +70,7 @@ retains that local target ID alongside the frozen Slack ts; only channel and ts 
 An uncertain deletion retries that same target with 5-to-120-second backoff, and message_not_found
 means it is already absent. Startup-recovered deletions go to this handler, not message reads.
 A valid delivery becomes retracted without losing its proof or publication key. A withdrawn
-misplaced post becomes failed, never retracted, and returns its request with reply_failed.
+misplaced post becomes failed, never retracted. Its request was already cancelled as thread_gone.
 The operation, target and request commit together. Failed withdrawal leaves the target stray
 with Slack's exact error, and an explicit new retraction can try again.
 A retained unlink target needs no message body. Once confirmed absent, a target whose non-null
@@ -83,7 +88,7 @@ owner-approved audiences. This pure gate asks for a refresh or hold rather than 
 changes its source. Proof alone cannot answer a request while its source is unverified.
 Intake calls the same function after every revision, and repair after verification, revision or
 cancellation, so either order settles the same way without polling. A current confirmed final answers only verified input,
-an older final returns the request as updated, and a failed or dropped final returns it as
+an older final returns the request as updated, and other failed or dropped finals return it as
 reply failed unless a replacement still waits. The answered transition queues both reactions
 in that transaction. Retraction preserves a valid delivery's proof, while withdrawing a
 misplaced post is failure, never a successful delivery.

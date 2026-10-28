@@ -157,7 +157,19 @@ describe("proof and source verification", () => {
         state: "cancelled",
         closedReason: "source_deleted",
       });
-      expect(await feedback(database)).toEqual([]);
+      expect(await feedback(database)).toEqual([
+        {
+          request_id: 1,
+          link_id: "link",
+          channel_id: "C-link",
+          state: "queued",
+          payload: JSON.stringify({
+            action: "remove",
+            name: "eyes",
+            timestamp: "1700000100.000100",
+          }),
+        },
+      ]);
     },
   );
 

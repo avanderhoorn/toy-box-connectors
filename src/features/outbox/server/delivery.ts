@@ -1,6 +1,9 @@
 import type { ChannelSuspendReason } from "@links/model/audience";
 import { recordCardPosted } from "@links/server/approvals";
 import { suspendChannelLinks } from "@links/server/lifecycle";
+import { isActive } from "@requests/model/lifecycle";
+import { readRequest } from "@requests/server/database";
+import { cancelStoredRequest } from "@requests/server/lifecycle";
 import { settleRequestAnswer } from "./answers";
 import {
   queueRetraction,
@@ -9,6 +12,13 @@ import {
   type OutboxItem,
   type OutboxSettlement,
 } from "./database";
+
+const threadRefusals = new Set([
+  "thread_not_found",
+  "restricted_action_thread_locked",
+  "cannot_reply_to_message",
+  "restricted_action_non_threadable_channel",
+]);
 
 /** A response and a metadata read commit the same proof, cleanup and request effects. */
 export async function settleDelivery(
@@ -33,8 +43,33 @@ export async function settleDelivery(
   if (settled.state === "stray") {
     await queueRetraction(tx, settled, now);
   }
+  if (
+    settled.state === "stray" ||
+    (settled.state === "failed" && settled.error !== null && threadRefusals.has(settled.error))
+  ) {
+    await cancelThreadRequest(tx, settled, now);
+  }
   if (item.requestId !== null) await settleRequestAnswer(tx, item.requestId, now);
   return settled;
+}
+
+/** A refused or misplaced reply closes only an active request in its own scope. */
+export async function cancelThreadRequest(
+  tx: Bun.SQL,
+  item: OutboxItem,
+  now: number,
+): Promise<void> {
+  if (!["reply", "progress"].includes(item.kind) || item.requestId === null) return;
+  const request = await readRequest(tx, item.requestId);
+  if (
+    request &&
+    isActive(request.state) &&
+    request.linkId === item.linkId &&
+    request.channelId === item.channelId &&
+    request.rootTs === item.threadTs
+  ) {
+    await cancelStoredRequest(tx, request, "thread_gone", now);
+  }
 }
 
 /** A local refusal returns a final reply's request without inventing a network attempt. */

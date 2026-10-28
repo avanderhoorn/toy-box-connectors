@@ -90,7 +90,10 @@ test("cancelling a link's requests closes its active ones with their queued repl
     { id: 9, state: "open", closed_reason: null },
   ]);
   expect(
-    await database.read((sql) => sql`SELECT number, state FROM outbox ORDER BY number`),
+    await database.read(
+      (sql) => sql`SELECT number, state FROM outbox
+      WHERE kind <> 'reaction' ORDER BY number`,
+    ),
   ).toEqual([
     { number: 1, state: "cancelled" },
     { number: 2, state: "cancelled" },
@@ -102,6 +105,24 @@ test("cancelling a link's requests closes its active ones with their queued repl
     { number: 8, state: "queued" },
     { number: 9, state: "queued" },
   ]);
+  expect(
+    await database.read(
+      (sql) => sql`SELECT request_id, link_id, channel_id, payload, created_at
+      FROM outbox WHERE kind = 'reaction' ORDER BY number`,
+    ),
+  ).toEqual(
+    [1, 2, 3, 4].map((id) => ({
+      request_id: id,
+      link_id: "link",
+      channel_id: "C-link",
+      payload: JSON.stringify({
+        action: "remove",
+        name: "eyes",
+        timestamp: `${1_700_000_099 + id}.000100`,
+      }),
+      created_at: 60_000,
+    })),
+  );
   expect(await cancel()).toBe(false);
 });
 
@@ -205,7 +226,10 @@ test("expiring requests closes those that waited their lifetime, unless they're 
     { id: 9, state: "open", closed_reason: null },
   ]);
   expect(
-    await database.read((sql) => sql`SELECT number, state FROM outbox ORDER BY number`),
+    await database.read(
+      (sql) => sql`SELECT number, state FROM outbox
+      WHERE kind <> 'reaction' ORDER BY number`,
+    ),
   ).toEqual([
     { number: 1, state: "cancelled" },
     { number: 2, state: "cancelled" },
@@ -217,5 +241,20 @@ test("expiring requests closes those that waited their lifetime, unless they're 
     { number: 8, state: "queued" },
     { number: 9, state: "queued" },
   ]);
+  expect(
+    await database.read(
+      (sql) => sql`SELECT request_id, payload FROM outbox
+      WHERE kind = 'reaction' ORDER BY number`,
+    ),
+  ).toEqual(
+    [1, 2, 3].map((id) => ({
+      request_id: id,
+      payload: JSON.stringify({
+        action: "remove",
+        name: "eyes",
+        timestamp: `${1_700_000_099 + id}.000100`,
+      }),
+    })),
+  );
   expect(await expire()).toBe(false);
 });

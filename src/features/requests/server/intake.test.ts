@@ -272,6 +272,7 @@ test("editing the mention out cancels a request in any state before answered", a
     expect(await readItems(database)).toEqual([
       { number: 1, state: "cancelled" },
       { number: 2, state: "sending" },
+      { number: 3, state: "queued" },
     ]);
   }
 });
@@ -387,6 +388,7 @@ test("deleting a request's source cancels it in any state before answered", asyn
     expect(await readItems(database)).toEqual([
       { number: 1, state: "cancelled" },
       { number: 2, state: "sending" },
+      { number: 3, state: "queued" },
     ]);
   }
 });

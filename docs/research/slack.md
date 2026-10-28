@@ -713,8 +713,8 @@ unknown state and back off from 5 to 120 seconds within an attempt and pass.
 Retry-After can extend that wait beyond the cap. A channel refusal clears the
 read deadline and waits for its suspended link to become active, rather than
 polling Slack. Refused linkless cards require manual resolution.
-Exhaustion never authorizes an automatic repost. This is a local
-conservative policy, not Slack's exactly-once guarantee.
+Exhaustion never authorizes an automatic repost. This is a local conservative
+policy, not Slack's exactly-once guarantee.
 [Reconciliation implementation](../../src/features/outbox/server/reconcile.ts),
 [credential-free protocol cases](../../src/features/outbox/server/reconcile.test.ts).
 
@@ -731,7 +731,8 @@ receipt, and safely retries uncertain deletions with 5-to-120-second backoff.
 An already absent target also completes the operation. Cleanup still runs for
 a suspended link, but requires an active installation. A valid delivery becomes
 `retracted` while retaining its proof and publication key. A misplaced post
-instead becomes `failed` once withdrawn, returning the question as `reply_failed`.
+instead becomes `failed` once withdrawn. The bridge cancels its request as
+`thread_gone` as soon as misplacement is proved, without waiting for withdrawal.
 Failed withdrawal retains `stray` and Slack's exact error.
 The handler can finish from a redacted target after its link is purged, without
 the request or link rows. Confirmed absence then purges both orphaned outbox

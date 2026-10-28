@@ -1,3 +1,4 @@
+import { gapOverlapMs } from "@activity/model/gaps";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { suspendChannelLinks } from "@links/server/lifecycle";
 import { channelFailureReason } from "@slackapi/model/errors";
@@ -330,4 +331,3 @@ function sameRead(left: OutboxItem, right: OutboxItem): boolean {
     left.threadTs === right.threadTs
   );
 }
-import { gapOverlapMs } from "@activity/model/gaps";

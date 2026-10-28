@@ -67,6 +67,7 @@ export async function cancelStoredRequest(
 ): Promise<void> {
   await saveRequest(transaction, cancelRequest(request, reason));
   await cancelQueuedRequestItems(transaction, request.id, now);
+  await queueEyesRemoval(transaction, request, now);
 }
 
 /**
@@ -97,18 +98,7 @@ export async function dismissStoredRequest(
 ): Promise<void> {
   await saveRequest(transaction, dismissRequest(request, reason));
   await cancelQueuedRequestItems(transaction, request.id, now);
-  await queueReaction(
-    transaction,
-    {
-      action: "remove",
-      name: "eyes",
-      channelId: request.channelId,
-      ts: request.sourceTs,
-      linkId: request.linkId,
-      requestId: request.id,
-    },
-    now,
-  );
+  await queueEyesRemoval(transaction, request, now);
 }
 
 /** Cancels every active request of a link. Returns whether there were any. */
@@ -148,6 +138,26 @@ export async function expireRequests(transaction: Bun.SQL, now: number): Promise
   for (const request of due) {
     await saveRequest(transaction, expireRequest(request, now));
     await cancelQueuedRequestItems(transaction, request.id, now);
+    await queueEyesRemoval(transaction, request, now);
   }
   return due.length > 0;
+}
+
+async function queueEyesRemoval(
+  transaction: Bun.SQL,
+  request: StoredRequest,
+  now: number,
+): Promise<void> {
+  await queueReaction(
+    transaction,
+    {
+      action: "remove",
+      name: "eyes",
+      channelId: request.channelId,
+      ts: request.sourceTs,
+      linkId: request.linkId,
+      requestId: request.id,
+    },
+    now,
+  );
 }
