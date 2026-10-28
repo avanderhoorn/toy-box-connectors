@@ -74,6 +74,11 @@ function readHolds(database: BridgeDatabase) {
   return database.read((sql) => sql`SELECT id, held_at, hold_reason FROM requests ORDER BY id`);
 }
 
+/** The milliseconds between each refused stream request and the next. */
+function gapsBetween(requests: readonly { at: number }[]): number[] {
+  return requests.slice(1).map((request, index) => request.at - requests[index]!.at);
+}
+
 async function waitFor(assertion: () => void | Promise<void>, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -149,6 +154,42 @@ test("a restarted Toy Box is reconnected on the retry backoff and its dead turn 
   expect(await readStream(database, channelId)).toMatchObject({ lead_state: "idle" });
   // Connected, working, disconnected, and connected again with the turn over.
   expect(changes).toEqual(["link", "link", "link", "link"]);
+});
+
+// TIMINGS retries after 20 ms, doubling up to 80. Timers never fire early, so each gap is at least
+// its delay, and only the upper bounds leave room for a slow machine.
+test("a stream Toy Box keeps refusing is retried further apart each time, up to the limit", async () => {
+  const { toyBox, channelId, startClient } = await linkFakeChannel();
+  const client = await startClient();
+
+  toyBox.refuseStreams();
+
+  await waitFor(() => expect(toyBox.refusedStreams.length).toBeGreaterThanOrEqual(5));
+  expect(client.view(channelId).connected).toBe(false);
+  const [first, second, third, fourth] = gapsBetween(toyBox.refusedStreams);
+  expect(first).toBeGreaterThanOrEqual(20);
+  expect(second).toBeGreaterThanOrEqual(40);
+  expect(third).toBeGreaterThanOrEqual(80);
+  expect(fourth).toBeGreaterThanOrEqual(80);
+  expect(fourth).toBeLessThan(160);
+});
+
+test("a stream that came back starts its backoff over when Toy Box refuses it again", async () => {
+  const { toyBox, channelId, startClient } = await linkFakeChannel();
+  const client = await startClient();
+  toyBox.refuseStreams();
+  // Kept failing, the next retry would wait the full 80 ms.
+  await waitFor(() => expect(toyBox.refusedStreams.length).toBeGreaterThanOrEqual(4));
+  toyBox.acceptStreams();
+  await waitFor(() => expect(client.view(channelId).connected).toBe(true));
+  const before = toyBox.refusedStreams.length;
+
+  toyBox.refuseStreams();
+
+  await waitFor(() => expect(toyBox.refusedStreams.length).toBeGreaterThanOrEqual(before + 2));
+  const [first] = gapsBetween(toyBox.refusedStreams.slice(before));
+  expect(first).toBeGreaterThanOrEqual(20);
+  expect(first).toBeLessThan(80);
 });
 
 test("a gap Toy Box can no longer replay takes its replacement snapshot", async () => {

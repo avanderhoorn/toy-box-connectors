@@ -72,10 +72,14 @@ export type FakeStreamRequest = {
   answer: "snapshot" | "resumed" | "deleted";
 };
 
+/** A stream request the fake refused, and the `performance.now()` it arrived at. */
+export type FakeRefusedStream = { channelId: string; at: number };
+
 export type FakeToyBox = {
   readonly url: string;
   readonly runs: readonly FakeRun[];
   readonly streamRequests: readonly FakeStreamRequest[];
+  readonly refusedStreams: readonly FakeRefusedStream[];
   /** Adds a channel whose lead runs on `provider`, and returns its ID, which its lead shares. */
   addChannel(options?: { provider?: string; name?: string }): string;
   /** Adds a member to a channel and returns its session ID. */
@@ -101,6 +105,13 @@ export type FakeToyBox = {
   runScheduled(channelId: string, routineId: string): void;
   /** Answers the next run call with `status` instead of running the routine. */
   failNextRun(status?: number): void;
+  /**
+   * Drops every open stream and answers each new stream request with `status` until
+   * `acceptStreams`. Unlike a stopped fake, whose refused connections can't be counted, it records
+   * when each request arrived, so a test can time the client's retries.
+   */
+  refuseStreams(status?: number): void;
+  acceptStreams(): void;
   deleteChannel(channelId: string): void;
   /** How many streams are open for the channel. */
   connections(channelId: string): number;
@@ -116,7 +127,9 @@ export function startFakeToyBox(options: { now?: () => number } = {}): FakeToyBo
   const channels = new Map<string, Channel>();
   const runs: FakeRun[] = [];
   const streamRequests: FakeStreamRequest[] = [];
+  const refusedStreams: FakeRefusedStream[] = [];
   const failures: number[] = [];
+  let refusal: number | undefined;
   let server = serve(0);
   const port = server.port!;
 
@@ -159,6 +172,10 @@ export function startFakeToyBox(options: { now?: () => number } = {}): FakeToyBo
 
   function stream(channelId: string, request: Request): Response {
     if (!isDurableId(channelId)) return invalidRequest();
+    if (refusal !== undefined) {
+      refusedStreams.push({ channelId, at: performance.now() });
+      return Response.json({ error: "Unable to stream Channel." }, { status: refusal });
+    }
     const after =
       request.headers.get("last-event-id") ?? new URL(request.url).searchParams.get("after");
     let subscriber: Subscriber | undefined;
@@ -317,6 +334,7 @@ export function startFakeToyBox(options: { now?: () => number } = {}): FakeToyBo
     url: `http://127.0.0.1:${port}`,
     runs,
     streamRequests,
+    refusedStreams,
     addChannel({ provider = "copilot", name = "Linked" } = {}) {
       const id = crypto.randomUUID();
       channels.set(id, {
@@ -386,6 +404,15 @@ export function startFakeToyBox(options: { now?: () => number } = {}): FakeToyBo
     },
     failNextRun(status = 500) {
       failures.push(status);
+    },
+    refuseStreams(status = 500) {
+      refusal = status;
+      for (const channel of channels.values()) {
+        for (const subscriber of channel.subscribers) subscriber.close();
+      }
+    },
+    acceptStreams() {
+      refusal = undefined;
     },
     deleteChannel(channelId) {
       const channel = requireChannel(channelId);
