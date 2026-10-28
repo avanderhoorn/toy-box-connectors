@@ -1,0 +1,9 @@
+[run]
+bun = true
+
+[fmt]
+flavor = "oxfmt"
+ignorePatterns = ["docs/research/**", "spikes/**"]
+
+[test]
+pathIgnorePatterns = ["spikes/**"]
