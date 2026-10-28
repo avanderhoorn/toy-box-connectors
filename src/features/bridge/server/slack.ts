@@ -5,6 +5,7 @@ import {
   refusalProblem,
   rejectedTokenProblem,
   type IdentityRefusal,
+  type TokenName,
 } from "@slackapi/model/identity";
 import type { BotClient, CallFailure } from "@slackapi/server/botClient";
 import { openSlackSocket, type SlackSocket } from "@slackapi/server/socketMode";
@@ -15,21 +16,22 @@ import { confirmIdentity } from "./identity";
 
 // The Slack connection.
 //
-// The bridge confirms whose tokens it holds before it takes anything from Slack, and then keeps one
-// Socket Mode connection open. Each connection starts from a fresh apps.connections.open, and its
-// frames reach the receiver only once hello names the installation's app. Losing a connection
-// and each hello are noted in order with the deliveries between them. A connection that never
-// opened, or dropped within a minute of its hello, backs off, so a Slack that keeps refusing or
-// dropping it costs a call every few minutes rather than a reconnect a second. While Slack rejects
-// a token the bridge keeps asking, and the connection stays up meanwhile so deletions and a
-// channel's lifecycle are still taken. A refusal turns Slack off until the operator acts.
+// The bridge confirms whose tokens it holds once, before it takes anything from Slack, and asks
+// again only while Slack can't answer. Then it keeps one Socket Mode connection open. Each
+// connection starts from a fresh apps.connections.open, and its frames reach the receiver only
+// once hello names the installation's app. Losing a connection and each hello are noted in order
+// with the deliveries between them. A connection that never opened, or dropped within a minute of
+// its hello, backs off, so a Slack that keeps refusing or dropping it costs a call every few
+// minutes rather than a reconnect a second. A refusal, or a token Slack rejects, lasts until the
+// operator fixes it and restarts the bridge. A rejected bot token leaves the connection up, so
+// deletions and a channel's lifecycle are still taken.
 
 export interface SlackSupervisor {
   /** How the connection is doing, and what to do about it when something's wrong. */
   state(): SlackState;
-  /** The workspace's address as Slack last confirmed it, or null before it has. */
+  /** The workspace's address as Slack confirmed it, or null before it has. */
   workspaceUrl(): string | null;
-  /** Asks Slack about the tokens again, because a call found Slack rejecting the bot token. */
+  /** Notes that a call found Slack rejecting the bot token, which status shows until a restart. */
   botRejected(error: string): void;
   /**
    * Closes the connection, and stops once the delivery in hand is handled and the call to Slack in
@@ -41,7 +43,7 @@ export interface SlackSupervisor {
 export type SlackSupervisorOptions = {
   tokens: { botToken: string; appToken: string };
   slackApiUrl?: string;
-  /** Called when the connection's state changes, and after a delivery changed what's stored. */
+  /** Called after a delivery changed a link or request. */
   onChange?: () => void;
   /** Called when the supervisor stops on an error that retrying can't fix, such as storage failing. */
   onError?: (error: unknown) => void;
@@ -57,17 +59,17 @@ export type SlackSupervisorOptions = {
 /** How long a connection must last after its hello for losing it to reconnect without backing off. */
 export const STEADY_CONNECTION_MS = 60_000;
 
-/** How one connection ended, which decides how long to wait before the next. */
-type Ended = { steady: boolean; retryAfterMs?: number };
+/** How one connection ended, which decides how long to wait before the next, or null for none. */
+type Ended = { steady: boolean; retryAfterMs?: number } | null;
 
-/** Starts confirming the tokens and connecting, until it's stopped or Slack is refused. */
+/** Confirms the tokens and keeps Slack connected, until it's stopped or Slack is refused. */
 export function startSlackSupervisor(
   database: BridgeDatabase,
   bot: BotClient,
   {
     tokens,
     slackApiUrl,
-    onChange = () => {},
+    onChange,
     onError = () => {},
     now = Date.now,
     timings = defaultWakeTimings,
@@ -87,108 +89,57 @@ export function startSlackSupervisor(
   let socket: SlackSocket | undefined;
   let workspace: string | null = null;
   let refusal: IdentityRefusal | null = null;
-  let botRejection: string | null = null;
-  let appRejection: string | null = null;
-  // Why Slack isn't connected: the tokens can't be confirmed yet, or the last connection failed.
-  let unconfirmed: string | null = null;
-  let trouble: string | null = null;
+  // What status says about each token Slack rejected.
+  const rejected = new Map<TokenName, string>();
+  // Why Slack isn't connected while the bridge keeps trying.
+  let problem: string | null = null;
   let connected = false;
   let everConnected = false;
-  // Whether the bridge said something was wrong since it last connected, so connecting says so too.
-  let failing = false;
-  let recheck = false;
-  let checking: Promise<void> | undefined;
-  let connecting: Promise<void> | undefined;
   let failed = false;
 
   // The bridge may have missed anything since it last ran.
   receiver.disconnected(now()).catch(fail);
-  check();
+  const running = run().catch(fail);
 
-  function check() {
-    recheck = true;
-    checking ??= confirmWhileAsked();
+  async function run() {
+    const appId = await confirm();
+    let failures = 0;
+    while (appId !== null && !signal.aborted) {
+      const ended = await connectOnce(appId);
+      if (ended === null) return;
+      failures = ended.steady ? 0 : failures + 1;
+      const backoff = Math.max(retryDelay(failures, timings), ended.retryAfterMs ?? 0);
+      await sleep(failures === 0 ? reconnectDelay : backoff, signal);
+    }
   }
 
-  // Asking again while an answer is on its way earns one more answer, however often it was asked.
-  async function confirmWhileAsked() {
-    let failures = 0;
-    try {
-      while (recheck && !signal.aborted) {
-        recheck = false;
-        const verdict = await confirmIdentity(database, bot, tokens);
-        if (signal.aborted) return;
-        switch (verdict.kind) {
-          case "confirmed": {
-            workspace = verdict.workspaceUrl;
-            unconfirmed = null;
-            failures = 0;
-            // A rejection while Slack was asked may be newer than this answer, so it asks again.
-            if (!recheck && botRejection !== null) {
-              botRejection = null;
-              console.error("Slack accepts SLACK_BOT_TOKEN again.");
-            }
-            connecting ??= connectWhileRunning(verdict.installation.appId);
-            onChange();
-            break;
-          }
-          case "refused":
-            refuse(verdict.refusal);
-            return;
-          case "auth_failed":
-            rejectBot(verdict.error);
-            recheck = true;
-            await sleep(retryDelay(++failures, timings), signal);
-            break;
-          case "unavailable": {
-            const detail = `${verdict.detail}.`;
-            if (unconfirmed !== detail) {
-              console.error(`Can't confirm the Slack tokens yet. ${detail}`);
-              failing = true;
-            }
-            unconfirmed = detail;
-            recheck = true;
-            const askedWait = (verdict.retryAt ?? 0) - now();
-            await sleep(Math.max(retryDelay(++failures, timings), askedWait), signal);
-          }
+  /** Asks Slack whose tokens these are until it answers, and returns their app if it may connect. */
+  async function confirm(): Promise<string | null> {
+    for (let failures = 1; !signal.aborted; failures++) {
+      const verdict = await confirmIdentity(database, bot, tokens);
+      if (signal.aborted) return null;
+      switch (verdict.kind) {
+        case "confirmed":
+          workspace = verdict.workspaceUrl;
+          problem = null;
+          return verdict.installation.appId;
+        case "refused":
+          refuse(verdict.refusal);
+          return null;
+        case "auth_failed":
+          return reject("SLACK_BOT_TOKEN", verdict.error);
+        case "unavailable": {
+          trouble(`${verdict.detail}.`);
+          const askedWait = (verdict.retryAt ?? 0) - now();
+          await sleep(Math.max(retryDelay(failures, timings), askedWait), signal);
         }
       }
-    } catch (error) {
-      fail(error);
-    } finally {
-      checking = undefined;
     }
+    return null;
   }
 
-  function rejectBot(error: string) {
-    const first = botRejection === null;
-    botRejection = error;
-    if (!first) return;
-    console.error(rejectedTokenProblem("SLACK_BOT_TOKEN", error));
-    failing = true;
-    onChange();
-  }
-
-  async function connectWhileRunning(appId: string) {
-    let failures = 0;
-    try {
-      while (!signal.aborted) {
-        const ended = await connectOnce(appId);
-        if (ended === null) return;
-        failures = ended.steady ? 0 : failures + 1;
-        const wait =
-          failures === 0
-            ? reconnectDelay
-            : Math.max(retryDelay(failures, timings), ended.retryAfterMs ?? 0);
-        await sleep(wait, signal);
-      }
-    } catch (error) {
-      fail(error);
-    }
-  }
-
-  /** Connects once and waits for the connection to end, or returns null when nothing follows it. */
-  async function connectOnce(appId: string): Promise<Ended | null> {
+  /** Connects once and waits for the connection to end. */
+  async function connectOnce(appId: string): Promise<Ended> {
     let hello: Promise<void> | undefined;
     let helloAt = 0;
     let reason: string | null = null;
@@ -201,10 +152,9 @@ export function startSlackSupervisor(
         switch (frame.kind) {
           case "hello": {
             const refused = helloRefusal(appId, frame.appId);
-            if (refused === null) {
-              helloAt = arrivedAt;
-              hello = receiver.connected(arrivedAt);
-            } else refuse(refused);
+            if (refused !== null) return refuse(refused);
+            helloAt = arrivedAt;
+            hello = receiver.connected(arrivedAt);
             return;
           }
           case "disconnect":
@@ -221,27 +171,17 @@ export function startSlackSupervisor(
     const opening = await current.opened;
     if (opening.kind !== "open") {
       await current.closed;
-      switch (opening.kind) {
-        case "failed":
-          return openFailed(opening.failure);
-        case "dropped":
-          appRejection = null;
-          return troubled(`${opening.detail}.`);
-        default:
-          return null;
-      }
+      if (opening.kind === "failed") return openFailed(opening.failure);
+      return opening.kind === "dropped" ? trouble(`${opening.detail}.`) : null;
     }
 
     // The hello's note commits before anything the connection delivers.
     await hello;
     if (!signal.aborted) {
-      if (failing) console.error("Connected to Slack.");
-      failing = false;
+      console.error("Connected to Slack.");
       connected = true;
       everConnected = true;
-      trouble = null;
-      appRejection = null;
-      onChange();
+      problem = null;
     }
     const closedAt = await current.closed;
     connected = false;
@@ -250,45 +190,39 @@ export function startSlackSupervisor(
     if (signal.aborted) return null;
     receiver.disconnected(closedAt).catch(fail);
     console.error(`${connectionLoss(reason)}, so the bridge is reconnecting.`);
-    failing = true;
-    onChange();
     return { steady: closedAt - helloAt >= STEADY_CONNECTION_MS };
   }
 
   function openFailed(failure: CallFailure): Ended {
     switch (failure.kind) {
       case "auth_failed":
-        return rejectApp(failure.error);
+        return reject("SLACK_APP_TOKEN", failure.error);
       case "error":
-        if (appTokenErrors.has(failure.error)) return rejectApp(failure.error);
-        return troubled(`Slack refused apps.connections.open with ${failure.error}.`);
+        if (appTokenErrors.has(failure.error)) return reject("SLACK_APP_TOKEN", failure.error);
+        return trouble(`Slack refused apps.connections.open with ${failure.error}.`);
       case "rate_limited":
-        return troubled(
+        return trouble(
           "Slack is holding back apps.connections.open.",
           failure.retryAfterSeconds * 1_000,
         );
       case "unknown":
-        return troubled(`Slack didn't answer apps.connections.open: ${failure.detail}.`);
+        return trouble(`Slack didn't answer apps.connections.open: ${failure.detail}.`);
     }
   }
 
-  function rejectApp(error: string): Ended {
-    const first = appRejection === null;
-    appRejection = error;
-    if (first) {
-      console.error(rejectedTokenProblem("SLACK_APP_TOKEN", error));
-      failing = true;
-      onChange();
+  // Only the operator can replace a token Slack rejected, so nothing asks about it again.
+  function reject(token: TokenName, error: string): null {
+    if (!signal.aborted && !rejected.has(token)) {
+      const rejection = rejectedTokenProblem(token, error);
+      rejected.set(token, rejection);
+      console.error(rejection);
     }
-    return { steady: false };
+    return null;
   }
 
-  function troubled(problem: string, retryAfterMs?: number): Ended {
-    if (trouble !== problem) {
-      console.error(`Can't connect to Slack. ${problem}`);
-      failing = true;
-    }
-    trouble = problem;
+  function trouble(found: string, retryAfterMs?: number): Ended {
+    if (problem !== found) console.error(`Can't connect to Slack. ${found}`);
+    problem = found;
     return { steady: false, retryAfterMs };
   }
 
@@ -299,7 +233,6 @@ export function startSlackSupervisor(
     stopping.abort();
     socket?.close();
     console.error(refusalProblem(found));
-    onChange();
   }
 
   function fail(error: unknown) {
@@ -318,31 +251,23 @@ export function startSlackSupervisor(
 
   function state(): SlackState {
     if (refusal !== null) return { connection: "refused", problem: refusalProblem(refusal) };
-    const rejected = [
-      ...(botRejection === null ? [] : [rejectedTokenProblem("SLACK_BOT_TOKEN", botRejection)]),
-      ...(appRejection === null ? [] : [rejectedTokenProblem("SLACK_APP_TOKEN", appRejection)]),
-    ];
-    if (rejected.length > 0) return { connection: "auth_failed", problem: rejected.join(" ") };
+    if (rejected.size > 0) {
+      return { connection: "auth_failed", problem: [...rejected.values()].join(" ") };
+    }
     if (connected) return { connection: "connected", problem: null };
-    return {
-      connection: everConnected ? "reconnecting" : "connecting",
-      problem: trouble ?? unconfirmed,
-    };
+    return { connection: everConnected ? "reconnecting" : "connecting", problem };
   }
 
   return {
     state,
     workspaceUrl: () => workspace,
     botRejected(error) {
-      if (signal.aborted) return;
-      rejectBot(error);
-      check();
+      reject("SLACK_BOT_TOKEN", error);
     },
     async stop() {
       stopping.abort();
       socket?.close();
-      await checking;
-      await connecting;
+      await running;
       await receiver.stop();
     },
   };

@@ -35,7 +35,7 @@ test("a bridge with both tokens connects to Slack, and acks an event once it's s
   bridge.child.kill("SIGTERM");
   expect(await bridge.exit()).toEqual({
     code: 0,
-    stderr: `toy-box-slack is running for ${dataFolder}\ntoy-box-slack is stopping after SIGTERM\n`,
+    stderr: `toy-box-slack is running for ${dataFolder}\nConnected to Slack.\ntoy-box-slack is stopping after SIGTERM\n`,
   });
   const messages = await withDatabase(dataFolder, (database) =>
     database.read((sql) => sql`SELECT ts FROM messages`),

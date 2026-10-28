@@ -109,10 +109,14 @@ export async function connectedBridge({
       bridge.child.kill("SIGTERM");
       return bridge.exit();
     },
-    /** What the bridge writes to stderr from starting to stopping when it says only `lines`. */
+    /**
+     * What the bridge writes to stderr from starting to stopping when it connects and says only
+     * `lines`.
+     */
     saying: (...lines: string[]) =>
       [
         `toy-box-slack is running for ${linked.dataFolder}`,
+        "Connected to Slack.",
         ...lines,
         "toy-box-slack is stopping after SIGTERM\n",
       ].join("\n"),

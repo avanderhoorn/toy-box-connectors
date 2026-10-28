@@ -4,7 +4,7 @@ import { confirmIdentity } from "@bridge/server/identity";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import type { Installation } from "@slackapi/model/installation";
 import { createBotClient, type BotClient } from "@slackapi/server/botClient";
-import { markAuthFailed, readInstallation } from "@slackapi/server/installation";
+import { readInstallation } from "@slackapi/server/installation";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack, type FakeSlack, type FakeSlackIdentity } from "../fakes/slack";
 
@@ -178,7 +178,7 @@ describe("refusing credentials v1 doesn't support", () => {
 });
 
 describe("a rejected bot token", () => {
-  test("fails the installation from the moment Slack rejected it", async () => {
+  test("fails the installation from the moment Slack rejected it until the tokens confirm again", async () => {
     for (const method of ["auth.test", "bots.info"]) {
       const slack = fakeSlack();
       const database = await openTestDatabase();
@@ -190,35 +190,19 @@ describe("a rejected bot token", () => {
         error: "token_revoked",
       });
       expect(await readFailure(database)).toEqual({ status: "auth_failed", auth_failed_at: NOW });
+
+      expect(await confirm(database, fakeSlack({ teamId: "TOTHER" }))).toMatchObject({
+        kind: "refused",
+        refusal: { reason: "mismatch", field: "teamId" },
+      });
+      expect(await readFailure(database)).toEqual({ status: "auth_failed", auth_failed_at: NOW });
+
+      expect(await confirm(database, slack)).toMatchObject({
+        kind: "confirmed",
+        installation: fakeInstallation,
+      });
+      expect(await readFailure(database)).toEqual({ status: "active", auth_failed_at: null });
     }
-  });
-
-  test("recovers once Slack confirms the tokens again", async () => {
-    const slack = fakeSlack();
-    const database = await openTestDatabase();
-    await confirm(database, slack);
-    await database.write((transaction) => markAuthFailed(transaction, NOW - 3_600_000));
-
-    expect(await confirm(database, slack)).toMatchObject({
-      kind: "confirmed",
-      installation: fakeInstallation,
-    });
-    expect(await readFailure(database)).toEqual({ status: "active", auth_failed_at: null });
-  });
-
-  test("keeps failing while the tokens belong to someone else", async () => {
-    const database = await openTestDatabase();
-    await confirm(database, fakeSlack());
-    await database.write((transaction) => markAuthFailed(transaction, NOW - 60_000));
-
-    expect(await confirm(database, fakeSlack({ teamId: "TOTHER" }))).toMatchObject({
-      kind: "refused",
-      refusal: { reason: "mismatch", field: "teamId" },
-    });
-    expect(await readFailure(database)).toEqual({
-      status: "auth_failed",
-      auth_failed_at: NOW - 60_000,
-    });
   });
 });
 

@@ -19,9 +19,9 @@ import {
 
 // Confirming the tokens.
 //
-// Startup asks Slack whose tokens the bridge holds before it reads or sends anything, and so does
-// recovery after Slack rejected the bot token. The first answer records the installation, and every
-// later one must agree with it. An answer the bridge can't get or can't read decides nothing.
+// Startup asks Slack whose tokens the bridge holds before it reads or sends anything. The first
+// answer records the installation, and every later start must agree with it. An answer the bridge
+// can't get or can't read decides nothing.
 
 /** What Slack said about the tokens. */
 export type IdentityVerdict =
