@@ -16,7 +16,7 @@ import { BUNDLED_SKILL } from "@commands/client/skill";
 import type { WakeTimings } from "@wakes/model";
 import { startFakeSlack, type FakeSlack, type FakeSlackMessage } from "../fakes/slack";
 import { ALICE, BOT, MALLORY, posted } from "../integration/connectedBridge";
-import { CLI, waitUntil, type IsolatedToyBox } from "./isolatedToyBox";
+import { CLI, runCli, waitUntil, type IsolatedToyBox } from "./isolatedToyBox";
 import type { TestChannel } from "./testChannel";
 
 /** A routine's bold title, its schedules, and its prompt on one line in a text block. */
@@ -73,7 +73,6 @@ export async function linkSlack(toyBox: IsolatedToyBox, channel: TestChannel): P
   });
   const dataFolder = resolveDataFolder({}, toyBox.home);
   let bridge: Subprocess | undefined;
-  let stopped: Promise<void> | undefined;
 
   function serving() {
     if (bridge && bridge.exitCode === null && bridge.signalCode === null) return;
@@ -132,17 +131,12 @@ export async function linkSlack(toyBox: IsolatedToyBox, channel: TestChannel): P
       await startBridge();
     },
 
-    stop() {
-      stopped ??= (async () => {
-        try {
-          await stopBridge();
-        } finally {
-          await slack.stop();
-        }
-      })().catch((error: unknown) => {
-        throw toyBox.failure(error);
-      });
-      return stopped;
+    async stop() {
+      await stopBridge()
+        .finally(() => slack.stop())
+        .catch((error: unknown) => {
+          throw toyBox.failure(error);
+        });
     },
   };
 
@@ -175,27 +169,9 @@ export function skillRoutine(title: string) {
   throw new Error(`The skill gives no routine titled "${title}".`);
 }
 
-/**
- * Runs `toy-box-slack <args>` as the owner at a terminal under the isolated Toy Box's HOME, typing
- * their passphrase at each prompt, and fails with what it printed unless it exits 0.
- */
-async function runAsOwner(toyBox: IsolatedToyBox, ...args: string[]) {
-  const owner = Bun.spawn([process.execPath, "--no-env-file", CLI, ...args], {
-    env: { PATH: process.env.PATH, HOME: toyBox.home },
-    stdin: new Blob([`${PASSPHRASE}\n`.repeat(2)]),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(owner.stdout).text(),
-    new Response(owner.stderr).text(),
-    owner.exited,
-  ]);
-  if (exitCode !== 0) {
-    throw new Error(
-      `\`toy-box-slack ${args.join(" ")}\` exited with ${exitCode}.\n${stderr}${stdout}`,
-    );
-  }
+/** Runs `toy-box-slack <args>` as the owner at a terminal, typing their passphrase at each prompt. */
+function runAsOwner(toyBox: IsolatedToyBox, ...args: string[]) {
+  return runCli(toyBox.home, args, `${PASSPHRASE}\n`.repeat(2));
 }
 
 /** Runs `toy-box-slack serve` for the isolated Toy Box against `slack`, logging into the run's folder. */

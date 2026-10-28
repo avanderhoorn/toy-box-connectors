@@ -8,7 +8,6 @@
 // so one runs at a time.
 
 import {
-  chmodSync,
   closeSync,
   existsSync,
   mkdirSync,
@@ -18,7 +17,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  writeFileSync,
+  symlinkSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Subprocess } from "bun";
@@ -59,14 +58,6 @@ export type IsolatedToyBox = {
   stop(): Promise<void>;
 };
 
-/** A failure that already says where to read what happened. */
-class EndToEndFailure extends Error {
-  constructor(message: string, options: ErrorOptions) {
-    super(message, options);
-    this.name = "EndToEndFailure";
-  }
-}
-
 /** Starts Toy Box under a temp HOME, and resolves once it offers the lead's model. */
 export async function startIsolatedToyBox(): Promise<IsolatedToyBox> {
   await refuseTakenPort();
@@ -76,8 +67,9 @@ export async function startIsolatedToyBox(): Promise<IsolatedToyBox> {
   const [home, bin, work] = ["home", "bin", "work"].map((name) => join(root, name));
   for (const folder of [home, bin, work]) mkdirSync(folder);
   const log = join(root, "toy-box.log");
-  installCli(bin);
-  installSkill(home);
+  // The README installs the CLI as this link, which its shebang runs with the Bun on PATH.
+  symlinkSync(CLI, join(bin, "toy-box-slack"));
+  await runCli(home, ["install-skill"]);
 
   const output = openSync(log, "a");
   const server = Bun.spawn(
@@ -94,7 +86,6 @@ export async function startIsolatedToyBox(): Promise<IsolatedToyBox> {
 
   const lifetime = new AbortController();
   let keep = false;
-  let stopped: Promise<void> | undefined;
   const toyBox: IsolatedToyBox = {
     origin: ORIGIN,
     folder: root,
@@ -103,14 +94,13 @@ export async function startIsolatedToyBox(): Promise<IsolatedToyBox> {
     signal: lifetime.signal,
     failure(error) {
       keep = true;
-      if (error instanceof EndToEndFailure) return error;
       const message = error instanceof Error ? error.message : String(error);
       const transcripts = sessionTranscripts(home).map((path) => `Transcript: ${path}`);
       const logs = readdirSync(root)
         .filter((name) => name.endsWith(".log"))
         .sort()
         .map((name) => join(root, name));
-      return new EndToEndFailure(
+      return new Error(
         [
           message,
           `Kept the run's folder at ${root}.`,
@@ -120,20 +110,17 @@ export async function startIsolatedToyBox(): Promise<IsolatedToyBox> {
         { cause: error },
       );
     },
-    stop() {
-      stopped ??= (async () => {
-        lifetime.abort();
-        try {
-          await stopProcessTree(server);
-        } catch (error) {
-          throw toyBox.failure(error);
-        } finally {
-          // The Copilot CLI unpacks itself into the temp HOME's caches, a few hundred MB per run.
-          if (keep) rmSync(join(home, "Library"), { recursive: true, force: true });
-          else rmSync(root, { recursive: true, force: true });
-        }
-      })();
-      return stopped;
+    async stop() {
+      lifetime.abort();
+      try {
+        await stopProcessTree(server);
+      } catch (error) {
+        throw toyBox.failure(error);
+      } finally {
+        // The Copilot CLI unpacks itself into the temp HOME's caches, a few hundred MB per run.
+        if (keep) rmSync(join(home, "Library"), { recursive: true, force: true });
+        else rmSync(root, { recursive: true, force: true });
+      }
     },
   };
 
@@ -150,12 +137,12 @@ export async function startIsolatedToyBox(): Promise<IsolatedToyBox> {
 /** Resolves with `check`'s first result other than undefined. A check that throws fails at once. */
 export async function waitUntil<T>(
   what: string,
-  check: () => T | undefined,
+  check: () => T | undefined | Promise<T | undefined>,
   timeout: number,
 ): Promise<T> {
   const deadline = Date.now() + timeout;
   for (;;) {
-    const result = check();
+    const result = await check();
     if (result !== undefined) return result;
     if (Date.now() > deadline) throw new Error(`Waited ${timeout / 1000} s for ${what}.`);
     await Bun.sleep(50);
@@ -178,32 +165,36 @@ export function isolatedEnvironment(
   };
 }
 
-/** Writes the CLI under test into `bin` as `toy-box-slack`, run by the Bun running the tests. */
-export function installCli(bin: string) {
-  const run = [process.execPath, "--no-env-file", CLI].map(shellQuote).join(" ");
-  const path = join(bin, "toy-box-slack");
-  writeFileSync(path, `#!/bin/sh\nexec ${run} "$@"\n`);
-  chmodSync(path, 0o755);
-}
-
-/** Installs the skill into `home` the way its owner would, so every lead Toy Box starts finds it. */
-function installSkill(home: string) {
-  const install = Bun.spawnSync([process.execPath, "--no-env-file", CLI, "install-skill"], {
+/**
+ * Runs `toy-box-slack <args>` at a terminal under `home` as its owner, typing `typed`, and fails
+ * with what it printed unless it exits 0.
+ */
+export async function runCli(home: string, args: string[], typed = "") {
+  const cli = Bun.spawn([process.execPath, "--no-env-file", CLI, ...args], {
     env: { PATH: process.env.PATH, HOME: home },
+    stdin: new Blob([typed]),
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (!install.success) throw new Error(`install-skill failed:\n${install.stderr.toString()}`);
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(cli.stdout).text(),
+    new Response(cli.stderr).text(),
+    cli.exited,
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(
+      `\`toy-box-slack ${args.join(" ")}\` exited with ${exitCode}.\n${stderr}${stdout}`,
+    );
+  }
 }
 
 async function refuseTakenPort() {
-  const answered = await fetch(ORIGIN, { redirect: "manual", signal: AbortSignal.timeout(2_000) })
-    .then(async (response) => {
-      await response.body?.cancel();
-      return true;
-    })
-    .catch(() => false);
-  if (answered) {
+  const answer = await fetch(ORIGIN, {
+    redirect: "manual",
+    signal: AbortSignal.timeout(2_000),
+  }).catch(() => undefined);
+  await answer?.body?.cancel();
+  if (answer) {
     throw new Error(
       `Something already answers at ${ORIGIN.origin}. Stop it before running the suite.`,
     );
@@ -242,47 +233,33 @@ const modelListSchema = z.object({
 });
 
 // Toy Box answers GET /api/v1/models once its Copilot CLI has listed what the token can use, so
-// the first answer is final.
+// the first answer is final. A channel asking for a model Toy Box doesn't offer gets another.
 async function waitUntilReady(server: Subprocess) {
   const deadline = Date.now() + STARTUP_TIMEOUT;
-  for (;;) {
-    if (server.exitCode !== null || server.signalCode !== null) {
-      throw new Error(`Toy Box exited with ${server.signalCode ?? server.exitCode} as it started.`);
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`Toy Box didn't answer with its models within ${STARTUP_TIMEOUT / 1000} s.`);
-    }
-    const models = await fetchModels(deadline);
-    if (models) {
-      const offered = models.some(
-        ({ id, provider }) => id === LEAD_MODEL.name && provider === LEAD_MODEL.provider,
-      );
-      if (offered) return;
-      throw new Error(
-        models.length
-          ? `Toy Box doesn't offer ${LEAD_MODEL.provider}'s ${LEAD_MODEL.name}.`
-          : "Toy Box offers no models, so Copilot didn't accept the token from `gh auth token`.",
-      );
-    }
-    await Bun.sleep(250);
-  }
-}
-
-async function fetchModels(deadline: number) {
-  try {
-    const response = await fetch(new URL("/api/v1/models", ORIGIN), {
-      redirect: "manual",
-      signal: AbortSignal.timeout(Math.max(deadline - Date.now(), 1)),
-    });
-    if (response.status !== 200) {
-      await response.body?.cancel();
+  const models = await waitUntil(
+    "Toy Box to answer with its models",
+    async () => {
+      const exit = server.signalCode ?? server.exitCode;
+      if (exit !== null) throw new Error(`Toy Box exited with ${exit} as it started.`);
+      // Toy Box refuses connections until it listens.
+      const response = await fetch(new URL("/api/v1/models", ORIGIN), {
+        signal: AbortSignal.timeout(Math.max(deadline - Date.now(), 1)),
+      }).catch(() => undefined);
+      if (response?.status === 200) return modelListSchema.parse(await response.json()).models;
+      await response?.body?.cancel();
       return undefined;
-    }
-    return modelListSchema.parse(await response.json()).models;
-  } catch {
-    // Toy Box refuses connections until it listens.
-    return undefined;
-  }
+    },
+    STARTUP_TIMEOUT,
+  );
+  const offered = models.some(
+    ({ id, provider }) => id === LEAD_MODEL.name && provider === LEAD_MODEL.provider,
+  );
+  if (offered) return;
+  throw new Error(
+    models.length
+      ? `Toy Box doesn't offer ${LEAD_MODEL.provider}'s ${LEAD_MODEL.name}.`
+      : "Toy Box offers no models, so Copilot didn't accept the token from `gh auth token`.",
+  );
 }
 
 function sessionTranscripts(home: string): string[] {
@@ -360,8 +337,4 @@ function processTable(): Map<number, { ppid: number; started: string }> {
     if (match) table.set(Number(match[1]), { ppid: Number(match[2]), started: match[3] });
   }
   return table;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
 }

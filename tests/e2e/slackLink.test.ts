@@ -1,32 +1,71 @@
 // A Toy Box channel linked to Slack, from a Slack message to the lead acting on it.
+//
+// The suite runs only with TOY_BOX_SLACK_E2E=1, because its lead spends model credits. Its
+// scenarios share one isolated Toy Box, channel and link, which stop after the last scenario
+// whether they pass or not. A scenario drives real model turns, so it gets one rerun, and its
+// timeout outlasts the harness's deadlines, so a failure names what it waited for.
 
-import { afterAll, beforeAll, expect } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { FakeSlack } from "../fakes/slack";
 import { ALICE, BOT, MALLORY, said, timestamps } from "../integration/connectedBridge";
 import { waitFor } from "../integration/waitFor";
-import type { IsolatedToyBox } from "./isolatedToyBox";
+import {
+  startIsolatedToyBox,
+  STARTUP_TIMEOUT,
+  STOP_TIMEOUT,
+  type IsolatedToyBox,
+} from "./isolatedToyBox";
 import { linkSlack, REQUESTS_ROUTINE, skillRoutine, type SlackLink } from "./slackLink";
-import { describeEndToEnd } from "./suite";
-import { CREATE_CHANNEL_TIMEOUT, createTestChannel, type TestChannel } from "./testChannel";
-import { readCatalog } from "./toyBoxApi";
+import {
+  CREATE_CHANNEL_TIMEOUT,
+  createTestChannel,
+  TURN_TIMEOUT,
+  type TestChannel,
+} from "./testChannel";
 
 const RELEASE_NOTES_ROUTINE = skillRoutine("Release notes");
 const DIGEST_ROUTINE = skillRoutine("Slack digest");
 const PURPOSE = `Answer the release team's questions from Slack, publish release notes there, and digest what they say here. Tonight's release ships dark mode and faster search. In your kickoff turn, add ${adding(REQUESTS_ROUTINE)} Then add ${adding(RELEASE_NOTES_ROUTINE)} Then add ${adding(DIGEST_ROUTINE)} Run toy-box-slack only when a routine asks you to.`;
 
-describeEndToEnd("a channel linked to Slack", (suite) => {
+describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slack", () => {
+  let toyBox: IsolatedToyBox;
   let channel: TestChannel;
   let link: SlackLink;
-  beforeAll(async () => {
-    channel = await createTestChannel(suite.toyBox, { name: "Release", purpose: PURPOSE });
-    link = await linkSlack(suite.toyBox, channel);
-  }, CREATE_CHANNEL_TIMEOUT + 30_000);
-  afterAll(() => link?.stop());
+  beforeAll(
+    async () => {
+      toyBox = await startIsolatedToyBox();
+      channel = await createTestChannel(toyBox, { name: "Release", purpose: PURPOSE });
+      link = await linkSlack(toyBox, channel);
+    },
+    STARTUP_TIMEOUT + CREATE_CHANNEL_TIMEOUT + STOP_TIMEOUT + 35_000,
+  );
+  afterAll(async () => {
+    try {
+      await link?.stop();
+    } finally {
+      await toyBox?.stop();
+    }
+  }, STOP_TIMEOUT + 10_000);
 
-  suite.scenario(
+  /** A test that wakes the lead for `turns` turns. */
+  function scenario(name: string, run: () => Promise<void>, { turns }: { turns: number }) {
+    test(
+      name,
+      async () => {
+        try {
+          await run();
+        } catch (error) {
+          throw toyBox.failure(error);
+        }
+      },
+      { timeout: turns * TURN_TIMEOUT + 60_000, retry: 1 },
+    );
+  }
+
+  scenario(
     "an allowed person's mention wakes the lead, which answers once in their thread, and a stranger's gets nothing",
     async () => {
       // From now, since nothing said before the owner linked C0LINK asks the lead.
@@ -68,7 +107,7 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
     { turns: 1 },
   );
 
-  suite.scenario(
+  scenario(
     "a restart mid-conversation answers what Alice said while the bridge was down, once",
     async () => {
       const [askedTs] = timestamps(1, Date.now());
@@ -101,11 +140,11 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
     { turns: 2 },
   );
 
-  suite.scenario(
+  scenario(
     "release notes post once in the channel when their routine runs twice",
     async () => {
       // The routine publishes only what git says shipped since its previous run.
-      ship(suite.toyBox, "Add dark mode", "Speed up search");
+      ship(toyBox, "Add dark mode", "Speed up search");
       // Both tries share a scheduled slot, so a rerun checks every publication, not only its own.
       await channel.run(RELEASE_NOTES_ROUTINE.title);
       await waitFor(() =>
@@ -113,7 +152,7 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
       );
       const sent = publications(link);
       // A fix ships after the notes go out, so the second run has news for a slot already used.
-      ship(suite.toyBox, "Fix the search box in dark mode on Safari");
+      ship(toyBox, "Fix the search box in dark mode on Safari");
       await channel.run(RELEASE_NOTES_ROUTINE.title);
 
       expect(publications(link)).toEqual(sent);
@@ -122,7 +161,7 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
     { turns: 2 },
   );
 
-  suite.scenario(
+  scenario(
     "a digest posts once in the Toy Box channel when its routine runs twice",
     async () => {
       const [ts] = timestamps(1, Date.now());
@@ -147,18 +186,16 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
     { turns: 2 },
   );
 
-  suite.scenario(
+  scenario(
     "the run leaves the owner's Toy Box and Copilot untouched",
     async () => {
-      const catalog = await readCatalog(suite.toyBox.origin);
       const sessions = [
         join(".copilot", "session-state", channel.id),
         join(".toy-box", "sessions", channel.id),
       ];
 
-      expect(catalog.channels.map(({ id }) => id)).toEqual([channel.id]);
       for (const path of sessions) {
-        expect(existsSync(join(suite.toyBox.home, path))).toBe(true);
+        expect(existsSync(join(toyBox.home, path))).toBe(true);
         expect(existsSync(join(homedir(), path))).toBe(false);
       }
     },

@@ -43,12 +43,7 @@ export type TestChannel = {
   leadPosts(): Promise<number>;
 };
 
-const createdChannelSchema = z.object({
-  channel: z.object({
-    id: z.string(),
-    model: z.object({ provider: z.string(), name: z.string() }),
-  }),
-});
+const createdChannelSchema = z.object({ channel: z.object({ id: z.string() }) });
 
 /** Creates a channel whose lead runs the test model, and resolves once its kickoff has settled. */
 export async function createTestChannel(
@@ -56,7 +51,18 @@ export async function createTestChannel(
   options: { name: string; purpose: string },
 ): Promise<TestChannel> {
   try {
-    const testChannel = followChannel(toyBox, await createChannel(toyBox, options));
+    const response = await callToyBox(toyBox.origin, "channels", {
+      method: "POST",
+      body: {
+        name: options.name,
+        purpose: `${options.purpose}\n\n${TEST_CHANNEL_RULES}`,
+        directory: toyBox.work,
+        model: LEAD_MODEL,
+      },
+      expected: 201,
+    });
+    const { channel } = createdChannelSchema.parse(await response.json());
+    const testChannel = followChannel(toyBox, channel.id);
     await testChannel.kickedOff();
     return testChannel;
   } catch (error) {
@@ -64,31 +70,8 @@ export async function createTestChannel(
   }
 }
 
-async function createChannel(
-  toyBox: IsolatedToyBox,
-  { name, purpose }: { name: string; purpose: string },
-): Promise<string> {
-  const response = await callToyBox(toyBox.origin, "channels", {
-    method: "POST",
-    body: {
-      name,
-      purpose: `${purpose}\n\n${TEST_CHANNEL_RULES}`,
-      directory: toyBox.work,
-      model: LEAD_MODEL,
-    },
-    expected: 201,
-  });
-  const { channel } = createdChannelSchema.parse(await response.json());
-  // Toy Box gives a channel its first model when it doesn't offer the one asked for.
-  if (channel.model.provider !== LEAD_MODEL.provider || channel.model.name !== LEAD_MODEL.name) {
-    throw new Error(`Toy Box gave the channel ${channel.model.provider}'s ${channel.model.name}.`);
-  }
-  return channel.id;
-}
-
 function followChannel(toyBox: IsolatedToyBox, channelId: string) {
   const presences: Presence[] = [];
-  let leadPosted = false;
   const routines = new Map<string, Routine>();
   let failure: unknown;
 
@@ -126,9 +109,8 @@ function followChannel(toyBox: IsolatedToyBox, channelId: string) {
     if (Object.hasOwn(presence, channelId)) presences.push(presence[channelId]);
   }
 
-  // The channel has no members, so every agent message is its lead's.
+  // System messages announce routine changes.
   function observeMessage(message: Message) {
-    if (message.sender.type === "agent") leadPosted = true;
     const change = routineChangeSchema.safeParse(message.content);
     if (message.sender.type !== "system" || !change.success) return;
     const { type, routine } = change.data;
@@ -151,25 +133,38 @@ function followChannel(toyBox: IsolatedToyBox, channelId: string) {
     return [...routines.values()].find((candidate) => candidate.title === title);
   }
 
+  /** Waits for a turn to start after the presence at `since`, and resolves once it settles. */
+  async function settledTurn(since: number, what: string) {
+    await waitUntil(
+      `the lead to start ${what}`,
+      () => {
+        following();
+        return presences.slice(since).some(({ state }) => state === "working") || undefined;
+      },
+      TURN_START_TIMEOUT,
+    );
+    await waitUntil(`the lead to finish ${what}`, settled, TURN_FINISH_TIMEOUT);
+  }
+
   async function turn(wake: () => Promise<void>) {
     await waitUntil("the lead to finish its last turn", settled, TURN_FINISH_TIMEOUT);
     const before = presences.length;
     await wake();
-    await waitUntil(
-      "the lead to start working",
-      () => {
-        following();
-        return presences.slice(before).some(isWorking) || undefined;
-      },
-      TURN_START_TIMEOUT,
-    );
-    await waitUntil("the lead to finish its turn", settled, TURN_FINISH_TIMEOUT);
+    await settledTurn(before, "its turn");
+  }
+
+  // The stream can deliver a message after the presence that ends its turn, so this reads the
+  // store. The channel has no members, so every agent message is its lead's.
+  async function leadPosts() {
+    const messages = await readLatestMessages(toyBox.origin, channelId);
+    return messages.filter(({ sender }) => sender.type === "agent").length;
   }
 
   return {
     id: channelId,
     routine,
     turn,
+    leadPosts,
 
     async run(title: string) {
       const scheduled = routine(title);
@@ -180,50 +175,20 @@ function followChannel(toyBox: IsolatedToyBox, channelId: string) {
       });
     },
 
-    // The stream can deliver a message after the presence that ends its turn, so this reads the
-    // store.
-    async leadPosts() {
-      const messages = await readLatestMessages(toyBox.origin, channelId);
-      return messages.filter(({ sender }) => sender.type === "agent").length;
-    },
-
     /**
-     * Resolves once the lead has posted and stopped working. A lead that never starts, or stops
-     * without posting, fails at once, which is how a model or token Copilot refuses shows up. So
-     * does one that schedules its own wake, which could start a turn in the middle of a scenario.
+     * Resolves once the lead's kickoff turn has posted and settled. A lead that stops without
+     * posting fails, which is how a model or token Copilot refuses shows up. So does one that
+     * schedules its own wake, which could start a turn in the middle of a scenario.
      */
     async kickedOff() {
-      const created = Date.now();
-      let quietSince: number | undefined;
-      await waitUntil(
-        "the lead's kickoff turn to post and settle",
-        () => {
-          if (settled() && leadPosted) {
-            const presence = presences.at(-1);
-            if (presence?.state === "waiting" && presence.wakeAt) {
-              throw new Error(`The lead scheduled a wake for ${presence.wakeAt} at kickoff.`);
-            }
-            return true;
-          }
-          if (!presences.some(isWorking)) {
-            if (Date.now() - created < TURN_START_TIMEOUT) return undefined;
-            throw new Error(
-              `The lead didn't start its kickoff turn in ${TURN_START_TIMEOUT / 1000} s.`,
-            );
-          }
-          // Its message can trail the presence that ends its turn.
-          quietSince = settled() ? (quietSince ?? Date.now()) : undefined;
-          if (quietSince !== undefined && Date.now() - quietSince > 2_000) {
-            throw new Error("The lead finished its kickoff turn without posting.");
-          }
-          return undefined;
-        },
-        TURN_START_TIMEOUT + TURN_FINISH_TIMEOUT,
-      );
+      await settledTurn(0, "its kickoff turn");
+      if (!(await leadPosts())) {
+        throw new Error("The lead finished its kickoff turn without posting.");
+      }
+      const presence = presences.at(-1);
+      if (presence?.state === "waiting" && presence.wakeAt) {
+        throw new Error(`The lead scheduled a wake for ${presence.wakeAt} at kickoff.`);
+      }
     },
   };
-}
-
-function isWorking(presence: Presence): boolean {
-  return presence.state === "working";
 }

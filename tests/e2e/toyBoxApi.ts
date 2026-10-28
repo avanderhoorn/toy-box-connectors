@@ -51,8 +51,6 @@ const frameSchema = z.discriminatedUnion("type", [
 /** One frame of a channel's event stream. */
 export type Frame = z.output<typeof frameSchema>;
 
-const catalogSchema = z.object({ channels: z.array(z.object({ id: z.string() })) });
-
 const historySchema = z.object({ messages: z.array(messageSchema) });
 
 /** Calls `path` under /api/v1, and resolves with Toy Box's answer once it has `expected` status. */
@@ -75,11 +73,6 @@ export async function callToyBox(
     throw new Error(`Toy Box answered ${response.status} to ${method} /api/v1/${path}: ${answer}`);
   }
   return response;
-}
-
-/** The channels Toy Box has. */
-export async function readCatalog(origin: URL) {
-  return catalogSchema.parse(await (await callToyBox(origin, "channels")).json());
 }
 
 /** Channel `channelId`'s latest 100 messages, oldest first, as Toy Box stored them. */
