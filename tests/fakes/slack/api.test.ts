@@ -344,7 +344,12 @@ test("updates retain blocks and metadata when omitted, remove blocks with text, 
     blocks,
     metadata: { event_payload: { id: "a2" } },
   });
-  await client.chat.update({ channel, ts: post.ts!, text: "Changed" });
+  const changed = await client.chat.update({ channel, ts: post.ts!, text: "Changed" });
+  // Slack's documented update receipt names the message by its top-level ts alone.
+  expect(changed).toMatchObject({ ok: true, channel, ts: post.ts, text: "Changed" });
+  expect(changed.message).toMatchObject({ text: "Changed", user: fake.identity.botUserId });
+  expect(changed.message).not.toHaveProperty("ts");
+  expect(fake.getMessages(channel)[0].ts).toBe(post.ts!);
   expect(fake.getMessages(channel)[0].blocks).toBeUndefined();
   expect(fake.getMessages(channel)[0].metadata).toBeDefined();
   await client.apiCall("chat.update", { channel, ts: post.ts!, blocks, metadata: {} });
