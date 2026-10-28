@@ -1,4 +1,8 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file
+
+// Bun would otherwise load a .env file from whatever folder the CLI runs in, where a project's
+// NITRO_PORT or TOY_BOX_SLACK_HOME would change who the caller seems to be or which bridge it
+// reaches.
 
 import { defineCommand, runMain } from "citty";
 

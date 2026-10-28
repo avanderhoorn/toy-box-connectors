@@ -11,7 +11,7 @@ const REPOSITORY = join(import.meta.dir, "..", "..");
  * shell running the tests reaches it.
  */
 export function spawnBridge(home: string, env: Record<string, string> = {}) {
-  const child = Bun.spawn([process.execPath, "cli/index.ts", "serve"], {
+  const child = Bun.spawn([process.execPath, "--no-env-file", "cli/index.ts", "serve"], {
     cwd: REPOSITORY,
     env: {
       PATH: process.env.PATH,
