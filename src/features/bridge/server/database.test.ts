@@ -53,7 +53,7 @@ describe("openBridgeDatabase", () => {
     });
   });
 
-  test("creates every table and unique index in the data model on an empty file", async () => {
+  test("creates every table and index in the data model on an empty file", async () => {
     const database = await openTestDatabase();
 
     const { version, objects } = await database.read(readSchema);
@@ -89,7 +89,15 @@ describe("openBridgeDatabase", () => {
     ]);
     expect(
       objects.filter((object) => object.type === "index").map((object) => object.name),
-    ).toEqual(["claims_one_open", "outbox_one_final", "outbox_one_publication"]);
+    ).toEqual([
+      "claims_one_open",
+      "files_message",
+      "outbox_one_final",
+      "outbox_one_publication",
+      "receipts_received",
+      "request_messages_one_request",
+      "requests_one_active",
+    ]);
   });
 
   test("leaves a current schema exactly as it was when the file is opened again", async () => {

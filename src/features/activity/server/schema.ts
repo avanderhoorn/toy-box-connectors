@@ -1,7 +1,8 @@
 /** Install the tables whose meaning is owned by Activity. */
 export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
   await db.unsafe(`
-    -- text is NULL for a content-free marker.
+    -- A kept message has text, files and a content hash, and a content-free marker or a tombstone
+    -- has none of them. eligible marks a person's message, the only kind that can start a request.
     CREATE TABLE messages (
       channel_id   TEXT NOT NULL,
       ts           TEXT NOT NULL,
@@ -20,7 +21,11 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       deleted      INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
       version      TEXT NOT NULL,
       updated_seq  INTEGER NOT NULL CHECK (typeof(updated_seq) = 'integer' AND updated_seq > 0),
-      PRIMARY KEY (channel_id, ts)
+      PRIMARY KEY (channel_id, ts),
+      CHECK (eligible = (author_role IN ('owner', 'allowed', 'observed'))),
+      CHECK ((content_hash IS NULL) = (text IS NULL)),
+      CHECK ((files IS NULL) = (text IS NULL)),
+      CHECK (text IS NULL OR (deleted = 0 AND author_role <> 'other'))
     );
 
     CREATE TABLE changes (
@@ -34,7 +39,7 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
     CREATE TABLE threads (
       channel_id      TEXT NOT NULL,
       thread_ts       TEXT NOT NULL,
-      tracked_reason  TEXT NOT NULL,
+      tracked_reason  TEXT NOT NULL CHECK (tracked_reason IN ('request')),
       latest_reply_ts TEXT,
       repaired_at     INTEGER,
       PRIMARY KEY (channel_id, thread_ts)
@@ -51,7 +56,8 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       latest_ts   TEXT NOT NULL,
       cursor      TEXT,
       state       TEXT NOT NULL CHECK (state IN ('open', 'repairing', 'repaired', 'partial')),
-      reason      TEXT NOT NULL,
+      reason      TEXT NOT NULL
+        CHECK (reason IN ('disconnect', 'rate_limited', 'malformed', 'startup', 'thread')),
       opened_at   INTEGER NOT NULL,
       repaired_at INTEGER,
       CHECK ((thread_ts IS NOT NULL) = (scope = 'thread'))
@@ -67,15 +73,20 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       CHECK (through_seq <= served_through_seq)
     );
 
+    -- Only a kept message's files are indexed. size and mime are what Slack reported.
     CREATE TABLE files (
       file_id    TEXT PRIMARY KEY,
       channel_id TEXT NOT NULL,
       ts         TEXT NOT NULL,
-      state      TEXT NOT NULL,
+      state      TEXT NOT NULL CHECK (state IN ('indexed', 'fetched')),
       local_path TEXT,
       size       INTEGER CHECK (size IS NULL OR (typeof(size) = 'integer' AND size >= 0)),
       mime       TEXT,
-      fetched_at INTEGER
+      fetched_at INTEGER,
+      CHECK ((local_path IS NOT NULL) = (state = 'fetched')),
+      CHECK ((fetched_at IS NOT NULL) = (state = 'fetched'))
     );
+
+    CREATE INDEX files_message ON files(channel_id, ts);
   `);
 }

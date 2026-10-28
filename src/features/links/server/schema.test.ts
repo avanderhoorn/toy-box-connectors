@@ -92,7 +92,7 @@ test("deleting a link deletes what belongs to it and nothing else", async () => 
         oldest_ts: "1700000000.000100",
         latest_ts: "1700000600.000200",
         state: "open",
-        reason: "reconnect",
+        reason: "disconnect",
         opened_at: 0,
       })}`;
       await transaction`INSERT INTO cursors ${transaction({ link_id: id })}`;

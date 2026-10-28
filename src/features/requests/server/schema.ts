@@ -31,8 +31,17 @@ export async function initializeRequestSchema(db: Bun.SQL): Promise<void> {
       progress_ts       TEXT,
       expires_at        INTEGER NOT NULL,
       closed_reason     TEXT,
-      CHECK (served_rev <= input_rev)
+      CHECK (served_rev <= input_rev),
+      CHECK (state IN ('cancelled', 'expired') OR (seen_at IS NULL) = (state = 'open')),
+      CHECK ((held_at IS NULL) = (hold_reason IS NULL)),
+      CHECK (held_at IS NULL OR state IN ('seen', 'in_progress')),
+      CHECK (attention IS NULL OR state IN ('open', 'seen', 'in_progress', 'answering')),
+      CHECK ((closed_reason IS NOT NULL) = (state IN ('dismissed', 'cancelled')))
     );
+
+    -- A requester has at most one active request per thread, which their later messages join.
+    CREATE UNIQUE INDEX requests_one_active ON requests(link_id, requester_user_id, root_ts)
+      WHERE state IN ('open', 'seen', 'in_progress', 'answering');
 
     CREATE TABLE request_messages (
       request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
@@ -40,5 +49,8 @@ export async function initializeRequestSchema(db: Bun.SQL): Promise<void> {
       ts         TEXT NOT NULL,
       PRIMARY KEY (request_id, channel_id, ts)
     );
+
+    -- A message belongs to at most one request.
+    CREATE UNIQUE INDEX request_messages_one_request ON request_messages(channel_id, ts);
   `);
 }

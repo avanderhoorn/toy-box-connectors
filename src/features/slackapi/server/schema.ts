@@ -14,12 +14,18 @@ export async function initializeSlackApiSchema(db: Bun.SQL): Promise<void> {
       disconnected_at INTEGER
     );
 
+    -- key is the event ID, the envelope ID of a delivery that has none, or app_rate_limited:<minute>.
+    -- A receipt commits with whatever its delivery changed, before the ack, and holds no content.
     CREATE TABLE receipts (
       key         TEXT PRIMARY KEY,
       type        TEXT NOT NULL,
       received_at INTEGER NOT NULL,
-      disposition TEXT NOT NULL
+      disposition TEXT NOT NULL CHECK (disposition IN (
+        'applied', 'claim', 'unlinked', 'ignored', 'foreign', 'malformed', 'rate_limited', 'interactive'
+      ))
     );
+
+    CREATE INDEX receipts_received ON receipts(received_at);
 
     CREATE TABLE channel_info (
       channel_id            TEXT PRIMARY KEY,
