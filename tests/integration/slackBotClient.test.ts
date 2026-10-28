@@ -255,6 +255,20 @@ test("a workspace moving into an Enterprise org fails auth too", async () => {
   expect(authFailures).toEqual([NOW]);
 });
 
+test("an expired token fails the installation rather than one post", async () => {
+  const { fake, database, bot, authFailures, channel } = await connectBot();
+  fake.failNext("chat.postMessage", { error: "token_expired" });
+  expect(
+    await bot.call("chat.postMessage", (client) =>
+      client.chat.postMessage({ channel, text: "Not sent" }),
+    ),
+  ).toEqual({ kind: "auth_failed", error: "token_expired" });
+  expect(await readAuthFailure(database)).toEqual({ status: "auth_failed", auth_failed_at: NOW });
+  expect(authFailures).toEqual([NOW]);
+  expect(fake.getMessages(channel)).toEqual([]);
+  expect(fake.calls.filter(({ method }) => method === "chat.postMessage")).toHaveLength(1);
+});
+
 test("an uninstalled installation stays uninstalled when its token is rejected", async () => {
   const { database, bot, authFailures } = await connectBot({
     token: "xoxb-revoked",

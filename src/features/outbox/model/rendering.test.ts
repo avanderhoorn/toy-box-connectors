@@ -111,6 +111,10 @@ test("email addresses, git remotes and non-HTTP autolinks stay plain text", () =
     "support@github.com",
     "git@github.com:github/toy-box.git",
     "ftp://example.com/file",
+    "Mail me at someone@example.com",
+    "The remote is git@github.com:org/repo.git",
+    "Clone ssh://git@github.com/org/repo.git",
+    "Download ftp://example.com/file",
   ]) {
     expect(sections(source)).toEqual([source]);
   }
@@ -119,6 +123,9 @@ test("email addresses, git remotes and non-HTTP autolinks stay plain text", () =
     "Email us (support@example.com)",
   ]);
   expect(sections("<javascript:alert(1)>")).toEqual(["javascript:alert(1)"]);
+  expect(sections("Write to [the owner](mailto:owner@example.com)")).toEqual([
+    "Write to the owner (owner@example.com)",
+  ]);
 });
 
 test("a link label cannot inject Slack controls or a new destination", () => {

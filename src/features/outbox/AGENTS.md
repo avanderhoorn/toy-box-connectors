@@ -11,6 +11,12 @@ An outbox item has an opaque ID carried in the posted message's metadata, a numb
 An item becomes `sending` in a committed transaction before the call is made, so a crash mid-call leaves evidence. A confirmed response makes it `sent`. A timeout, a dropped connection, or an ambiguous error makes it `delivery_unknown`, and reconciliation looks for the item's metadata in the target conversation before anything is sent again. At startup, every item still `sending` becomes `delivery_unknown`. The lead settles what reconciliation can't with `resolve --resend` or `resolve --drop`.
 
 A rate limit pauses only the method Slack limited, until the time Slack named.
+The shared bot client owns those cooldowns and installation-wide authentication failures,
+including expired tokens. `model/delivery.ts` classifies its outcomes and owns the proof a
+post needs: the intended channel and thread, our bot and app, and the item's metadata and
+payload hash. Manual resolution may use exact sent text only when metadata is absent,
+never when metadata identifies another item. A receipt that shows a reply at the root
+requires withdrawal, not confirmation.
 
 ## Text
 

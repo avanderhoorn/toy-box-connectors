@@ -1,3 +1,5 @@
+import type { ChannelSuspendReason } from "@links/model/audience";
+
 // Web API errors.
 //
 // Slack answers a failed call with an error code. Most are the caller's to classify, but a few say
@@ -9,6 +11,7 @@ const authFailures: ReadonlySet<string> = new Set([
   "not_authed",
   "account_inactive",
   "token_revoked",
+  "token_expired",
   // The workspace is moving into an Enterprise org, so its tokens stop working until it's reset.
   "team_added_to_org",
   "org_login_required",
@@ -33,4 +36,26 @@ export function isRateLimit(error: string): boolean {
  */
 export function isErrorCode(error: unknown): error is string {
   return typeof error === "string" && /^[a-z][a-z0-9_]*$/.test(error);
+}
+
+/**
+ * Why an error shuts the bot out of a whole channel. Thread-only restrictions stay with the
+ * individual call. https://docs.slack.dev/reference/methods/chat.postMessage/#errors
+ */
+export function channelFailureReason(error: string): ChannelSuspendReason | null {
+  switch (error) {
+    case "not_in_channel":
+      return "bot_removed";
+    case "channel_not_found":
+      return "channel_not_found";
+    case "is_archived":
+      return "channel_archived";
+    case "restricted_action":
+    case "restricted_action_read_only_channel":
+    case "team_access_not_granted":
+    case "ekm_access_denied":
+      return "channel_restricted";
+    default:
+      return null;
+  }
 }
