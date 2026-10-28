@@ -15,17 +15,17 @@ export type LeadPayload =
   | { kind: "valid"; message: RenderedMessage }
   | { kind: "refused"; problem: RenderingProblem | "invalid_snapshot" };
 
-/** Recheck canonical output and secrets without changing the bytes the stored hash names. */
+/**
+ * A snapshot is canonical when rendering it again changes nothing.
+ * Recheck secrets without changing the bytes the stored hash names.
+ */
 export function checkLeadPayload(payload: unknown): LeadPayload {
   const parsed = leadMessageSchema.safeParse(payload);
   if (!parsed.success) return { kind: "refused", problem: "invalid_snapshot" };
   const message = parsed.data;
   if (message.blocks[0]!.text !== message.text)
     return { kind: "refused", problem: "invalid_snapshot" };
-  const source = message.text
-    .replace(/&lt;(?=[@!])/g, "<")
-    .replace(/@\u200b(here|channel|everyone)\b/gi, "@$1");
-  const rendered = renderMarkdown(source);
+  const rendered = renderMarkdown(message.text);
   if (rendered.kind === "refused") return rendered;
   return rendered.message.text === message.text
     ? { kind: "valid", message }
