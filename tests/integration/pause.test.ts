@@ -34,6 +34,16 @@ test.each([
     reason: "channel_made_public",
   },
   {
+    cause: "the channel is shared outside the org",
+    event: {
+      type: "channel_shared",
+      connected_team_id: "T-other",
+      channel: "C-link",
+      event_ts: changedTs,
+    },
+    reason: "workspace_joined",
+  },
+  {
     cause: "Slack gives the channel a new ID",
     event: {
       type: "channel_id_changed",
