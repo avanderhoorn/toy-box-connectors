@@ -22,11 +22,11 @@ async function connectBot({
   onTestFinished(() => fake.stop());
   const database = await openTestDatabase();
   await createStoredInstallation(database, { status });
-  const authFailures: number[] = [];
+  const authFailures: string[] = [];
   const options = {
     slackApiUrl: fake.url,
     timeoutMs,
-    onAuthFailed: () => authFailures.push(now),
+    onAuthFailed: (error: string) => authFailures.push(error),
     now: () => now,
   };
   const bot = createBotClient(database, token ?? fake.botToken, options);
@@ -50,10 +50,10 @@ async function connectBotTo(answer: () => Response) {
   onTestFinished(() => server.stop(true));
   const database = await openTestDatabase();
   await createStoredInstallation(database);
-  const authFailures: number[] = [];
+  const authFailures: string[] = [];
   const bot = createBotClient(database, "xoxb-test", {
     slackApiUrl: `${server.url.href}api/`,
-    onAuthFailed: () => authFailures.push(NOW),
+    onAuthFailed: (error) => authFailures.push(error),
     now: () => NOW,
   });
   return { database, bot, authFailures };
@@ -86,7 +86,7 @@ test("a post whose response is lost is unknown, and nothing sends it again", asy
   );
   await Bun.sleep(100);
 
-  expect(posted).toEqual({ kind: "unknown", detail: expect.any(String) });
+  expect(posted).toEqual({ kind: "unknown", detail: "The operation timed out." });
   expect(fake.calls.filter(({ method }) => method === "chat.postMessage")).toHaveLength(1);
   expect(fake.getMessages(channel)).toHaveLength(1);
 });
@@ -241,7 +241,7 @@ test("a rejected token puts an active installation in auth_failed, once", async 
   });
 
   expect(await readAuthFailure(database)).toEqual({ status: "auth_failed", auth_failed_at: NOW });
-  expect(authFailures).toEqual([NOW]);
+  expect(authFailures).toEqual(["invalid_auth"]);
 });
 
 test("a workspace moving into an Enterprise org fails auth too", async () => {
@@ -252,7 +252,7 @@ test("a workspace moving into an Enterprise org fails auth too", async () => {
     await bot.call("conversations.history", (client) => client.conversations.history({ channel })),
   ).toEqual({ kind: "auth_failed", error: "team_added_to_org" });
   expect(await readAuthFailure(database)).toEqual({ status: "auth_failed", auth_failed_at: NOW });
-  expect(authFailures).toEqual([NOW]);
+  expect(authFailures).toEqual(["team_added_to_org"]);
 });
 
 test("an expired token fails the installation rather than one post", async () => {
@@ -264,7 +264,7 @@ test("an expired token fails the installation rather than one post", async () =>
     ),
   ).toEqual({ kind: "auth_failed", error: "token_expired" });
   expect(await readAuthFailure(database)).toEqual({ status: "auth_failed", auth_failed_at: NOW });
-  expect(authFailures).toEqual([NOW]);
+  expect(authFailures).toEqual(["token_expired"]);
   expect(fake.getMessages(channel)).toEqual([]);
   expect(fake.calls.filter(({ method }) => method === "chat.postMessage")).toHaveLength(1);
 });

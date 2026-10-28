@@ -7,6 +7,7 @@ import {
   WebAPIRequestError,
   WebClient,
   type WebAPICallResult,
+  type WebClientOptions,
 } from "@slack/web-api";
 import { isAuthFailure, isErrorCode, isRateLimit } from "@slackapi/model/errors";
 import { markAuthFailed } from "./installation";
@@ -61,8 +62,11 @@ export type BotClient = {
 export type BotClientOptions = {
   slackApiUrl?: string;
   timeoutMs?: number;
-  /** Called after a call finds Slack rejecting the token and puts an active installation in auth_failed. */
-  onAuthFailed?: () => void;
+  /**
+   * Called with Slack's error after a call finds Slack rejecting the token and puts an active
+   * installation in auth_failed.
+   */
+  onAuthFailed?: (error: string) => void;
   now?: () => number;
 };
 
@@ -77,32 +81,32 @@ export function createBotClient(
     now = Date.now,
   }: BotClientOptions = {},
 ): BotClient {
-  const client = createWebClient(token, { slackApiUrl, timeoutMs });
+  const client = new WebClient(token, {
+    ...oneAttemptOptions({ slackApiUrl, timeoutMs }),
+    logLevel: LogLevel.ERROR,
+  });
   const cooldown = (method: string) => database.read((sql) => readCooldown(sql, method, now()));
 
   async function failed(method: string, error: unknown): Promise<SlackCall<never>> {
-    const retryAfter = retryAfterOf(error);
-    if (retryAfter !== null) {
-      const until = now() + retryAfter * 1000;
-      return {
-        kind: "rate_limited",
-        until: await database.write((transaction) => holdMethod(transaction, method, until)),
-      };
+    const failure = readCallFailure(error);
+    if (failure === null) throw error;
+    switch (failure.kind) {
+      case "rate_limited": {
+        const until = now() + failure.retryAfterSeconds * 1000;
+        return {
+          kind: "rate_limited",
+          until: await database.write((transaction) => holdMethod(transaction, method, until)),
+        };
+      }
+      case "auth_failed":
+        if (await database.write((transaction) => markAuthFailed(transaction, now()))) {
+          onAuthFailed(failure.error);
+        }
+        return failure;
+      case "error":
+      case "unknown":
+        return failure;
     }
-    if (error instanceof WebAPIPlatformError) {
-      const code: unknown = error.data.error;
-      if (!isErrorCode(code)) return { kind: "unknown", detail: "unreadable response" };
-      if (!isAuthFailure(code)) return { kind: "error", error: code, data: error.data };
-      if (await database.write((transaction) => markAuthFailed(transaction, now()))) onAuthFailed();
-      return { kind: "auth_failed", error: code };
-    }
-    if (error instanceof WebAPIRequestError) {
-      return { kind: "unknown", detail: error.original.message };
-    }
-    if (error instanceof WebAPIHTTPError) {
-      return { kind: "unknown", detail: `HTTP ${error.statusCode}` };
-    }
-    throw error;
   }
 
   return {
@@ -120,24 +124,56 @@ export function createBotClient(
 }
 
 /**
- * A Web API client that makes one attempt per call, rejects a 429 instead of waiting it out, and
- * gives up after `timeoutMs`.
+ * Options for a Web API client that makes one attempt per call, rejects a 429 instead of waiting it
+ * out, and gives up after `timeoutMs`.
  */
-function createWebClient(
-  token: string,
-  {
-    slackApiUrl,
-    timeoutMs = slackCallTimeoutMs,
-  }: { slackApiUrl?: string; timeoutMs?: number } = {},
-): WebClient {
-  return new WebClient(token, {
+export function oneAttemptOptions({
+  slackApiUrl,
+  timeoutMs = slackCallTimeoutMs,
+}: {
+  slackApiUrl?: string;
+  timeoutMs?: number;
+}) {
+  return {
     slackApiUrl,
     timeout: timeoutMs,
     retryConfig: { retries: 0 },
     rejectRateLimitedCalls: true,
     allowAbsoluteUrls: false,
-    logLevel: LogLevel.ERROR,
-  });
+  } satisfies WebClientOptions;
+}
+
+/** Why a call failed, as the SDK reported it. */
+export type CallFailure =
+  /** Slack asked the bridge to wait `retryAfterSeconds` before calling the method again. */
+  | { kind: "rate_limited"; retryAfterSeconds: number }
+  /** Slack rejected the token with `error`. */
+  | { kind: "auth_failed"; error: string }
+  /** Slack refused the call with an error code. */
+  | { kind: "error"; error: string; data: WebAPICallResult }
+  /** No answer came back, or the answer wasn't Slack's, so the call may have taken effect. */
+  | { kind: "unknown"; detail: string };
+
+/**
+ * Reads why a call failed from what the SDK threw, or null when `error` isn't the SDK reporting a
+ * call, such as a storage error.
+ */
+export function readCallFailure(error: unknown): CallFailure | null {
+  const retryAfter = retryAfterOf(error);
+  if (retryAfter !== null) return { kind: "rate_limited", retryAfterSeconds: retryAfter };
+  if (error instanceof WebAPIPlatformError) {
+    const code: unknown = error.data.error;
+    if (!isErrorCode(code)) return { kind: "unknown", detail: "unreadable response" };
+    if (isAuthFailure(code)) return { kind: "auth_failed", error: code };
+    return { kind: "error", error: code, data: error.data };
+  }
+  if (error instanceof WebAPIRequestError) {
+    return { kind: "unknown", detail: error.original.message };
+  }
+  if (error instanceof WebAPIHTTPError) {
+    return { kind: "unknown", detail: `HTTP ${error.statusCode}` };
+  }
+  return null;
 }
 
 /**
