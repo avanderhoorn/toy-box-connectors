@@ -7,6 +7,7 @@ import { createStoredRequest } from "@requests/server/testFixtures";
 import { startToyBoxClient, type ToyBoxClient } from "@toybox/server";
 import { defaultWakeTimings } from "@wakes/model";
 import { startFakeToyBox } from "../fakes/toybox";
+import { waitFor } from "./waitFor";
 
 const NOW = Date.parse("2026-10-27T09:00:00Z");
 const REQUESTS_ROUTINE = {
@@ -77,19 +78,6 @@ function readHolds(database: BridgeDatabase) {
 /** The milliseconds between each refused stream request and the next. */
 function gapsBetween(requests: readonly { at: number }[]): number[] {
   return requests.slice(1).map((request, index) => request.at - requests[index]!.at);
-}
-
-async function waitFor(assertion: () => void | Promise<void>, timeoutMs = 2_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    try {
-      await assertion();
-      return;
-    } catch (error) {
-      if (Date.now() >= deadline) throw error;
-      await Bun.sleep(5);
-    }
-  }
 }
 
 test("a first connection stores the snapshot's revision, provider and lead presence", async () => {

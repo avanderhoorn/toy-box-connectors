@@ -7,6 +7,7 @@ import { createStoredLink } from "@links/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { startFakeToyBox } from "../fakes/toybox";
 import { spawnBridge } from "./bridgeProcess";
+import { waitFor } from "./waitFor";
 
 const REQUESTS_ROUTINE = {
   title: "Slack requests",
@@ -54,25 +55,12 @@ async function withDatabase<T>(dataFolder: string, use: (database: BridgeDatabas
   }
 }
 
-async function waitFor(assertion: () => void, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    try {
-      assertion();
-      return;
-    } catch (error) {
-      if (Date.now() >= deadline) throw error;
-      await Bun.sleep(10);
-    }
-  }
-}
-
 test("a running bridge follows its linked channel, wakes the lead once and stops on SIGTERM", async () => {
   const { toyBox, channelId, routine, home, dataFolder, env } = await linkFakeChannel();
   const bridge = spawnBridge(home, env);
   await bridge.running();
 
-  await waitFor(() => expect(toyBox.runs).toHaveLength(1));
+  await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
   bridge.child.kill("SIGTERM");
 
   expect(await bridge.exit()).toEqual({

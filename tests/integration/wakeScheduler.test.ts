@@ -7,6 +7,7 @@ import type { WakeTimings } from "@wakes/model";
 import { startWakeScheduler, type WakeScheduler } from "@wakes/server";
 import { readWakeBlock, recordInbox } from "@wakes/server/database";
 import { startFakeToyBox } from "../fakes/toybox";
+import { waitFor } from "./waitFor";
 
 // Tuesday 9:00 in Los Angeles, where publication schedules run in these tests.
 const NOW = Date.parse("2026-10-27T16:00:00Z");
@@ -132,19 +133,6 @@ async function readOutcomes(database: BridgeDatabase) {
 
 function readBlock(database: BridgeDatabase) {
   return database.read((sql) => readWakeBlock(sql, "link"));
-}
-
-async function waitFor(assertion: () => void | Promise<void>, timeoutMs = 2_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    try {
-      await assertion();
-      return;
-    } catch (error) {
-      if (Date.now() >= deadline) throw error;
-      await Bun.sleep(5);
-    }
-  }
 }
 
 test("a burst of requests wakes the lead once, after the latest has settled", async () => {
