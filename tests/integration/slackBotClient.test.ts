@@ -44,6 +44,21 @@ async function connectBot({
   };
 }
 
+/** The bot client over a server that gives every call the answer `answer` builds. */
+async function connectBotTo(answer: () => Response) {
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: answer });
+  onTestFinished(() => server.stop(true));
+  const database = await openTestDatabase();
+  await createStoredInstallation(database);
+  const authFailures: number[] = [];
+  const bot = createBotClient(database, "xoxb-test", {
+    slackApiUrl: `${server.url.href}api/`,
+    onAuthFailed: () => authFailures.push(NOW),
+    now: () => NOW,
+  });
+  return { database, bot, authFailures };
+}
+
 function readAuthFailure(database: BridgeDatabase) {
   return database.read(async (sql) => {
     const [row] = await sql<{ status: string; auth_failed_at: number | null }[]>`
@@ -96,6 +111,26 @@ test("an HTTP error is unknown, and an error Slack names goes back to the caller
   expect(authFailures).toEqual([]);
 });
 
+test("an answer that isn't Slack's is unknown, and holds nothing back", async () => {
+  for (const answer of [
+    () =>
+      new Response("<html>Sign in to this network</html>", {
+        headers: { "Content-Type": "text/html" },
+      }),
+    () => Response.json({ ok: false }),
+  ]) {
+    const { database, bot, authFailures } = await connectBotTo(answer);
+
+    expect(await bot.call("auth.test", (client) => client.auth.test())).toEqual({
+      kind: "unknown",
+      detail: "unreadable response",
+    });
+    expect(await bot.cooldown("auth.test")).toBeNull();
+    expect(await readAuthFailure(database)).toEqual({ status: "active", auth_failed_at: null });
+    expect(authFailures).toEqual([]);
+  }
+});
+
 test("a 429 holds back that method, and only it, until Slack's Retry-After passes", async () => {
   const { fake, bot, channel, restart, advance } = await connectBot();
   const history = (client = bot) =>
@@ -135,6 +170,62 @@ test("a shorter Retry-After never cuts short a longer wait another caller record
 
   expect(posted).toEqual({ kind: "rate_limited", until: NOW + 60_000 });
   expect(await bot.cooldown("chat.postMessage")).toBe(NOW + 60_000);
+});
+
+test("Slack limiting a call in an ok:false answer holds that method back for a minute", async () => {
+  const { fake, bot, channel, advance } = await connectBot();
+  const history = () =>
+    bot.call("conversations.history", (client) => client.conversations.history({ channel }));
+  fake.failNext("chat.postMessage", { error: "ratelimited" });
+  fake.failNext("conversations.history", { error: "rate_limited" });
+
+  expect(
+    await bot.call("chat.postMessage", (client) =>
+      client.chat.postMessage({ channel, text: "Limited" }),
+    ),
+  ).toEqual({ kind: "rate_limited", until: NOW + 60_000 });
+  advance(1000);
+  expect(await history()).toEqual({ kind: "rate_limited", until: NOW + 61_000 });
+  expect(await history()).toEqual({ kind: "rate_limited", until: NOW + 61_000 });
+
+  expect(fake.calls.filter(({ method }) => method === "conversations.history")).toHaveLength(1);
+  expect(await bot.cooldown("chat.postMessage")).toBe(NOW + 60_000);
+  expect(fake.getMessages(channel)).toEqual([]);
+  expect(await bot.call("auth.test", (client) => client.auth.test())).toMatchObject({
+    kind: "ok",
+  });
+});
+
+test("an ok:false rate limit holds that method back for the Retry-After Slack sent with it", async () => {
+  const { bot } = await connectBotTo(() =>
+    Response.json({ ok: false, error: "rate_limited" }, { headers: { "Retry-After": "7" } }),
+  );
+
+  expect(await bot.call("auth.test", (client) => client.auth.test())).toEqual({
+    kind: "rate_limited",
+    until: NOW + 7000,
+  });
+  expect(await bot.cooldown("auth.test")).toBe(NOW + 7000);
+});
+
+test("a 429 without a Retry-After the SDK can read holds that method back for a minute", async () => {
+  const { fake, bot, channel } = await connectBot();
+  fake.failNext("conversations.history", { status: 429 });
+  const dated = await connectBotTo(() =>
+    Response.json(
+      { ok: false, error: "ratelimited" },
+      { status: 429, headers: { "Retry-After": "Tue, 27 Oct 2026 09:05:00 GMT" } },
+    ),
+  );
+
+  expect(
+    await bot.call("conversations.history", (client) => client.conversations.history({ channel })),
+  ).toEqual({ kind: "rate_limited", until: NOW + 60_000 });
+  expect(await dated.bot.call("auth.test", (client) => client.auth.test())).toEqual({
+    kind: "rate_limited",
+    until: NOW + 60_000,
+  });
+  expect(await dated.bot.cooldown("auth.test")).toBe(NOW + 60_000);
 });
 
 test("a rejected token puts an active installation in auth_failed, once", async () => {

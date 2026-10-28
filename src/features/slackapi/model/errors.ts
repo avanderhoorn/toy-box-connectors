@@ -1,7 +1,8 @@
 // Web API errors.
 //
 // Slack answers a failed call with an error code. Most are the caller's to classify, but a few say
-// the bot token itself no longer works, and every caller treats those the same way.
+// the bot token itself no longer works, or that Slack is limiting the call, and every caller treats
+// those the same way.
 
 const authFailures: ReadonlySet<string> = new Set([
   "invalid_auth",
@@ -16,4 +17,20 @@ const authFailures: ReadonlySet<string> = new Set([
 /** Whether `error` means Slack rejected the bot token, which puts the installation in auth_failed. */
 export function isAuthFailure(error: string): boolean {
   return authFailures.has(error);
+}
+
+// Besides a 429, Slack can limit a call with one of these in an ok:false body.
+const rateLimits: ReadonlySet<string> = new Set(["ratelimited", "rate_limited"]);
+
+/** Whether `error` means Slack is limiting the call, which holds its method back like a 429. */
+export function isRateLimit(error: string): boolean {
+  return rateLimits.has(error);
+}
+
+/**
+ * Whether `error` reads as one of Slack's error codes. The SDK reports a body that isn't JSON as an
+ * error whose code is the body itself, and nothing between the bridge and Slack names a code.
+ */
+export function isErrorCode(error: unknown): error is string {
+  return typeof error === "string" && /^[a-z][a-z0-9_]*$/.test(error);
 }

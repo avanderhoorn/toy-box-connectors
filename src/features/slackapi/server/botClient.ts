@@ -8,19 +8,26 @@ import {
   WebClient,
   type WebAPICallResult,
 } from "@slack/web-api";
-import { isAuthFailure } from "@slackapi/model/errors";
+import { isAuthFailure, isErrorCode, isRateLimit } from "@slackapi/model/errors";
 import { markAuthFailed } from "./installation";
 
 // The bot's Web API client.
 //
-// Every call the bridge makes with the bot token goes through one client, so a 429 holds that
+// Every call the bridge makes with the bot token goes through one client, so a rate limit holds that
 // method back for every caller until the time Slack named, while other methods keep moving. The SDK
 // makes one attempt per call: its retries would resend a post whose response was lost, and its own
-// rate limit handling would stall every method behind one. A call that gets no answer may still
-// have taken effect, so it's reported as unknown, and its caller decides what happens next.
+// rate limit handling would stall every method behind one. A call that gets no answer, or an answer
+// that isn't Slack's, may still have taken effect, so it's reported as unknown, and its caller
+// decides what happens next.
 
 /** How long a call may take before its outcome is unknown. */
 export const slackCallTimeoutMs = 10_000;
+
+/** How long a method waits when Slack limits it without a Retry-After the SDK can read. */
+const defaultRetryAfterSeconds = 60;
+
+// 8.2.0 throws a 429 without a Retry-After it can read as a plain Error that starts like this.
+const unreadableRetryAfter = "Retry header did not contain a valid timeout";
 
 /** What became of one call. */
 export type SlackCall<Result> =
@@ -31,7 +38,10 @@ export type SlackCall<Result> =
   | { kind: "auth_failed"; error: string }
   /** Slack refused the call with an error code. */
   | { kind: "error"; error: string; data: WebAPICallResult }
-  /** No answer came back, from a timeout, a lost connection or an HTTP error, so the call may have taken effect. */
+  /**
+   * No answer came back, from a timeout, a lost connection or an HTTP error, or the answer wasn't
+   * Slack's, so the call may have taken effect.
+   */
   | { kind: "unknown"; detail: string };
 
 export type BotClient = {
@@ -71,15 +81,17 @@ export function createBotClient(
   const cooldown = (method: string) => database.read((sql) => readCooldown(sql, method, now()));
 
   async function failed(method: string, error: unknown): Promise<SlackCall<never>> {
-    if (error instanceof WebAPIRateLimitedError) {
-      const until = now() + error.retryAfter * 1000;
+    const retryAfter = retryAfterOf(error);
+    if (retryAfter !== null) {
+      const until = now() + retryAfter * 1000;
       return {
         kind: "rate_limited",
         until: await database.write((transaction) => holdMethod(transaction, method, until)),
       };
     }
     if (error instanceof WebAPIPlatformError) {
-      const code = error.data.error;
+      const code: unknown = error.data.error;
+      if (!isErrorCode(code)) return { kind: "unknown", detail: "unreadable response" };
       if (!isAuthFailure(code)) return { kind: "error", error: code, data: error.data };
       if (await database.write((transaction) => markAuthFailed(transaction, now()))) onAuthFailed();
       return { kind: "auth_failed", error: code };
@@ -126,6 +138,22 @@ function createWebClient(
     allowAbsoluteUrls: false,
     logLevel: LogLevel.ERROR,
   });
+}
+
+/**
+ * How many seconds Slack asked the bridge to hold a method back, or null when `error` isn't a rate
+ * limit. Slack limits a call with a 429 or an ok:false body, and a limit whose Retry-After the SDK
+ * can't read holds the method back for a minute.
+ */
+function retryAfterOf(error: unknown): number | null {
+  if (error instanceof WebAPIRateLimitedError) return error.retryAfter;
+  if (error instanceof WebAPIPlatformError && isRateLimit(error.data.error)) {
+    return error.data.response_metadata?.retryAfter ?? defaultRetryAfterSeconds;
+  }
+  if (error instanceof Error && error.message.startsWith(unreadableRetryAfter)) {
+    return defaultRetryAfterSeconds;
+  }
+  return null;
 }
 
 async function readCooldown(sql: Bun.SQL, method: string, now: number): Promise<number | null> {
