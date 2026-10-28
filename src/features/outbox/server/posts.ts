@@ -307,9 +307,7 @@ export function createPostDelivery(
     const started = await startOutboxAttempt(tx, item, payload, method, at);
     return started.kind === "started"
       ? { ...started, identity: { appId: installation.appId, botId: installation.botId } }
-      : started.kind === "waiting"
-        ? { ...started, reason: method === "chat.update" ? "card_in_flight" : "post_slot" }
-        : started;
+      : started;
   }
 
   async function refresh(id: string, channelId: string): Promise<PostStep | null> {

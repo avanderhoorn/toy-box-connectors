@@ -199,7 +199,7 @@ describe("durable attempts", () => {
       await database.write((tx) =>
         startOutboxAttempt(tx, deferred!, deferred!.payload, "chat.postMessage", 60_999),
       ),
-    ).toEqual({ kind: "waiting", until: 61_000 });
+    ).toEqual({ kind: "waiting", reason: "retry_after", until: 61_000 });
     expect(await database.read((sql) => readReadyOutbox(sql, 61_000))).toEqual([deferred!]);
     expect(await start(database, deferred!, 61_000)).toMatchObject({
       attempts: 2,
@@ -560,7 +560,7 @@ describe("current card state", () => {
       await database.write((tx) =>
         startOutboxAttempt(tx, update, update.payload, "chat.update", 2_000),
       ),
-    ).toEqual({ kind: "waiting", until: 3_000 });
+    ).toEqual({ kind: "waiting", reason: "card_in_flight", until: 3_000 });
     expect(await start(database, other, 2_000, other.payload, "chat.update")).toMatchObject({
       state: "sending",
     });
@@ -626,7 +626,7 @@ describe("current card state", () => {
         await database.write((tx) =>
           startOutboxAttempt(tx, replacement, { text: "Approved" }, "chat.update", 2_000),
         ),
-      ).toEqual({ kind: "waiting", until: 3_000 });
+      ).toEqual({ kind: "waiting", reason: "card_in_flight", until: 3_000 });
       const settled = await database.write((tx) =>
         settleOutboxAttempt(
           tx,
@@ -777,7 +777,7 @@ describe("bounded reconciliation", () => {
       await database.write((tx) =>
         startOutboxAttempt(tx, queued, queued.payload, "chat.postMessage", 1_999),
       ),
-    ).toEqual({ kind: "waiting", until: 2_000 });
+    ).toEqual({ kind: "waiting", reason: "post_slot", until: 2_000 });
     expect(await start(database, queued, 2_000)).toMatchObject({ state: "sending" });
   });
 });
@@ -801,14 +801,14 @@ describe("shared channel post slots", () => {
     ]);
 
     expect(posted.kind).toBe("started");
-    expect(held).toEqual({ kind: "waiting", until: 2_000 });
+    expect(held).toEqual({ kind: "waiting", reason: "post_slot", until: 2_000 });
     expect(await item(database, card.id)).toEqual(card);
     expect(await start(database, other)).toMatchObject({ state: "sending" });
     expect(
       await database.write((tx) =>
         startOutboxAttempt(tx, card, card.payload, "chat.postMessage", 1_999),
       ),
-    ).toEqual({ kind: "waiting", until: 2_000 });
+    ).toEqual({ kind: "waiting", reason: "post_slot", until: 2_000 });
     expect(await start(database, card, 2_000)).toMatchObject({ state: "sending" });
   });
 

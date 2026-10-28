@@ -27,6 +27,7 @@ test.each([
   { link_names: true },
   { metadata: { event_type: "toy_box_outbox", event_payload: {} } },
   { blocks: [{ type: "section", text: { type: "mrkdwn", text: "Hello" } }] },
+  { blocks: [{ type: "section", text: { type: "mrkdwn", text: "Hello", verbatim: false } }] },
   { blocks: [{ type: "header", text: { type: "plain_text", text: "Raw blocks" } }] },
 ])("an unsafe or unrendered snapshot is refused: %j", (change) => {
   expect(checkLeadPayload({ ...message(), ...change })).toEqual({
@@ -103,6 +104,20 @@ test("an edit cannot restore pending approval buttons", () => {
       blocks: pending.blocks,
       parse: pending.parse,
       ts: "1.1",
+    }),
+  ).toEqual({ kind: "refused", problem: "invalid_snapshot" });
+});
+
+test("a card snapshot cannot invent another interactive action", () => {
+  const pending = renderCard(pendingApproval(), {});
+  const actions = pending.blocks.find((block) => block.type === "actions");
+  if (!actions) throw new Error("The pending fixture needs decision controls.");
+  expect(
+    checkCardPayload({
+      ...pending,
+      blocks: [
+        { ...actions, elements: [{ ...actions.elements[0], action_id: "untrusted_action" }] },
+      ],
     }),
   ).toEqual({ kind: "refused", problem: "invalid_snapshot" });
 });

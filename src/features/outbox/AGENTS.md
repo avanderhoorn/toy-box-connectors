@@ -50,7 +50,8 @@ exact send-time payload before the call. An unknown post can never be requeued a
 Idempotent updates, deletions and feedback may retry without posting another message.
 After a rejected attempt, a reply, progress note or publication uses the stored method and payload
 unchanged. A card keeps its method but renders the approval afresh for every attempt. Only one
-attempt per approval can be sending. Newer updates supersede queued or unknown older updates,
+attempt per approval can be sending. Wait reasons distinguish that card mutex from the shared
+channel post slot and an item's retry deadline. Newer updates supersede queued or unknown older updates,
 including an older sending update that becomes retryable after its replacement was queued, or
 is recovered at startup. Slack metadata
 is never stored inside that snapshot: the call adds it from the committed ID and payload hash.

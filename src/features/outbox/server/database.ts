@@ -119,7 +119,7 @@ export type OutboxSettlement =
 
 type AttemptStart =
   | { kind: "started"; item: OutboxItem }
-  | { kind: "waiting"; until: number }
+  | { kind: "waiting"; reason: "retry_after" | "card_in_flight" | "post_slot"; until: number }
   | { kind: "changed" };
 
 /** Reads an opaque ID, or the number shown to the lead as o31. */
@@ -181,20 +181,22 @@ export async function startOutboxAttempt(
     return { kind: "changed" };
   }
   if (current.nextAttemptAt !== null && current.nextAttemptAt > now) {
-    return { kind: "waiting", until: current.nextAttemptAt };
+    return { kind: "waiting", reason: "retry_after", until: current.nextAttemptAt };
   }
   if (current.kind === "card" && current.approvalId !== null) {
     const [sending] = await transaction<{ id: string }[]>`
       SELECT id FROM outbox WHERE kind = 'card' AND approval_id = ${current.approvalId}
         AND state = 'sending' AND id <> ${current.id} LIMIT 1
     `;
-    if (sending) return { kind: "waiting", until: now + 1_000 };
+    if (sending) return { kind: "waiting", reason: "card_in_flight", until: now + 1_000 };
   }
   if (postsMessage) {
     const [slot] = await transaction<{ next_post_at: number }[]>`
       SELECT next_post_at FROM outbox_channels WHERE channel_id = ${current.channelId}
     `;
-    if (slot && slot.next_post_at > now) return { kind: "waiting", until: slot.next_post_at };
+    if (slot && slot.next_post_at > now) {
+      return { kind: "waiting", reason: "post_slot", until: slot.next_post_at };
+    }
   }
   const encoded = encodePayload(payload);
   if (
