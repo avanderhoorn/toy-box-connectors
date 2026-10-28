@@ -5,6 +5,7 @@ import { channelFacts } from "@slackapi/model/testFixtures";
 import {
   currentChannelId,
   fetchChannelFacts,
+  fetchChannelMembers,
   invalidateChannelInfo,
   readChannelInfo,
   recordChannelAlias,
@@ -37,12 +38,33 @@ const answers = new Map<string, unknown>([
   ["C-odd", { ok: true, channel: { id: "C-odd", is_private: false } }],
 ]);
 
+/** What the fake conversations.members answers for each channel and cursor it's asked about. */
+const memberPages = new Map<string, unknown>([
+  [
+    "C-shared",
+    { ok: true, members: ["U-owner", "U-carol"], response_metadata: { next_cursor: "page-2" } },
+  ],
+  ["C-shared page-2", { ok: true, members: ["W-dave"], response_metadata: { next_cursor: "" } }],
+  ["C-gone", { ok: false, error: "channel_not_found" }],
+  ["C-broken", { ok: false, error: "invalid_auth" }],
+  ["C-odd", { ok: true, members: "U-owner" }],
+]);
+
+/** The arguments each conversations.members call sent. */
+const memberCalls: Record<string, string>[] = [];
+
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
   async fetch(request) {
-    const channel = new URLSearchParams(await request.text()).get("channel") ?? "";
+    const args = Object.fromEntries(new URLSearchParams(await request.text()));
+    const channel = args.channel ?? "";
     if (channel === "C-down") return new Response("unavailable", { status: 503 });
+    if (new URL(request.url).pathname.endsWith("/conversations.members")) {
+      memberCalls.push(args);
+      const page = args.cursor ? `${channel} ${args.cursor}` : channel;
+      return Response.json(memberPages.get(page) ?? { ok: false, error: "unexpected" });
+    }
     return Response.json(answers.get(channel) ?? { ok: false, error: "unexpected" });
   },
 });
@@ -77,6 +99,32 @@ test("a read that fails, or answers with something that isn't a channel, throws"
   await expect(fetchChannelFacts(client, "C-broken")).rejects.toThrow("invalid_auth");
   await expect(fetchChannelFacts(client, "C-down")).rejects.toThrow();
   await expect(fetchChannelFacts(client, "C-odd")).rejects.toThrow();
+});
+
+test("a channel's members are read a page of a thousand at a time, each from the cursor before it", async () => {
+  memberCalls.length = 0;
+  expect(await fetchChannelMembers(client, "C-shared", null)).toEqual({
+    members: ["U-owner", "U-carol"],
+    nextCursor: "page-2",
+  });
+  expect(await fetchChannelMembers(client, "C-shared", "page-2")).toEqual({
+    members: ["W-dave"],
+    nextCursor: null,
+  });
+  expect(memberCalls).toEqual([
+    { channel: "C-shared", limit: "1000" },
+    { channel: "C-shared", limit: "1000", cursor: "page-2" },
+  ]);
+});
+
+test("the members of a channel Slack can't find read as null", async () => {
+  expect(await fetchChannelMembers(client, "C-gone", null)).toBeNull();
+});
+
+test("a members read that fails, or answers with something that isn't a page, throws", async () => {
+  await expect(fetchChannelMembers(client, "C-broken", null)).rejects.toThrow("invalid_auth");
+  await expect(fetchChannelMembers(client, "C-down", null)).rejects.toThrow();
+  await expect(fetchChannelMembers(client, "C-odd", null)).rejects.toThrow();
 });
 
 test("a channel's facts read back as they were written, with when they were read", async () => {

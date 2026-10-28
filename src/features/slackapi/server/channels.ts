@@ -1,17 +1,20 @@
 import { WebAPIPlatformError, type WebClient } from "@slack/web-api";
 import {
+  channelMembersPageSchema,
   slackConversationSchema,
   type ChannelFacts,
   type ChannelKind,
+  type ChannelMembersPage,
 } from "@slackapi/model/channels";
 
 // Channel facts.
 //
-// A read asks conversations.info and keeps nothing, so whoever reads decides what the answer means
-// before storing it. A row holds what conversations.info last said about a channel and when the
-// read that said it began. A lifecycle signal invalidates the row rather than deleting it, so the
-// next refresh still compares against what it held. A write clears only an invalidation that came
-// before its read began, and never replaces a row read later than its own.
+// A read asks conversations.info, or a page of conversations.members, and keeps nothing, so
+// whoever reads decides what the answer means before storing it. A row holds what
+// conversations.info last said about a channel and when the read that said it began. A lifecycle
+// signal invalidates the row rather than deleting it, so the next refresh still compares against
+// what it held. A write clears only an invalidation that came before its read began, and never
+// replaces a row read later than its own.
 
 /**
  * What conversations.info says about `channelId` now, or null when Slack can't find it, as it says
@@ -25,6 +28,34 @@ export async function fetchChannelFacts(
   try {
     const response = await client.conversations.info({ channel: channelId });
     return slackConversationSchema.parse(response.channel);
+  } catch (error) {
+    if (error instanceof WebAPIPlatformError && error.data.error === "channel_not_found") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/** How many people a page of conversations.members asks for, the most Slack gives at once. */
+export const MEMBERS_PAGE_SIZE = 1000;
+
+/**
+ * One page of the people in `channelId`, from `cursor` or the start, or null when Slack can't find
+ * the channel. Each page is its own call, so a caller pages through BotClient.call one at a time.
+ * Throws when the read fails or returns something that isn't a page.
+ */
+export async function fetchChannelMembers(
+  client: WebClient,
+  channelId: string,
+  cursor: string | null,
+): Promise<ChannelMembersPage | null> {
+  try {
+    const response = await client.conversations.members({
+      channel: channelId,
+      limit: MEMBERS_PAGE_SIZE,
+      ...(cursor ? { cursor } : {}),
+    });
+    return channelMembersPageSchema.parse(response);
   } catch (error) {
     if (error instanceof WebAPIPlatformError && error.data.error === "channel_not_found") {
       return null;

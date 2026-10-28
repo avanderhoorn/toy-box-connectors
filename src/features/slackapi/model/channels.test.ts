@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { slackConversationSchema } from "./channels";
+import { channelMembersPageSchema, slackConversationSchema } from "./channels";
 
 /** A private channel as conversations.info returns it, with fields the bridge doesn't keep. */
 const privateChannel = {
@@ -105,5 +105,36 @@ test("a conversation that leaves out an archive or sharing flag is refused", () 
   for (const flag of ["is_archived", "is_ext_shared", "is_pending_ext_shared", "is_org_shared"]) {
     const conversation = { ...privateChannel, [flag]: undefined };
     expect(slackConversationSchema.safeParse(conversation).success).toBe(false);
+  }
+});
+
+test("a page of members lists their IDs and the cursor for the next page", () => {
+  expect(
+    channelMembersPageSchema.parse({
+      ok: true,
+      members: ["U0OWNER", "W0CAROL"],
+      response_metadata: { next_cursor: "dXNlcjpVMEc5V0ZYTlo=" },
+    }),
+  ).toEqual({ members: ["U0OWNER", "W0CAROL"], nextCursor: "dXNlcjpVMEc5V0ZYTlo=" });
+});
+
+test("an empty or missing cursor ends the list, even after a page with nobody on it", () => {
+  for (const response_metadata of [
+    { next_cursor: "" },
+    { next_cursor: null },
+    {},
+    null,
+    undefined,
+  ]) {
+    expect(channelMembersPageSchema.parse({ members: [], response_metadata })).toEqual({
+      members: [],
+      nextCursor: null,
+    });
+  }
+});
+
+test("a page that doesn't list members as IDs is refused", () => {
+  for (const members of [undefined, null, "U0OWNER", [""], [7]]) {
+    expect(channelMembersPageSchema.safeParse({ members }).success).toBe(false);
   }
 });
