@@ -4,20 +4,27 @@ import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "./testFixtures";
 
 const OWNED_BY_LINK = ["allowlist", "coverage", "cursors", "link_routines", "wake_state"];
-const CLAIM_STATES = ["live", "posted", "confirmed", "declined", "void"];
-const OPEN_CLAIM_STATES = ["live", "posted"];
+const CLAIM_STATES = ["live", "posted", "admitted", "confirmed", "declined", "void"];
+const OPEN_CLAIM_STATES = ["live", "posted", "admitted"];
+const POSTED_CLAIM_STATES = ["posted", "admitted", "confirmed", "declined"];
 const CLOSED_CLAIM_STATES = ["confirmed", "declined", "void"];
 const APPROVAL_STATES = ["pending", "approved", "applied", "rejected", "expired", "stale"];
-const POSTED = { posted_by: "U0123", posted_channel_id: "D0123", posted_at: 60_000 };
-const UNPOSTED = { posted_by: null, posted_channel_id: null, posted_at: null };
+const POSTED = {
+  posted_by: "U0123",
+  posted_channel_id: "D0123",
+  posted_ts: "1700000000.000100",
+  posted_at: 60_000,
+};
+const UNPOSTED = { posted_by: null, posted_channel_id: null, posted_ts: null, posted_at: null };
 let nextApprovalNumber = 1;
 
 /** The columns a claim in `state` must carry, so only the check under test can refuse it. */
 function claimIn(state: string) {
   return {
     state,
-    ...(["posted", "confirmed", "declined"].includes(state) ? POSTED : UNPOSTED),
+    ...(POSTED_CLAIM_STATES.includes(state) ? POSTED : UNPOSTED),
     decided_at: CLOSED_CLAIM_STATES.includes(state) ? 120_000 : null,
+    void_reason: state === "void" ? "expired" : null,
   };
 }
 
@@ -116,7 +123,7 @@ test("deleting a link deletes what belongs to it and nothing else", async () => 
 });
 
 describe("claims", () => {
-  test("allow one open claim at a time, whether it's live or posted", async () => {
+  test("allow one open claim at a time, whether it's live, posted or admitted", async () => {
     const database = await openTestDatabase();
     await insertClaim(database, claimIn("void"));
 
@@ -140,7 +147,8 @@ describe("claims", () => {
     for (const closed of CLOSED_CLAIM_STATES) {
       await insertClaim(database, claimIn("live"));
       await moveClaim(database, "live", "posted");
-      await moveClaim(database, "posted", closed);
+      await moveClaim(database, "posted", "admitted");
+      await moveClaim(database, "admitted", closed);
     }
     await insertClaim(database, claimIn("live"));
 
@@ -148,23 +156,23 @@ describe("claims", () => {
     expect([...states].map((row) => row.state)).toEqual([...CLOSED_CLAIM_STATES, "live"]);
   });
 
-  test("name who posted the code once it's posted, confirmed or declined, and never while live", async () => {
+  test("name who posted the code once it's posted, and never while live", async () => {
     const database = await openTestDatabase();
     const tie =
-      "CHECK constraint failed: state = 'void'\n        OR (posted_by IS NOT NULL) = (state IN ('posted', 'confirmed', 'declined'))";
+      "CHECK constraint failed: state = 'void'\n        OR (posted_by IS NOT NULL) = (state IN ('posted', 'admitted', 'confirmed', 'declined'))";
 
     for (const state of CLAIM_STATES) await acceptsClaim(database, claimIn(state));
     await acceptsClaim(database, { ...claimIn("void"), ...POSTED });
     await expect(insertClaim(database, { ...claimIn("live"), ...POSTED })).rejects.toThrow(tie);
-    for (const state of ["posted", "confirmed", "declined"]) {
+    for (const state of POSTED_CLAIM_STATES) {
       await expect(insertClaim(database, { ...claimIn(state), ...UNPOSTED })).rejects.toThrow(tie);
     }
   });
 
-  test("record who posted the code, where and when together", async () => {
+  test("record who posted the code, in which message and when together", async () => {
     const database = await openTestDatabase();
     const together =
-      "CHECK constraint failed: (posted_channel_id IS NULL) = (posted_by IS NULL)\n        AND (posted_at IS NULL) = (posted_by IS NULL)";
+      "CHECK constraint failed: (posted_channel_id IS NULL) = (posted_by IS NULL)\n        AND (posted_ts IS NULL) = (posted_by IS NULL)\n        AND (posted_at IS NULL) = (posted_by IS NULL)";
 
     // A void claim may go either way, so only the pairing can refuse a partial one.
     for (const column of Object.keys(POSTED)) {
@@ -188,6 +196,20 @@ describe("claims", () => {
       await expect(insertClaim(database, { ...claimIn(state), decided_at: null })).rejects.toThrow(
         tie,
       );
+    }
+  });
+
+  test("say why a claim is void exactly when it is", async () => {
+    const database = await openTestDatabase();
+    const tie = "CHECK constraint failed: (void_reason IS NOT NULL) = (state = 'void')";
+
+    await expect(insertClaim(database, { ...claimIn("void"), void_reason: null })).rejects.toThrow(
+      tie,
+    );
+    for (const state of CLAIM_STATES.filter((state) => state !== "void")) {
+      await expect(
+        insertClaim(database, { ...claimIn(state), void_reason: "expired" }),
+      ).rejects.toThrow(tie);
     }
   });
 });

@@ -1,6 +1,7 @@
 import type { ChannelFacts } from "./channels";
 import type { SlackMessage } from "./messages";
 import type { SlackTs } from "./ts";
+import type { SlackPerson } from "./users";
 
 /**
  * The owner asks the bot something at the root of the channel `createStoredLink` links, at `ts`.
@@ -76,6 +77,24 @@ export function channelFacts(changes: Partial<ChannelFacts> = {}): ChannelFacts 
     enterpriseId: null,
     contextTeamId: "T-home",
     sharedTeamIds: ["T-home"],
+    ...changes,
+  };
+}
+
+/** U-carol, a full member of T-home, as users.info describes her. `changes` replace her fields. */
+export function slackPerson(changes: Partial<SlackPerson> = {}): SlackPerson {
+  return {
+    id: "U-carol",
+    teamId: "T-home",
+    enterpriseId: null,
+    enterpriseUserId: null,
+    isBot: false,
+    isWorkflowBot: false,
+    deleted: false,
+    isRestricted: false,
+    isUltraRestricted: false,
+    displayName: "carol",
+    realName: "Carol Chen",
     ...changes,
   };
 }

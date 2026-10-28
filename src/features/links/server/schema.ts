@@ -1,29 +1,34 @@
 /** Install the tables whose meaning is owned by Links. */
 export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
   await db.unsafe(`
-    -- posted_* say who posted the right code, where and when. A claim voided after that keeps them.
+    -- posted_* say who posted the right code, in which message and when. A claim voided after that
+    -- keeps them. void_reason is expired, exhausted, replaced or the admission check's refusal.
     CREATE TABLE claims (
       id                INTEGER PRIMARY KEY,
       code_hash         TEXT NOT NULL,
       state             TEXT NOT NULL
-        CHECK (state IN ('live', 'posted', 'confirmed', 'declined', 'void')),
+        CHECK (state IN ('live', 'posted', 'admitted', 'confirmed', 'declined', 'void')),
       failed_attempts   INTEGER NOT NULL DEFAULT 0
         CHECK (typeof(failed_attempts) = 'integer' AND failed_attempts >= 0),
       created_at        INTEGER NOT NULL,
       expires_at        INTEGER NOT NULL,
       posted_by         TEXT,
       posted_channel_id TEXT,
+      posted_ts         TEXT,
       posted_at         INTEGER,
       decided_at        INTEGER,
+      void_reason       TEXT,
       CHECK ((posted_channel_id IS NULL) = (posted_by IS NULL)
+        AND (posted_ts IS NULL) = (posted_by IS NULL)
         AND (posted_at IS NULL) = (posted_by IS NULL)),
       CHECK (state = 'void'
-        OR (posted_by IS NOT NULL) = (state IN ('posted', 'confirmed', 'declined'))),
-      CHECK ((decided_at IS NOT NULL) = (state IN ('confirmed', 'declined', 'void')))
+        OR (posted_by IS NOT NULL) = (state IN ('posted', 'admitted', 'confirmed', 'declined'))),
+      CHECK ((decided_at IS NOT NULL) = (state IN ('confirmed', 'declined', 'void'))),
+      CHECK ((void_reason IS NOT NULL) = (state = 'void'))
     );
 
     -- Every open claim indexes the same constant, so at most one can be open.
-    CREATE UNIQUE INDEX claims_one_open ON claims((1)) WHERE state IN ('live', 'posted');
+    CREATE UNIQUE INDEX claims_one_open ON claims((1)) WHERE state IN ('live', 'posted', 'admitted');
 
     CREATE TABLE links (
       id                  TEXT PRIMARY KEY,
