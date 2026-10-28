@@ -39,9 +39,11 @@ export async function serveBridge(): Promise<number> {
   try {
     const dataFolder = resolveDataFolder();
     const bridge = await startBridge(dataFolder);
+    // Whoever started the bridge may stop it as soon as it says it's running, so it listens first.
+    const stopped = shutdownSignal(bridge.failed);
     console.error(`toy-box-slack is running for ${dataFolder}`);
 
-    const signal = await shutdownSignal(bridge.failed);
+    const signal = await stopped;
     console.error(`toy-box-slack is stopping after ${signal ?? "an error"}`);
     await bridge.stop();
     return signal ? 0 : 1;
