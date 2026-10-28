@@ -7,7 +7,6 @@
 // command changed.
 
 import type { BridgeDatabase } from "@bridge/server/database";
-import type { SlackConnection } from "@commands/model/banner";
 import {
   permitCaller,
   resolveCaller,
@@ -31,6 +30,7 @@ import {
   type Refusal,
 } from "@commands/model/protocol";
 import type { SlackState } from "@commands/model/status";
+import { isSlackUsable, refuseWithoutSlack } from "@commands/model/withoutSlack";
 import type { ToyBoxClient } from "@toybox/server";
 import { readBanner } from "./banner";
 
@@ -45,13 +45,6 @@ export type CommandServerOptions<Contracts extends Record<string, CommandContrac
   slack: () => SlackState;
   now?: () => number;
 };
-
-// Without these, the bridge can't receive from Slack or post to it.
-const unusableSlack: ReadonlySet<SlackConnection> = new Set([
-  "unconfigured",
-  "auth_failed",
-  "refused",
-]);
 
 /** Answers each request on the bridge's socket. */
 export function serveCommands<Contracts extends Record<string, CommandContract>>({
@@ -117,16 +110,9 @@ export function serveCommands<Contracts extends Record<string, CommandContract>>
       const state = slack();
       const banner = () =>
         database.read((sql) => readBanner(sql, caller, { slack: slack().connection, at }));
-      if (!contract.withoutSlack && unusableSlack.has(state.connection)) {
-        const message = [
-          `\`${name}\` needs Slack, which the bridge can't use right now.`,
-          state.problem,
-          "Until then it runs only `status` and `doctor`.",
-        ];
-        return refuse(503, at, await banner(), {
-          rule: "slack_unavailable",
-          message: message.filter(Boolean).join(" "),
-        });
+      if (!contract.withoutSlack && !isSlackUsable(state.connection)) {
+        const refusal = refuseWithoutSlack(`\`${name}\``, state, contracts, caller.role);
+        return refuse(503, at, await banner(), refusal);
       }
 
       const checked = checkCommandInput(name, contract, call.data.input);

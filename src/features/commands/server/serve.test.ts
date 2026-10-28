@@ -47,9 +47,10 @@ const contracts = {
     present: (result) => result.done,
   }),
   sweep: commandContract({
-    description: "Something only the operator may do",
+    description: "Something only the operator may do, even without Slack",
     roles: ["operator"],
     scope: "bridge",
+    withoutSlack: true,
     input: z.object({}).strict(),
     result: done,
     present: (result) => result.done,
@@ -216,6 +217,7 @@ describe("answering a call", () => {
   });
 
   test.each([
+    ["connecting", null],
     ["unconfigured", "SLACK_APP_TOKEN isn't set."],
     ["auth_failed", "Slack rejected the bot token."],
     ["refused", "The tokens belong to another Slack app."],
@@ -227,22 +229,32 @@ describe("answering a call", () => {
       const { status, body } = await call("pause", lead);
       expect(status).toBe(503);
       expect(body.banner?.slack).toBe(connection);
-      expect(body.refused).toEqual({
-        rule: "slack_unavailable",
-        message: `\`pause\` needs Slack, which the bridge can't use right now. ${problem} Until then it runs only \`status\` and \`doctor\`.`,
-      });
+      expect(body.refused?.rule).toBe("slack_unavailable");
+      expect(body.refused?.message).toStartWith(
+        "`pause` needs Slack, which the bridge can't use right now.",
+      );
+      expect(body.refused?.message).toContain(problem ?? "still connecting");
       expect((await call("peek", lead)).status).toBe(200);
     },
   );
 
-  test.each(["connecting", "reconnecting"] as const)(
-    "runs every command while Slack is %s, so posts wait for it",
-    async (connection) => {
-      const { call } = await startServer({ slack: { connection, problem: null } });
+  test("names what the caller may still run while it can't use Slack", async () => {
+    const { call } = await startServer({ slack: { connection: "connecting", problem: null } });
 
-      expect((await call("pause", lead)).status).toBe(200);
-    },
-  );
+    expect((await call("pause", operator)).body.refused?.message).toBe(
+      "`pause` needs Slack, which the bridge can't use right now. It's still connecting to Slack, so try again in a minute. Until then it runs only `peek` and `sweep`.",
+    );
+    expect((await call("pause", lead)).body.refused?.message).toEndWith(
+      "Until then it runs only `peek`.",
+    );
+    expect((await call("sweep", operator)).status).toBe(200);
+  });
+
+  test("runs every command while Slack reconnects, so posts wait for it", async () => {
+    const { call } = await startServer({ slack: { connection: "reconnecting", problem: null } });
+
+    expect((await call("pause", lead)).status).toBe(200);
+  });
 
   test("refuses input its contract doesn't take, naming the option", async () => {
     const { call, database } = await startServer();

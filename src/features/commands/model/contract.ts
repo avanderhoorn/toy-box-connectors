@@ -19,7 +19,10 @@ export type CommandContract<
   description: string;
   roles: readonly CallerRole[];
   scope: Scope;
-  /** Whether the bridge serves it while it can't use Slack. Only status and doctor do. */
+  /**
+   * Whether the bridge serves it while it can't use Slack, because it needs nothing from Slack, as
+   * status and the commands that narrow don't.
+   */
   withoutSlack?: boolean;
   /**
    * Whether it's a step of another command, such as claim's wait, which the CLI runs for that

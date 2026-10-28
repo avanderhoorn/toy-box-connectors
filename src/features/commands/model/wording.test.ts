@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ago, count, duration } from "./wording";
+import { ago, count, duration, joinNames } from "./wording";
 
 const MINUTE = 60_000;
 
@@ -7,6 +7,13 @@ test("counts one without a plural", () => {
   expect(count(1, "message")).toBe("1 message");
   expect(count(0, "message")).toBe("0 messages");
   expect(count(3, "message")).toBe("3 messages");
+});
+
+test("joins names with and, and a list of three or more with commas", () => {
+  expect(joinNames([])).toBe("");
+  expect(joinNames(["Alice"])).toBe("Alice");
+  expect(joinNames(["Alice", "Bob"])).toBe("Alice and Bob");
+  expect(joinNames(["Alice", "Bob", "Carol"])).toBe("Alice, Bob, and Carol");
 });
 
 test.each([

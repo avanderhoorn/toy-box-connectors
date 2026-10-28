@@ -17,7 +17,7 @@ import { isPending, type WakeRequest } from "@wakes/model";
 import { commandContract, type PresentContext } from "./contract";
 import { cancelReasonSchema, requestEnding, requestIdSchema } from "./requests";
 import { fenceFor, NAME_LIMIT, oneLine, personName } from "./slackText";
-import { ago, count, duration } from "./wording";
+import { ago, count, duration, joinNames } from "./wording";
 
 const personSchema = z
   .object({
@@ -488,12 +488,6 @@ function named(person: Person): string {
 
 function channel({ id, name }: z.output<typeof channelSchema>): string {
   return `#${oneLine(name ?? id, NAME_LIMIT) || oneLine(id, NAME_LIMIT)}`;
-}
-
-/** "Alice", "Alice and Bob", or "Alice, Bob, and Carol". Empty for nobody. */
-function joinNames(names: readonly string[]): string {
-  if (names.length <= 2) return names.join(" and ");
-  return `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`;
 }
 
 /** A file's size in bytes, KB or MB, counting 1024 to each. */
