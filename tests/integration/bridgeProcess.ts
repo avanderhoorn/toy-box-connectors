@@ -2,7 +2,7 @@
 
 import { onTestFinished } from "bun:test";
 import { join } from "node:path";
-import { startFakeSlack } from "../fakes/slack";
+import { startFakeSlack, type FakeSlackIdentity } from "../fakes/slack";
 
 const REPOSITORY = join(import.meta.dir, "..", "..");
 
@@ -52,9 +52,12 @@ export function spawnBridge(home: string, env: Record<string, string> = {}) {
   };
 }
 
-/** A fake Slack, and the environment that points a bridge at it with both tokens. */
-export function startSlackForBridge() {
-  const slack = startFakeSlack();
+/**
+ * A fake Slack whose tokens belong to `identity`, or else the fake's own workspace and app, and the
+ * environment that points a bridge at it with both tokens.
+ */
+export function startSlackForBridge(identity?: Partial<FakeSlackIdentity>) {
+  const slack = startFakeSlack({ identity });
   onTestFinished(() => slack.stop());
   const env = {
     SLACK_API_URL: slack.url,
