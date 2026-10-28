@@ -28,6 +28,10 @@ const TIMINGS: WakeTimings = {
   retryLimit: 240,
   catchUpAfter: 100,
 };
+// The fake lead never reads inbox, so after a run the scheduler repeats the wake or steers into the
+// turn. A test that counts runs and isn't about those moves them out of reach, because a loaded
+// machine can show the test a run late enough for one to land while it counts.
+const UNHURRIED = { steerAfter: 60_000, backoff: [60_000, 60_000, 60_000] } as const;
 
 const zone = process.env.TZ;
 beforeAll(() => {
@@ -137,27 +141,31 @@ function readBlock(database: BridgeDatabase) {
 }
 
 test("a burst of requests wakes the lead once, after the latest has settled", async () => {
-  const { toyBox, database, routine, now, startWaking } = await linkFakeChannel();
+  const timings = { ...TIMINGS, ...UNHURRIED, debounce: 300, debounceLimit: 900 };
+  const { toyBox, database, routine, now, startWaking } = await linkFakeChannel({ timings });
   const { scheduler } = await startWaking();
-  const changes: number[] = [];
 
-  for (let count = 0; count < 3; count += 1) {
-    changes.push(now());
-    await storeRequest(database, changes.at(-1)!);
+  // Stamped 10 ms apart and stored without pausing, so only a stall lasting most of the debounce
+  // between two of them could split the burst.
+  const latest = now();
+  for (const changedAt of [latest - 20, latest - 10, latest]) {
+    await storeRequest(database, changedAt);
     scheduler.reconsider();
-    await Bun.sleep(10);
   }
 
   await waitFor(() => expect(toyBox.runs).toHaveLength(1));
   expect(toyBox.runs[0]).toMatchObject({ routineId: routine.id, by: "api" });
-  expect(toyBox.runs[0]!.at).toBeGreaterThanOrEqual(changes.at(-1)! + TIMINGS.debounce);
-  await Bun.sleep(TIMINGS.backoff[0]);
+  expect(toyBox.runs[0]!.at).toBeGreaterThanOrEqual(latest + timings.debounce);
+  // Once the run settles, the scheduler waits instead of waking the lead again.
+  await waitFor(() => expect(scheduler.decision("link")).toMatchObject({ kind: "wait" }));
   expect(toyBox.runs).toHaveLength(1);
   expect(await readOutcomes(database)).toEqual([{ kind: "requests", outcome: "ran" }]);
 });
 
 test("a wake the lead ignores is repeated on the backoff, then stalls until a request is new", async () => {
-  const { toyBox, database, channelId, now, startWaking } = await linkFakeChannel();
+  const { toyBox, database, channelId, now, startWaking } = await linkFakeChannel({
+    timings: { ...TIMINGS, steerAfter: UNHURRIED.steerAfter },
+  });
   const { scheduler } = await startWaking();
   await waitFor(() => expect(scheduler.decision("link")).toEqual({ kind: "idle" }));
   await storeRequest(database, now());
@@ -198,7 +206,9 @@ test("a link whose channel is busy keeps the decision that started the run", asy
 });
 
 test("a lead mid-turn is steered once the request has waited a while", async () => {
-  const { toyBox, database, channelId, now, startWaking } = await linkFakeChannel();
+  const { toyBox, database, channelId, now, startWaking } = await linkFakeChannel({
+    timings: { ...TIMINGS, backoff: UNHURRIED.backoff },
+  });
   const { client, scheduler } = await startWaking();
   toyBox.startTurn(channelId);
   await waitFor(() => expect(client.view(channelId).leadWorking).toBe(true));
@@ -301,7 +311,9 @@ test("a deleted requests routine blocks wakes and 👀", async () => {
 });
 
 test("a requests routine edited away from inbox still wakes the lead", async () => {
-  const { toyBox, database, channelId, routine, now, startWaking } = await linkFakeChannel();
+  const { toyBox, database, channelId, routine, now, startWaking } = await linkFakeChannel({
+    timings: { ...TIMINGS, ...UNHURRIED },
+  });
   const { scheduler } = await startWaking();
 
   toyBox.editRoutine(channelId, routine.id, { prompt: "Check on Slack." });
@@ -347,7 +359,9 @@ test("a run Toy Box refuses blocks the link instead of retrying", async () => {
 });
 
 test("a run Toy Box fails is retried, and a Toy Box that went away is woken once it's back", async () => {
-  const { toyBox, database, channelId, now, startWaking } = await linkFakeChannel();
+  const { toyBox, database, channelId, now, startWaking } = await linkFakeChannel({
+    timings: { ...TIMINGS, ...UNHURRIED },
+  });
   const { client, scheduler } = await startWaking();
   toyBox.failNextRun(500);
 
