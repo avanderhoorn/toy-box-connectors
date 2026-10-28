@@ -1,10 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { version } from "../../package.json";
-import { readCommandLog } from "./commandLog";
-import { installCommands, isolatedEnvironment } from "./isolatedToyBox";
+import { installCli, isolatedEnvironment } from "./isolatedToyBox";
 
 describe("isolatedEnvironment", () => {
   test("drops what points at the owner and runs Toy Box under its own home", () => {
@@ -41,39 +39,16 @@ describe("isolatedEnvironment", () => {
   });
 });
 
-describe("installCommands", () => {
-  test("puts the CLI under test on PATH and logs each run without the token", () => {
-    const folder = createTestFolder();
-    const [bin, home] = [join(folder, "bin"), join(folder, "home")];
-    for (const path of [bin, home]) mkdirSync(path);
-    const log = join(folder, "commands.jsonl");
-    installCommands(bin, log);
-    const env = {
-      PATH: `${bin}:/usr/bin:/bin`,
-      HOME: home,
-      NITRO_PORT: "3199",
-      COPILOT_AGENT_SESSION_ID: "channel-1",
-      COPILOT_GITHUB_TOKEN: "test-token",
-    };
-    const run = (...args: string[]) =>
-      Bun.spawnSync([join(bin, "toy-box-slack"), ...args], { cwd: home, env });
+describe("installCli", () => {
+  test("puts the CLI under test on PATH", () => {
+    const bin = createTestFolder();
+    installCli(bin);
 
-    const versioned = run("--version");
-    // No bridge runs for the temp HOME.
-    const unserved = run("status", "--channel", "it's two words");
+    const versioned = Bun.spawnSync([join(bin, "toy-box-slack"), "--version"], {
+      env: { PATH: "/usr/bin:/bin" },
+    });
 
+    expect(versioned.exitCode).toBe(0);
     expect(versioned.stdout.toString().trim()).toBe(version);
-    expect([versioned.exitCode, unserved.exitCode]).toEqual([0, 2]);
-    const where = { HOME: home, NITRO_PORT: "3199", COPILOT_AGENT_SESSION_ID: "channel-1" };
-    expect(readCommandLog(log)).toEqual([
-      { command: "toy-box-slack", args: ["--version"], status: 0, env: where },
-      {
-        command: "toy-box-slack",
-        args: ["status", "--channel", "it's two words"],
-        status: 2,
-        env: where,
-      },
-    ]);
-    expect(readFileSync(log, "utf8")).not.toContain("test-token");
   });
 });

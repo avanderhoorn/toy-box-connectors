@@ -23,7 +23,6 @@ import {
 import { dirname, join } from "node:path";
 import type { Subprocess } from "bun";
 import { z } from "zod";
-import { readCommandLog, type CommandRun } from "./commandLog";
 
 /** The model every test lead runs. A claude-haiku-4.5 lead failed its tool calls. */
 export const LEAD_MODEL = { provider: "copilot", name: "claude-sonnet-5" } as const;
@@ -54,8 +53,6 @@ export type IsolatedToyBox = {
   work: string;
   /** Aborts as Toy Box stops, ending whatever follows it. */
   signal: AbortSignal;
-  /** Every command the lead ran from PATH, oldest first. */
-  commandRuns(): CommandRun[];
   /** `error`, with where to read what happened. The run's folder stays for it. */
   failure(error: unknown): Error;
   /** Stops Toy Box and every process it started, then removes the run's folder unless a run failed. */
@@ -79,8 +76,7 @@ export async function startIsolatedToyBox(): Promise<IsolatedToyBox> {
   const [home, bin, work] = ["home", "bin", "work"].map((name) => join(root, name));
   for (const folder of [home, bin, work]) mkdirSync(folder);
   const log = join(root, "toy-box.log");
-  const commandLog = join(root, "commands.jsonl");
-  installCommands(bin, commandLog);
+  installCli(bin);
   installSkill(home);
 
   const output = openSync(log, "a");
@@ -105,7 +101,6 @@ export async function startIsolatedToyBox(): Promise<IsolatedToyBox> {
     home,
     work,
     signal: lifetime.signal,
-    commandRuns: () => readCommandLog(commandLog),
     failure(error) {
       keep = true;
       if (error instanceof EndToEndFailure) return error;
@@ -183,17 +178,11 @@ export function isolatedEnvironment(
   };
 }
 
-/** Writes the CLI under test into `bin` as a script that records each run in `log`. */
-export function installCommands(bin: string, log: string) {
-  const [run, record] = [
-    [process.execPath, "--no-env-file", CLI],
-    [process.execPath, join(import.meta.dir, "commandLog.ts"), log, "toy-box-slack"],
-  ].map((command) => command.map(shellQuote).join(" "));
+/** Writes the CLI under test into `bin` as `toy-box-slack`, run by the Bun running the tests. */
+export function installCli(bin: string) {
+  const run = [process.execPath, "--no-env-file", CLI].map(shellQuote).join(" ");
   const path = join(bin, "toy-box-slack");
-  writeFileSync(
-    path,
-    `#!/bin/sh\n${run} "$@"\nstatus=$?\n${record} "$status" "$@"\nexit "$status"\n`,
-  );
+  writeFileSync(path, `#!/bin/sh\nexec ${run} "$@"\n`);
   chmodSync(path, 0o755);
 }
 
