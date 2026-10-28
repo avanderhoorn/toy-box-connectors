@@ -18,6 +18,16 @@ const HASH = await Bun.password.hash(PASSPHRASE, {
   memoryCost: 8,
   timeCost: 1,
 });
+/** Mallory as users.info describes her: a full member, whom the Enterprise org names W0MALLORY. */
+const MALLORY_USER = {
+  id: MALLORY,
+  team_id: "T-home",
+  enterprise_user: { id: "W0MALLORY", enterprise_id: "E-home" },
+  real_name: "Mallory",
+  is_bot: false,
+  is_restricted: false,
+  is_ultra_restricted: false,
+};
 
 type Caller = "the lead" | "a member's session" | "a terminal";
 
@@ -35,14 +45,7 @@ async function ownedBridge() {
     is_private: true,
     members: [BOT, ALICE, MALLORY],
   });
-  slack.setUser({
-    id: MALLORY,
-    team_id: "T-home",
-    real_name: "Mallory",
-    is_bot: false,
-    is_restricted: false,
-    is_ultra_restricted: false,
-  });
+  slack.setUser(MALLORY_USER);
   writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", HASH);
   const [askedTs] = timestamps(1);
   const asked = said(ALICE, askedTs!, `<@${BOT}> can you check the deploy?`);
@@ -185,4 +188,30 @@ test("a change that's no longer what the owner was shown is refused", async () =
   expect((await as("a terminal", "link", input)).text).toContain(
     "#release-eng is public, so anyone in the bot's workspace can",
   );
+});
+
+test("allow refuses a guest when shown or confirmed, and deny takes either of someone's IDs", async () => {
+  const { slack, as, link } = await ownedBridge();
+  const guest = { ...MALLORY_USER, is_restricted: true };
+  const allow = (owner?: CallOptions["owner"]) =>
+    as("a terminal", "allow", { users: ["W0MALLORY"] }, owner);
+  const refused = {
+    exitCode: 1,
+    text: "Nobody was allowed, since only full members of the bot's workspace or its Enterprise org can be, and Mallory (W0MALLORY) isn't: they're a guest.",
+  };
+
+  slack.setUser(guest);
+  expect(await allow()).toMatchObject(refused);
+  slack.setUser(MALLORY_USER);
+  const owner = { passphrase: PASSPHRASE, confirms: (await allow()).confirm! };
+  // She's made a guest after the owner was shown her, so their passphrase doesn't admit her.
+  slack.setUser(guest);
+  expect(await allow(owner)).toMatchObject(refused);
+  slack.setUser(MALLORY_USER);
+  expect((await allow(owner)).exitCode).toBe(0);
+  expect(await link()).toMatchObject({ allowlist: [ALICE, "Mallory"] });
+
+  // The link allows her member ID, and deny finds it from the Enterprise one she was allowed by.
+  expect((await as("a terminal", "deny", { users: ["W0MALLORY"] })).exitCode).toBe(0);
+  expect(await link()).toMatchObject({ allowlist: [ALICE] });
 });
