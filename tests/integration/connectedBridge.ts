@@ -126,9 +126,8 @@ export async function connectedBridge({
   };
 }
 
-/** `count` timestamps a second apart, starting a minute ago, in the order Slack gives them. */
-export function timestamps(count: number): SlackTs[] {
-  const first = Date.now() - 60_000;
+/** `count` timestamps a second apart from `first`, a minute ago by default, in Slack's order. */
+export function timestamps(count: number, first = Date.now() - 60_000): SlackTs[] {
   return Array.from({ length: count }, (_, index) => tsAt(first + index * 1_000));
 }
 
@@ -142,7 +141,7 @@ export function said(
   return { type: "message", user, team: "T-home", text, ts, ...changes };
 }
 
-/** The event Slack sends when `message` is posted in C-link. */
-export function posted(message: FakeSlackMessage) {
-  return { ...message, channel: "C-link", event_ts: message.ts, channel_type: "group" };
+/** The event Slack sends when `message` is posted in `channel`, a private one, C-link by default. */
+export function posted(message: FakeSlackMessage, channel = "C-link") {
+  return { ...message, channel, event_ts: message.ts, channel_type: "group" };
 }

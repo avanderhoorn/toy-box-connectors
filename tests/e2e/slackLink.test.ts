@@ -40,7 +40,8 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
   suite.scenario(
     "an allowed person's mention wakes the lead, which answers once in their thread, and a stranger's gets nothing",
     async () => {
-      const [strangerTs, askedTs] = timestamps(2);
+      // From now, since nothing said before the owner linked C0LINK asks the lead.
+      const [strangerTs, askedTs] = timestamps(2, Date.now());
       const ask = `<@${BOT}> what's going out in tonight's release?`;
       const since = Date.now();
 
@@ -65,7 +66,7 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
           "SELECT kind, channel_id, thread_ts, state FROM outbox WHERE created_at >= ?",
           since,
         ),
-      ).toEqual([{ kind: "reply", channel_id: "C-link", thread_ts: askedTs, state: "sent" }]);
+      ).toEqual([{ kind: "reply", channel_id: "C0LINK", thread_ts: askedTs, state: "sent" }]);
       expect(link.query("SELECT outcome FROM wakes WHERE at >= ?", since)).toEqual([
         { outcome: "ran" },
       ]);
@@ -98,7 +99,7 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
   suite.scenario(
     "a digest posts once in the Toy Box channel when its routine runs twice",
     async () => {
-      const [ts] = timestamps(1);
+      const [ts] = timestamps(1, Date.now());
       const problem =
         "QA found the search box unreadable in dark mode on Safari, so tonight's release waits on a fix.";
       await link.post(said(ALICE, ts, problem));
@@ -144,9 +145,9 @@ function adding({ title, schedule, prompt }: typeof REQUESTS_ROUTINE) {
   return `a routine titled "${title}" with the schedule "${schedule}" and exactly this prompt: "${prompt}"`;
 }
 
-/** What people in C-link see of the message at `ts`: its reactions and the bot's replies to it. */
+/** What people in C0LINK see of the message at `ts`: its reactions and the bot's replies to it. */
 function seenInSlack(slack: FakeSlack, ts: string) {
-  const messages = slack.getMessages("C-link");
+  const messages = slack.getMessages("C0LINK");
   return {
     reactions: messages.find((message) => message.ts === ts)?.reactions,
     replies: messages.filter((message) => message.thread_ts === ts && message.user === BOT).length,
@@ -167,10 +168,10 @@ function digestCursor(link: SlackLink) {
   );
 }
 
-/** The ts of each post the bot made at the top of C-link rather than in a thread. */
+/** The ts of each post the bot made at the top of C0LINK rather than in a thread. */
 function postedInChannel(slack: FakeSlack) {
   return slack
-    .getMessages("C-link")
+    .getMessages("C0LINK")
     .filter((message) => message.user === BOT && message.thread_ts === undefined)
     .map(({ ts }) => ts);
 }
