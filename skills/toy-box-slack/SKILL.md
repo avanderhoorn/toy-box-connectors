@@ -57,7 +57,7 @@ Answer as a teammate would in the thread. Open with the answer itself, then only
 When your digest routine runs, or the owner asks what's happening in Slack:
 
 1. Run `toy-box-slack activity`. It shows what was said since your last digest.
-2. If any of it is worth the team's attention, such as ideas, decisions, problems, repeated questions or feedback, post one message here. Group it by topic with permalinks, summarize rather than quote, and skip questions you've answered unless they keep coming up. Otherwise post nothing.
+2. If others said anything worth the team's attention, such as ideas, decisions, problems, repeated questions or feedback, post one message here. Group it by topic with permalinks and summarize rather than quote. Say nothing about questions you've answered, not even that you answered them, unless several people keep asking the same thing. Otherwise post nothing.
 3. Run the `toy-box-slack mark-read` command activity ends with, even if you posted nothing, and repeat while activity says more remain.
 
 A digest informs, so send it without `request: true` and add no waiting status for it. Report a problem as news, without offering the owner choices no one asked them to make. Set `request: true` only when someone asks for the owner's decision or action, saying what and by when.
@@ -100,13 +100,13 @@ Check for Slack requests: run `toy-box-slack inbox` and answer each request it s
 **Slack digest**, `0 17 * * 1-5`:
 
 ```text
-Digest Slack: run `toy-box-slack activity` and post one message here only if it holds something worth the team's attention, such as ideas, decisions, problems, repeated questions or feedback, grouped by topic with permalinks, skipping questions you've answered unless they keep coming up, and with no Slack name after @. Report problems as news, and set request: true only when someone asks for the owner's decision or action. Then run the `toy-box-slack mark-read` command activity ends with, even if you posted nothing, and repeat while activity says more remain. When you finish, if this run cleared a waiting status that still holds, call finish_agent_turn with it again.
+Digest Slack: run `toy-box-slack activity` and post one message here only if others said something worth the team's attention, such as ideas, decisions, problems, repeated questions or feedback, grouped by topic with permalinks and with no Slack name after @. Say nothing about questions you've answered, not even that you answered them, unless several people keep asking the same thing. Report problems as news, and set request: true only when someone asks for the owner's decision or action. Then run the `toy-box-slack mark-read` command activity ends with, even if you posted nothing, and repeat while activity says more remain. When you finish, if this run cleared a waiting status that still holds, call finish_agent_turn with it again.
 ```
 
 **Release notes**, `0 16 * * 5` for weekly notes or `0 16 * * 1-5` for daily ones:
 
 ```text
-Publish release notes in Slack: read the git log and completed tasks for what shipped since this routine's previous run, draft notes on it for readers outside this channel, claiming only what the commits and tasks say, with no local paths, Toy Box links or secrets, and pipe them to `toy-box-slack publish --series release-notes`, which posts them once for this run. If nothing shipped since the previous run, post nothing. Either way, post nothing about it in Toy Box. When you finish, if this run cleared a waiting status that still holds, call finish_agent_turn with it again.
+Publish release notes in Slack: run git log and read the completed tasks now, even if you read them earlier, for what shipped since this routine's previous run. Draft notes on it for readers outside this channel, claiming only what the commits and tasks say, with no local paths, Toy Box links or secrets, and pipe them to `toy-box-slack publish --series release-notes`, which posts them once for this run. If nothing shipped since the previous run, post nothing. Either way, post nothing about it in Toy Box. When you finish, if this run cleared a waiting status that still holds, call finish_agent_turn with it again.
 ```
 
 ## When something's wrong
