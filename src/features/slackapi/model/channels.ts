@@ -64,32 +64,6 @@ export const slackConversationSchema = z
     sharedTeamIds: [...new Set(conversation.shared_team_ids ?? [])].sort(),
   }));
 
-/** One page of the people in a channel, as conversations.members lists them. */
-export type ChannelMembersPage = {
-  members: readonly string[];
-  /** The cursor that asks for the next page, or null after the last. */
-  nextCursor: string | null;
-};
-
-/**
- * A page of conversations.members. Slack may return fewer people than asked for, or none, before
- * the last page, so only an empty or missing cursor ends the list.
- */
-export const channelMembersPageSchema = z
-  .object({
-    members: z.array(z.string().min(1)).describe("The user IDs of the channel's members"),
-    response_metadata: z
-      .object({
-        next_cursor: z.string().nullish().describe("The next page's cursor, empty after the last"),
-      })
-      .nullish(),
-  })
-  .describe("A page of a channel's members")
-  .transform((page): ChannelMembersPage => ({
-    members: page.members,
-    nextCursor: page.response_metadata?.next_cursor || null,
-  }));
-
 function channelKind(conversation: {
   is_im?: boolean | null;
   is_mpim?: boolean | null;

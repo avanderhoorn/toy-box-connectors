@@ -2,71 +2,79 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { judgeChannelLink } from "@links/server/audience";
 import { readChannelLink } from "@links/server/database";
 import { suspendChannelLinks } from "@links/server/lifecycle";
-import { suspendLink } from "@links/server/status";
-import { isActive } from "@requests/model/lifecycle";
 import { readRequest } from "@requests/server/database";
-import { cancelStoredRequest } from "@requests/server/lifecycle";
 import { channelFailureReason } from "@slackapi/model/errors";
 import type { Installation } from "@slackapi/model/installation";
-import type { BotClient } from "@slackapi/server/botClient";
-import { fetchChannelFacts, readChannelInfo, writeChannelInfo } from "@slackapi/server/channels";
+import type { BotClient, SlackCall } from "@slackapi/server/botClient";
+import { fetchChannelFacts } from "@slackapi/server/channels";
 import { readInstallation } from "@slackapi/server/installation";
+import { canonicalUserId } from "@slackapi/server/users";
 import { ZodError } from "zod";
-import {
-  nextReconciliation,
-  outboxMetadata,
-  postReceipt,
-  writeOutcome,
-  type PostReceipt,
-  type WriteOutcome,
-} from "../model/delivery";
+import { outboxMetadata, postReceipt, writeOutcome } from "../model/delivery";
 import { checkLeadPayload } from "../model/payload";
-import { postingPermission, type PostingLink } from "../model/posting";
 import {
+  failQueuedItem,
   readOutboxItem,
+  settleOutboxAttempt,
   startOutboxAttempt,
   type OutboxItem,
   type OutboxSettlement,
 } from "./database";
-import { deferQueuedDelivery, settleDelivery, settleQueuedDelivery } from "./delivery";
 
 export type PostStep =
   | { kind: "settled"; item: OutboxItem }
   | { kind: "waiting"; reason: string; until: number | null }
   | { kind: "changed" };
-
-type Preparation =
+type Prepared =
   | PostStep
-  | { kind: "refresh"; channelId: string }
-  | { kind: "started"; item: OutboxItem; identity: Pick<Installation, "appId" | "botId"> };
+  | {
+      kind: "started";
+      item: OutboxItem;
+      identity: Pick<Installation, "appId" | "botId">;
+    };
 
-/**
- * New finals, follow-ups and publications. Progress, cleanup and feedback have separate handlers.
- * No network call runs inside a write.
- */
 export function createPostDelivery(
   database: BridgeDatabase,
   bot: BotClient,
   { now = Date.now }: { now?: () => number } = {},
 ) {
   async function post(id: string): Promise<PostStep> {
-    const cooldown = await bot.cooldown("chat.postMessage");
-    if (cooldown !== null) return defer(id, "rate_limited", cooldown);
-    let prepared = await database.write((tx) => prepare(tx, id, now()));
-    if (prepared.kind === "refresh") {
-      const refreshed = await refresh(id, prepared.channelId);
-      if (refreshed !== null) return refreshed;
-      prepared = await database.write((tx) => prepare(tx, id, now()));
+    const queued = await database.read((sql) => readOutboxItem(sql, id));
+    if (!queued || queued.state !== "queued") return { kind: "changed" };
+    if (queued.nextAttemptAt !== null && queued.nextAttemptAt > now())
+      return { kind: "waiting", reason: "retry_after", until: queued.nextAttemptAt };
+    let facts: SlackCall<Awaited<ReturnType<typeof fetchChannelFacts>>>;
+    try {
+      facts = await bot.call("conversations.info", (client) =>
+        fetchChannelFacts(client, queued.channelId),
+      );
+    } catch (error) {
+      if (!(error instanceof ZodError)) throw error;
+      return defer(queued, "invalid_channel_facts", now() + 30_000);
     }
-    if (prepared.kind === "refresh") {
-      return defer(id, "channel_info_invalidated", now() + 1_000);
+    if (facts.kind !== "ok") {
+      const reason = facts.kind === "error" ? channelFailureReason(facts.error) : null;
+      if (reason)
+        await database.write((tx) => suspendChannelLinks(tx, queued.channelId, reason, now()));
+      return defer(
+        queued,
+        facts.kind === "error" || facts.kind === "auth_failed" ? facts.error : facts.kind,
+        facts.kind === "rate_limited" ? facts.until : now() + 30_000,
+      );
     }
+    const prepared = await database.write(async (tx): Promise<Prepared> => {
+      const verdict = await judgeChannelLink(
+        tx,
+        queued.channelId,
+        facts.result?.id === queued.channelId ? facts.result : null,
+        now(),
+      );
+      if (verdict?.kind !== "approved")
+        return { kind: "waiting", reason: "channel_not_approved", until: null };
+      return prepare(tx, queued, now());
+    });
     if (prepared.kind !== "started") return prepared;
-
-    const item = prepared.item;
-    const identity = prepared.identity;
-    const attemptAt = item.attemptStartedAt;
-    if (attemptAt === null) throw new Error("A committed post has no attempt time.");
+    const { item, identity } = prepared;
     const payload = checkLeadPayload(item.payload);
     if (payload.kind !== "valid") throw new Error("A committed post has an invalid snapshot.");
     const outcome = writeOutcome(
@@ -74,199 +82,80 @@ export function createPostDelivery(
         client.chat.postMessage({
           ...payload.message,
           channel: item.channelId,
-          ...(item.threadTs === null ? {} : { thread_ts: item.threadTs, reply_broadcast: false }),
           metadata: outboxMetadata(item),
+          ...(item.threadTs === null ? {} : { thread_ts: item.threadTs, reply_broadcast: false }),
         }),
       ),
     );
-    return finish(
-      item,
-      outcome.kind === "accepted"
-        ? {
-            kind: "accepted",
-            result: postReceipt(outcome.result, { ...item, text: payload.message.text }, identity),
-          }
-        : outcome,
-      attemptAt,
-    );
-  }
-
-  async function finish(
-    item: OutboxItem,
-    outcome: WriteOutcome<PostReceipt>,
-    attemptAt: number,
-  ): Promise<PostStep> {
+    let settlement: OutboxSettlement;
+    if (outcome.kind === "accepted") {
+      const receipt = postReceipt(outcome.result, item, identity);
+      settlement =
+        receipt.kind === "confirmed"
+          ? { state: "sent", slackTs: receipt.ts }
+          : receipt.kind === "misplaced"
+            ? { state: "delivery_unknown", error: "wrong_thread", slackTs: receipt.ts }
+            : { state: "delivery_unknown", error: receipt.reason };
+    } else {
+      settlement =
+        outcome.kind === "queued"
+          ? { ...outcome, state: "queued" }
+          : { state: outcome.kind, error: outcome.error };
+    }
     return database.write(async (tx) => {
-      const at = now();
-      let settlement: OutboxSettlement;
-      if (outcome.kind === "accepted") {
-        const receipt = outcome.result;
-        settlement =
-          receipt.kind === "confirmed"
-            ? {
-                state: "sent",
-                slackTs: receipt.ts,
-                evidence: "response",
-                metadataOk: receipt.metadataOk,
-              }
-            : receipt.kind === "misplaced"
-              ? {
-                  state: "stray",
-                  slackTs: receipt.ts,
-                  evidence: "response",
-                  metadataOk: receipt.metadataOk,
-                  error: "wrong_thread",
-                  nextAttemptAt: at,
-                }
-              : {
-                  state: "delivery_unknown",
-                  error: receipt.reason,
-                  nextAttemptAt: nextReconciliation(attemptAt, 0),
-                };
-      } else if (outcome.kind === "delivery_unknown") {
-        settlement = {
-          state: "delivery_unknown",
-          error: outcome.error,
-          nextAttemptAt: nextReconciliation(attemptAt, 0),
-        };
-      } else if (outcome.kind === "queued") {
-        settlement = {
-          called: outcome.called,
-          state: "queued",
-          error: outcome.error,
-          nextAttemptAt: outcome.nextAttemptAt,
-        };
-      } else {
-        settlement = { state: "failed", error: outcome.error };
-      }
-      const settled = await settleDelivery(
-        tx,
-        item,
-        settlement,
-        at,
-        outcome.kind === "failed" ? outcome.suspend : null,
-      );
+      const settled = await settleOutboxAttempt(tx, item, settlement, now());
+      if (settled && outcome.kind === "failed" && outcome.suspend)
+        await suspendChannelLinks(tx, item.channelId, outcome.suspend, now());
       return settled ? { kind: "settled", item: settled } : { kind: "changed" };
     });
   }
 
-  async function prepare(tx: Bun.SQL, id: string, at: number): Promise<Preparation> {
-    const item = await readOutboxItem(tx, id);
-    if (!item || item.state !== "queued") return { kind: "changed" };
-    if (item.kind !== "reply" && item.kind !== "publication") {
-      throw new Error(`Outbox o${item.number} cannot use chat.postMessage.`);
-    }
-    if (item.nextAttemptAt !== null && item.nextAttemptAt > at) {
-      return { kind: "waiting", reason: "retry_after", until: item.nextAttemptAt };
-    }
+  async function prepare(tx: Bun.SQL, queued: OutboxItem, at: number): Promise<Prepared> {
+    const item = await readOutboxItem(tx, queued.id);
+    if (!item || item.state !== "queued" || item.payloadHash !== queued.payloadHash)
+      return { kind: "changed" };
     const installation = await readInstallation(tx);
-    if (!installation || installation.status !== "active") {
+    if (!installation || installation.status !== "active")
       return { kind: "waiting", reason: "installation_inactive", until: null };
+    const link = await readChannelLink(tx, item.channelId);
+    if (!link || link.id !== item.linkId) return refuse(tx, item, "destination_changed", at);
+    if (link.status !== "active") return { kind: "waiting", reason: "link_inactive", until: null };
+    if (item.kind === "reply") {
+      const request = await readRequest(tx, item.requestId!);
+      if (
+        !request ||
+        request.state !== "answering" ||
+        request.linkId !== item.linkId ||
+        request.channelId !== item.channelId ||
+        request.rootTs !== item.threadTs
+      )
+        return refuse(tx, item, "request_no_longer_valid", at);
+      if (!link.allowlist.has(await canonicalUserId(tx, request.requesterUserId)))
+        return refuse(tx, item, "requester_not_allowed", at);
     }
-    const link = await readPostingLink(tx, item.linkId);
-    const request = item.requestId === null ? null : await readRequest(tx, item.requestId);
-    const permission = postingPermission(
-      item,
-      installation,
-      link,
-      request,
-      await readChannelInfo(tx, item.channelId),
-      at,
-    );
-    if (permission.kind === "refresh") return permission;
-    if (permission.kind === "failed") {
-      if (permission.error === "requester_denied" && request && isActive(request.state)) {
-        await cancelStoredRequest(tx, request, "requester_denied", at);
-        const cancelled = await readOutboxItem(tx, item.id);
-        if (!cancelled) return { kind: "changed" };
-        return { kind: "settled", item: cancelled };
-      }
-      return finishQueued(tx, item, "failed", permission.error, at);
-    }
-    if (permission.kind === "suspended") {
-      if (!link) throw new Error("An audience verdict has no link.");
-      await suspendLink(tx, link.id, permission.reason, at);
-      return { kind: "waiting", reason: permission.reason, until: null };
-    }
-    if (permission.kind !== "allowed") {
-      return { kind: "waiting", reason: permission.reason, until: null };
-    }
-    const checked = checkLeadPayload(item.payload);
-    if (checked.kind === "refused") return finishQueued(tx, item, "failed", checked.problem, at);
-    const started = await startOutboxAttempt(tx, item, item.payload, "chat.postMessage", at);
-    return started.kind === "started"
-      ? { ...started, identity: { appId: installation.appId, botId: installation.botId } }
-      : started;
+    const payload = checkLeadPayload(item.payload);
+    if (payload.kind !== "valid") return refuse(tx, item, payload.problem, at);
+    const started = await startOutboxAttempt(tx, item, at);
+    return started.kind === "started" ? { ...started, identity: installation } : started;
   }
 
-  async function refresh(id: string, channelId: string): Promise<PostStep | null> {
-    const readAt = now();
-    let call;
-    try {
-      call = await bot.call("conversations.info", (client) => fetchChannelFacts(client, channelId));
-    } catch (error) {
-      if (!(error instanceof ZodError)) throw error;
-      return defer(id, "malformed_channel_info", now() + 5_000);
-    }
-    if (call.kind !== "ok") {
-      if (call.kind === "unusable") {
-        return { kind: "waiting", reason: "slack_unusable", until: null };
-      }
-      if (call.kind === "error") {
-        const reason = channelFailureReason(call.error);
-        if (reason !== null) {
-          await database.write((tx) => suspendChannelLinks(tx, channelId, reason, now()));
-        }
-      }
-      return defer(
-        id,
-        call.kind === "unknown"
-          ? call.detail
-          : call.kind === "rate_limited"
-            ? "rate_limited"
-            : call.error,
-        call.kind === "rate_limited" ? call.until : now() + 5_000,
-      );
-    }
-    const facts = call.result;
-    if (facts !== null && facts.id !== channelId) {
-      return defer(id, "mismatched_channel_info", now() + 5_000);
-    }
+  async function refuse(
+    tx: Bun.SQL,
+    item: OutboxItem,
+    reason: string,
+    at: number,
+  ): Promise<PostStep> {
+    const settled = await failQueuedItem(tx, item, reason, at);
+    return settled ? { kind: "settled", item: settled } : { kind: "changed" };
+  }
+  async function defer(item: OutboxItem, reason: string, until: number): Promise<PostStep> {
     await database.write(async (tx) => {
-      if (facts !== null) await writeChannelInfo(tx, facts, readAt);
-      await judgeChannelLink(tx, channelId, facts, now());
+      await tx`
+        UPDATE outbox SET error = ${reason}, next_attempt_at = MAX(COALESCE(next_attempt_at, 0), ${until}),
+          updated_at = ${now()} WHERE id = ${item.id} AND state = 'queued' AND attempts = ${item.attempts}
+      `;
     });
-    return null;
+    return { kind: "waiting", reason, until };
   }
-
-  async function defer(id: string, reason: string, until: number): Promise<PostStep> {
-    return database.write(async (tx) => {
-      const next = await deferQueuedDelivery(tx, id, reason, until, now());
-      return next === null ? { kind: "changed" } : { kind: "waiting", reason, until: next };
-    });
-  }
-
   return { post };
-}
-
-async function finishQueued(
-  tx: Bun.SQL,
-  item: OutboxItem,
-  state: "failed" | "dropped" | "superseded",
-  error: string,
-  now: number,
-): Promise<PostStep> {
-  const settled = await settleQueuedDelivery(tx, item, state, error, now);
-  return settled ? { kind: "settled", item: settled } : { kind: "changed" };
-}
-
-async function readPostingLink(sql: Bun.SQL, id: string | null): Promise<PostingLink | null> {
-  if (id === null) return null;
-  const [row] = await sql<{ slack_channel_id: string }[]>`
-    SELECT slack_channel_id FROM links WHERE id = ${id}
-  `;
-  if (!row) return null;
-  const link = await readChannelLink(sql, row.slack_channel_id);
-  if (!link || link.id !== id) throw new Error("A stored link has no channel.");
-  return { ...link, slackChannelId: row.slack_channel_id };
 }

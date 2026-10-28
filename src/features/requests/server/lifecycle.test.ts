@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
+import { createStoredLink } from "@links/server/testFixtures";
 import { createStoredOutboxItem } from "@outbox/server/testFixtures";
 import { requestLifetimeMs, type Request } from "@requests/model/lifecycle";
 import { cancelLinkRequests, expireRequests } from "./lifecycle";
@@ -9,6 +10,8 @@ import { createStoredRequest } from "./testFixtures";
 /** Stores a request in each state, then an open one on another link, each with a queued reply. */
 async function openEveryState(): Promise<BridgeDatabase> {
   const database = await openTestDatabase();
+  await createStoredLink(database);
+  await createStoredLink(database, "other");
   const states: Partial<Request>[] = [
     { state: "open" },
     { state: "seen" },
@@ -21,8 +24,12 @@ async function openEveryState(): Promise<BridgeDatabase> {
   ];
   for (const [index, changes] of states.entries()) {
     const ts = `${1_700_000_100 + index}.000100`;
-    const { id } = await createStoredRequest(database, { rootTs: ts, sourceTs: ts, ...changes });
-    await createStoredOutboxItem(database, id, { request_id: id });
+    const { id, linkId } = await createStoredRequest(database, {
+      rootTs: ts,
+      sourceTs: ts,
+      ...changes,
+    });
+    await createStoredOutboxItem(database, id, { request_id: id, link_id: linkId });
   }
   return database;
 }

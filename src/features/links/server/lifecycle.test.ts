@@ -2,8 +2,6 @@ import { describe, expect, test } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { privateAudience } from "@links/model/testFixtures";
-import { channelFacts } from "@slackapi/model/testFixtures";
-import { readChannelInfo, writeChannelInfo } from "@slackapi/server/channels";
 import { recordUninstall, suspendChannelLinks } from "./lifecycle";
 import { countRows, createStoredLink, fillEveryTable } from "./testFixtures";
 
@@ -12,11 +10,10 @@ function readLinks(database: BridgeDatabase) {
 }
 
 describe("a lifecycle signal about a linked channel", () => {
-  test("suspends the channel's link and casts doubt on what's stored about it", async () => {
+  test("suspends only the channel's link", async () => {
     const database = await openTestDatabase();
     await createStoredLink(database);
     await createStoredLink(database, "other");
-    await database.write((transaction) => writeChannelInfo(transaction, channelFacts(), 1_000));
 
     const changed = await database.write((transaction) =>
       suspendChannelLinks(transaction, "C-link", "bot_removed", 60_000),
@@ -27,9 +24,6 @@ describe("a lifecycle signal about a linked channel", () => {
       { id: "link", status: "suspended", status_reason: "bot_removed" },
       { id: "other", status: "active", status_reason: null },
     ]);
-    expect(await database.read((sql) => readChannelInfo(sql, "C-link"))).toMatchObject({
-      invalidatedAt: 60_000,
-    });
   });
 
   test("a channel made public suspends the link only if the owner approved it private", async () => {

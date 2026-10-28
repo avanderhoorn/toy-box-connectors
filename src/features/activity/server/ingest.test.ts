@@ -16,6 +16,7 @@ async function openIngest(): Promise<BridgeDatabase> {
     await transaction`
       INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-owner', 0)
     `;
+    await transaction`INSERT INTO users (user_id) VALUES ('U-owner')`;
     await transaction`INSERT INTO user_aliases (alias_id, user_id) VALUES ('W-owner', 'U-owner')`;
   });
   return database;
@@ -38,14 +39,7 @@ test("only a linked channel's messages are stored, each under its author's own I
   expect(await ingest(database, { kind: "message", message: elsewhere, edit: false })).toBe(false);
   const aliased = { ...ask, userId: "W-owner" };
   expect(await ingest(database, { kind: "message", message: aliased, edit: false })).toBe(true);
-  expect(
-    await ingest(database, {
-      kind: "replied",
-      channelId: "C-link",
-      threadTs: ask.ts,
-      latestReplyTs: null,
-    }),
-  ).toBe(false);
+  expect(await ingest(database, { kind: "replied" })).toBe(false);
 
   expect(await readStored(database)).toEqual({
     messages: [{ channel_id: "C-link", user_id: "U-owner", author_role: "allowed", deleted: 0 }],
@@ -53,10 +47,10 @@ test("only a linked channel's messages are stored, each under its author's own I
   });
 });
 
-test("Slack withdrawing a message stores it as deleted, which cancels the request it asked", async () => {
+test("a deleted message cancels the request it asked", async () => {
   const database = await openIngest();
   await ingest(database, { kind: "message", message: ask, edit: false });
-  expect(await ingest(database, { kind: "withdrawn", channelId: "C-link", ts: ask.ts })).toBe(true);
+  expect(await ingest(database, { kind: "deleted", channelId: "C-link", ts: ask.ts })).toBe(true);
 
   expect(await readStored(database)).toEqual({
     messages: [{ channel_id: "C-link", user_id: "U-owner", author_role: "allowed", deleted: 1 }],

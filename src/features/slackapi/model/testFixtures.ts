@@ -22,12 +22,10 @@ export function askMessage(
     subtype: null,
     author: "person",
     text: "<@U-bot> can you look at the deploy?",
-    files: [],
     mentions: ["U-bot"],
     mentionsBot: true,
     editedTs: null,
     version: ts,
-    latestReplyTs: null,
     ...changes,
   };
 }

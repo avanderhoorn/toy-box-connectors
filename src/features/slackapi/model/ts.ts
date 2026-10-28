@@ -13,17 +13,6 @@ export const slackTsSchema = z
 
 export type SlackTs = z.output<typeof slackTsSchema>;
 
-/**
- * A time Slack sends in whole epoch seconds. It's bounded by the last second a Date can hold, so
- * the bridge's millisecond math on it stays exact and `tsAt` can always name it.
- */
-export const epochSecondsSchema = z
-  .number()
-  .int()
-  .nonnegative()
-  .max(8_640_000_000_000)
-  .describe("A time in epoch seconds");
-
 /** Orders two ts values by their decimal value: negative, zero or positive, like a sort comparator. */
 export function compareTs(left: SlackTs, right: SlackTs): number {
   const [leftSeconds, leftFraction] = decimalParts(left);

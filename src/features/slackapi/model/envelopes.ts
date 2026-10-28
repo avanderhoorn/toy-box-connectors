@@ -1,252 +1,125 @@
 import { z } from "zod";
-import { epochSecondsSchema } from "./ts";
 
-// Socket Mode frames.
-//
-// Slack sends JSON frames over the socket: hello once the connection is ready,
-// disconnect when it wants a fresh one, and envelopes that carry events and are
-// acked by envelope ID. The receiver reads every frame here before the
-// SDK sees it, so a payload the SDK can't dispatch, such as app_rate_limited, is
-// still handled, and an envelope whose payload is malformed can still be acked.
-
-const slackIdSchema = z.string().min(1);
-
-const frameHeaderSchema = z
-  .object({
-    type: z.string().min(1).describe("The frame's type, such as hello or events_api"),
-    envelope_id: slackIdSchema.nullish().describe("The delivery's ID, which its ack names"),
-  })
-  .describe("The fields every Socket Mode frame shares");
-
-const helloSchema = z
-  .object({
-    connection_info: z
-      .object({ app_id: slackIdSchema.nullish().describe("The app the app token belongs to") })
-      .nullish()
-      .describe("What Slack knows about this connection"),
-  })
-  .describe("Slack accepted the connection");
-
-const disconnectSchema = z
-  .object({ reason: z.string().nullish().describe("Why Slack is closing the connection") })
-  .describe("Slack asks the client to reconnect");
-
-const rateLimitedSchema = z
-  .object({
-    type: z.literal("app_rate_limited"),
-    team_id: slackIdSchema.describe("The team whose events were held back"),
-    api_app_id: slackIdSchema.describe("The rate-limited app"),
-    minute_rate_limited: epochSecondsSchema.describe(
-      "The start of the minute Slack held events back, in epoch seconds",
-    ),
-  })
-  .describe("Slack stopped delivering events for a minute");
-
-const authorizationSchema = z
-  .object({
-    enterprise_id: slackIdSchema.nullish().describe("The installation's Enterprise org, if any"),
-    team_id: slackIdSchema
-      .nullish()
-      .describe("The installation's workspace, null for an org-wide installation"),
-    user_id: slackIdSchema
-      .nullish()
-      .describe("The installation's user, the bot user for a bot installation"),
-    is_bot: z.boolean().nullish().describe("Whether the installation is a bot's"),
-    is_enterprise_install: z
-      .boolean()
-      .nullish()
-      .describe("Whether the app is installed across a whole Enterprise org"),
-  })
-  .describe("An installation of the app that can see the event, never who acted");
-
-const eventCallbackSchema = z
-  .object({
-    type: z.literal("event_callback"),
-    team_id: slackIdSchema.describe(
-      "The workspace the event happened in, which can be a sibling of the installation's",
-    ),
-    api_app_id: slackIdSchema.describe("The app the event is for"),
-    authorizations: z
-      .array(authorizationSchema)
-      .nullish()
-      .describe(
-        "One installation that can see the event. A few events such as tokens_revoked omit it",
-      ),
-    event_id: slackIdSchema.describe("The event's ID, the same on every redelivery"),
-    event_time: epochSecondsSchema.describe("When the event happened, in epoch seconds"),
-    event: z
-      .looseObject({ type: z.string().min(1).describe("The event's type, such as message") })
-      .describe("The event itself, which its handler parses"),
-  })
-  .describe("An Events API event");
-
-const eventsApiPayloadSchema = z.discriminatedUnion("type", [
-  eventCallbackSchema,
-  rateLimitedSchema,
-]);
-
-const envelopeSchema = z
-  .object({
-    envelope_id: slackIdSchema.describe("The delivery's ID, which its ack names"),
-    payload: z.unknown().describe("What the envelope carries"),
-  })
-  .describe("A delivery Slack wants acked");
-
-/** An installation of the app that can see an event. It never says who acted. */
+const id = z.string().min(1);
+const authorizationSchema = z.object({
+  enterprise_id: id.nullish().describe("Installation org"),
+  team_id: id.nullish().describe("Installation workspace"),
+  user_id: id.nullish().describe("Installation bot user"),
+  is_bot: z.boolean().nullish().describe("Bot authorization"),
+  is_enterprise_install: z.boolean().nullish().describe("Org-wide authorization"),
+});
+const callbackSchema = z.object({
+  type: z.literal("event_callback"),
+  team_id: id.describe("Event workspace, not necessarily the installation's"),
+  api_app_id: id.describe("Receiving app"),
+  authorizations: z.array(authorizationSchema).nullish().describe("Receiving installation"),
+  event: z.looseObject({ type: id.describe("Event type") }),
+});
+const rateLimitSchema = z.object({
+  type: z.literal("app_rate_limited"),
+  team_id: id.describe("Rate-limited workspace"),
+  api_app_id: id.describe("Rate-limited app"),
+});
+const payloadSchema = z.discriminatedUnion("type", [callbackSchema, rateLimitSchema]);
+const headerSchema = z.object({
+  type: id.describe("Socket frame type"),
+  envelope_id: id.nullish().describe("Acknowledgement identity"),
+  payload: z.unknown().optional().describe("Event payload"),
+  connection_info: z.unknown().optional(),
+  reason: z.unknown().optional(),
+});
 export type Authorization = {
   enterpriseId: string | null;
-  /** Null for an installation across a whole Enterprise org. */
   teamId: string | null;
-  /** The bot user for a bot installation. */
   userId: string | null;
   isBot: boolean;
   isEnterpriseInstall: boolean;
 };
-
-/** An event that arrived in an events_api envelope. Its handler parses `event` by its type. */
 export type EventCallback = {
-  /** The workspace the event happened in, which needn't be the installation's. */
   teamId: string;
   appId: string;
-  /**
-   * The installations that can see the event, or null when Slack left the list out, as it does
-   * for tokens_revoked. Slack truncates the list to one, and an empty list isn't a missing one.
-   */
   authorizations: Authorization[] | null;
-  eventId: string;
-  /** Epoch seconds. */
-  eventTime: number;
   event: { type: string; [key: string]: unknown };
 };
-
-/** What a malformed frame still tells the receiver about where a gap could be. */
-export type MalformedHint = {
-  /** The event's channel when the payload names one. */
-  channelId: string | null;
-  /** The event's time in epoch seconds when the payload carries one. */
-  eventTime: number | null;
-};
-
-/** One Socket Mode frame, as much of it as could be read. */
 export type SocketFrame =
   | { kind: "hello"; appId: string | null }
   | { kind: "disconnect"; reason: string | null }
   | { kind: "event"; envelopeId: string; callback: EventCallback }
-  /** Bare when Slack sent it top-level, with no envelope to ack. */
   | {
       kind: "rate_limited";
       envelopeId: string | null;
       teamId: string;
       appId: string;
-      minute: number;
     }
-  /** A frame type the bridge doesn't use, such as interactive or slash_commands. */
   | { kind: "other"; type: string; envelopeId: string | null }
-  /** `issues` names zod issue codes and paths only, never content, so it's safe to log. */
-  | { kind: "malformed"; envelopeId: string | null; hint: MalformedHint; issues: string[] };
+  | { kind: "malformed"; envelopeId: string | null; issues: string[] };
 
-/** Reads one raw Socket Mode frame. Never throws. */
+/** Raw frames bypass SDK dispatch, which cannot handle Slack's top-level app_rate_limited. */
 export function readFrame(raw: string): SocketFrame {
   let value: unknown;
   try {
     value = JSON.parse(raw);
   } catch {
-    return malformed(null, undefined, ["invalid_json"]);
+    return malformed(null, ["invalid_json"]);
   }
-  const header = frameHeaderSchema.safeParse(value);
-  if (!header.success) return malformed(null, value, issuesOf(header.error));
-  const envelopeId = header.data.envelope_id ?? null;
-
-  switch (header.data.type) {
-    case "hello": {
-      const hello = helloSchema.safeParse(value);
-      return { kind: "hello", appId: hello.data?.connection_info?.app_id ?? null };
-    }
-    case "disconnect": {
-      const disconnect = disconnectSchema.safeParse(value);
-      return { kind: "disconnect", reason: disconnect.data?.reason ?? null };
-    }
-    case "app_rate_limited": {
-      const limited = rateLimitedSchema.safeParse(value);
-      if (!limited.success) return malformed(envelopeId, value, issuesOf(limited.error));
-      return rateLimited(envelopeId, limited.data);
-    }
-    case "events_api": {
-      const envelope = envelopeSchema.safeParse(value);
-      if (!envelope.success) return malformed(envelopeId, value, issuesOf(envelope.error));
-      const payload = eventsApiPayloadSchema.safeParse(envelope.data.payload);
-      if (!payload.success) {
-        return malformed(envelopeId, value, issuesOf(payload.error, ["payload"]));
-      }
-      if (payload.data.type === "app_rate_limited") return rateLimited(envelopeId, payload.data);
-      const callback = payload.data;
-      return {
-        kind: "event",
-        envelopeId: envelope.data.envelope_id,
-        callback: {
-          teamId: callback.team_id,
-          appId: callback.api_app_id,
-          authorizations: callback.authorizations?.map(fromAuthorization) ?? null,
-          eventId: callback.event_id,
-          eventTime: callback.event_time,
-          event: callback.event,
-        },
-      };
-    }
-    default:
-      return { kind: "other", type: header.data.type, envelopeId };
+  const parsed = headerSchema.safeParse(value);
+  if (!parsed.success) return malformed(null, issuesOf(parsed.error));
+  const header = parsed.data;
+  const envelopeId = header.envelope_id ?? null;
+  if (header.type === "hello") {
+    const info = z.object({ app_id: id.nullish() }).nullish().safeParse(header.connection_info);
+    return info.success
+      ? { kind: "hello", appId: info.data?.app_id ?? null }
+      : malformed(envelopeId, issuesOf(info.error));
   }
-}
-
-/** Describes a zod error by issue codes and paths only, so it never repeats content. */
-export function issuesOf(error: z.ZodError, prefix: PropertyKey[] = []): string[] {
-  return error.issues.map((issue) => {
-    const path = [...prefix, ...issue.path].map(String).join(".");
-    return path ? `${issue.code} at ${path}` : issue.code;
-  });
-}
-
-function fromAuthorization(entry: z.output<typeof authorizationSchema>): Authorization {
+  if (header.type === "disconnect") {
+    const reason = z.string().nullish().safeParse(header.reason);
+    return reason.success
+      ? { kind: "disconnect", reason: reason.data ?? null }
+      : malformed(envelopeId, issuesOf(reason.error));
+  }
+  if (!["events_api", "app_rate_limited"].includes(header.type))
+    return { kind: "other", type: header.type, envelopeId };
+  const payload = payloadSchema.safeParse(
+    header.type === "app_rate_limited" ? value : header.payload,
+  );
+  if (!payload.success) return malformed(envelopeId, issuesOf(payload.error));
+  if (header.type === "events_api" && !envelopeId) return malformed(null, ["missing_envelope_id"]);
+  const event = payload.data;
+  if (event.type === "app_rate_limited")
+    return {
+      kind: "rate_limited",
+      envelopeId,
+      teamId: event.team_id,
+      appId: event.api_app_id,
+    };
+  if (!envelopeId) return malformed(null, ["missing_envelope_id"]);
   return {
-    enterpriseId: entry.enterprise_id ?? null,
-    teamId: entry.team_id ?? null,
-    userId: entry.user_id ?? null,
-    isBot: entry.is_bot ?? false,
-    isEnterpriseInstall: entry.is_enterprise_install ?? false,
-  };
-}
-
-function rateLimited(
-  envelopeId: string | null,
-  payload: z.output<typeof rateLimitedSchema>,
-): SocketFrame {
-  return {
-    kind: "rate_limited",
+    kind: "event",
     envelopeId,
-    teamId: payload.team_id,
-    appId: payload.api_app_id,
-    minute: payload.minute_rate_limited,
+    callback: {
+      teamId: event.team_id,
+      appId: event.api_app_id,
+      event: event.event,
+      // An absent list permits the documented team fallback. An empty list never does.
+      authorizations:
+        event.authorizations?.map((entry) => ({
+          enterpriseId: entry.enterprise_id ?? null,
+          teamId: entry.team_id ?? null,
+          userId: entry.user_id ?? null,
+          isBot: entry.is_bot ?? false,
+          isEnterpriseInstall: entry.is_enterprise_install ?? false,
+        })) ?? null,
+    },
   };
 }
 
-function malformed(envelopeId: string | null, value: unknown, issues: string[]): SocketFrame {
-  return { kind: "malformed", envelopeId, hint: hintOf(value), issues };
+export function issuesOf(error: z.ZodError, prefix: PropertyKey[] = []): string[] {
+  return error.issues.map(
+    (issue) => `${issue.code} at ${[...prefix, ...issue.path].map(String).join(".")}`,
+  );
 }
 
-const hintSchema = z.object({
-  payload: z
-    .object({
-      event_time: epochSecondsSchema.optional().catch(undefined),
-      event: z.object({ channel: slackIdSchema.optional() }).optional().catch(undefined),
-    })
-    .optional()
-    .catch(undefined),
-});
-
-function hintOf(value: unknown): MalformedHint {
-  const hint = hintSchema.safeParse(value);
-  return {
-    channelId: hint.data?.payload?.event?.channel ?? null,
-    eventTime: hint.data?.payload?.event_time ?? null,
-  };
+function malformed(envelopeId: string | null, issues: string[]): SocketFrame {
+  return { kind: "malformed", envelopeId, issues };
 }

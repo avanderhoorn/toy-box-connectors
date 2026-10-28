@@ -15,12 +15,10 @@ const ask: SlackMessage = {
   subtype: null,
   author: "person",
   text: "<@UBOT> can you check the build?",
-  files: [],
   mentions: ["UBOT"],
   mentionsBot: true,
   editedTs: null,
   version: "1700099000.000100",
-  latestReplyTs: null,
 };
 
 const reply: SlackMessage = {

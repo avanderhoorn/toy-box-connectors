@@ -2,8 +2,36 @@
 
 Evidence checked: 2026-10-28. This document distinguishes Slack's published
 contract from recommendations and items that need a live workspace to verify.
-The author has used no Slack credentials or live workspace. Later live probes
-reported by the Lead are attributed explicitly.
+Early research used no credentials. Later live probes are attributed explicitly.
+
+## Reduced v1, approved October 28
+
+The current scope is terminal setup protected by a bridge-checked owner passphrase,
+one watched channel per Toy Box channel, allowlisted requests, threaded answers,
+publications in that same Slack channel and fire-and-forget eyes. There are no
+approval cards, interaction payloads, file ingestion, native status, progress edits
+or generalized cleanup operations. The later sections preserve research into those
+retired designs, not requirements to bring them back.
+
+Unknown posts get positive-only metadata checks around one and five minutes.
+Neither misses nor retraction release a request or publication slot. Publications
+use their routine's scheduled slot, not the date when a delayed run happens.
+Secret-shaped output is refused both at rendering and at the send boundary.
+Method cooldowns are shared by the bridge's one Slack client in memory. Restart
+may encounter another 429, but never releases an ambiguous post's reservation.
+
+### Smaller v1: live Markdown probe
+
+On 2026-10-28, Slack Expert posted one `markdown` block in the approved
+#toy-box-private test channel, read it back and deleted it. A heading became a
+header block. A list, fenced TypeScript and an HTTPS link became the corresponding
+rich-text elements. Escaping `&`, `<` and `>` and inserting a zero-width space into
+plain broadcast words made `<!here>`, `@channel` and a bot-user `<@ID>` sample
+ordinary text elements, with no user or broadcast elements. This verifies the
+sanitized payload, not raw mention safety or a person's notification settings.
+The reduced renderer can use that block without its former section-packing code.
+Slack documents the block's combined 12,000-character limit and translation:
+[Markdown block](https://docs.slack.dev/reference/block-kit/blocks/markdown-block/).
 
 ## Recommendations that affect the architecture
 
@@ -36,9 +64,9 @@ Socket Mode and message delivery contracts:
 
 ## App manifest, adopted v1
 
-This is the recommended first manifest for public and private channel monitoring,
-threaded answers, daily/weekly publications, inbound files, and owner-approval
-buttons. The canonical installable file is [`../manifest.yaml`](../manifest.yaml).
+This is the manifest for public and private channel monitoring, threaded answers,
+periodic publications and request eyes. The canonical installable file is
+[`../manifest.yaml`](../manifest.yaml).
 V1 omits outbound uploads, DMs, agent-container features, impersonation,
 workspace administration, automatic channel joining, and Slack-side configuration
 commands. All message monitoring already exposes mentions, so a separate
@@ -69,12 +97,11 @@ oauth_config:
       - users:read
       - chat:write
       - metadata.message:read
-      - files:read
       - reactions:write
 settings:
   socket_mode_enabled: true
   interactivity:
-    is_enabled: true
+    is_enabled: false
   org_deploy_enabled: false
   token_rotation_enabled: false
   event_subscriptions:
@@ -93,7 +120,6 @@ settings:
       - channel_shared
       - channel_unshared
       - channel_id_changed
-      - file_deleted
 ```
 
 | Scope | Why it is present |
@@ -103,10 +129,9 @@ settings:
 | `groups:history` | Equivalent message/history access for private channels the app has joined. |
 | `groups:read` | Resolve/validate those private channels and their privacy/sharing flags. |
 | `users:read` | Resolve explicit allowlist selections and check bot/deactivated/external user attributes without collecting email. |
-| `chat:write` | Post threaded answers and publications, and update/delete the app's own messages. |
+| `chat:write` | Post threaded answers and publications, and delete one known app post. |
 | `metadata.message:read` | Read correlation metadata when reconciling an uncertain outbound post. |
-| `files:read` | Read files shared in authorized monitored channels and process deletion notifications. |
-| `reactions:write` | Optional acceptance/completion indicators on requests. Remove if not implemented. |
+| `reactions:write` | Fire-and-forget eyes when the lead picks up a request. |
 
 Create a separate **app-level token** with `connections:write` under Basic
 Information. It is not a bot scope and does not go in `oauth_config.scopes.bot`.

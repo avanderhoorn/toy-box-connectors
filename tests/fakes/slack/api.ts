@@ -65,7 +65,6 @@ const BOT_SCOPES = [
   "users:read",
   "chat:write",
   "metadata.message:read",
-  "files:read",
   "reactions:write",
 ];
 const bool = z

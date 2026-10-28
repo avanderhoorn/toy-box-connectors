@@ -3,7 +3,7 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { confirmIdentity } from "@bridge/server/identity";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import type { Installation } from "@slackapi/model/installation";
-import { createBotClient, guardBotClient, type BotClient } from "@slackapi/server/botClient";
+import { createBotClient, type BotClient } from "@slackapi/server/botClient";
 import { markAuthFailed, readInstallation } from "@slackapi/server/installation";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack, type FakeSlack, type FakeSlackIdentity } from "../fakes/slack";
@@ -57,22 +57,6 @@ const fakeInstallation: Installation = {
 };
 
 describe("confirming the tokens", () => {
-  test("a locally guarded identity check decides nothing about the installation", async () => {
-    const slack = fakeSlack();
-    const database = await openTestDatabase();
-    await createStoredInstallation(database);
-    const before = await database.read(readInstallation);
-    expect(
-      await confirm(database, slack, { wrap: (bot) => guardBotClient(bot, () => false) }),
-    ).toEqual({
-      kind: "unavailable",
-      detail: "The bridge cannot use Slack for auth.test right now",
-      retryAt: null,
-    });
-    expect(methodsCalled(slack)).toEqual([]);
-    expect(await database.read(readInstallation)).toEqual(before);
-  });
-
   test("the first answer records the installation the tokens belong to", async () => {
     const slack = fakeSlack();
     const database = await openTestDatabase();

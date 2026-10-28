@@ -1,93 +1,48 @@
 import type { SlackIdentity } from "@slackapi/model/identity";
-import type { Installation, InstallationStatus } from "@slackapi/model/installation";
+import type { Installation } from "@slackapi/model/installation";
 
-// The stored installation.
-
-type InstallationRow = {
-  team_id: string;
-  app_id: string;
-  bot_id: string;
-  bot_user_id: string;
-  enterprise_id: string | null;
-  status: InstallationStatus;
-};
-
-/** The installation, or null before the bridge has first confirmed its tokens with Slack. */
 export async function readInstallation(sql: Bun.SQL): Promise<Installation | null> {
-  const [row] = await sql<InstallationRow[]>`
-    SELECT team_id, app_id, bot_id, bot_user_id, enterprise_id, status
-    FROM installation
+  const [row] = await sql<Installation[]>`
+    SELECT team_id AS teamId, app_id AS appId, bot_id AS botId, bot_user_id AS botUserId,
+      enterprise_id AS enterpriseId, status FROM installation
   `;
-  if (!row) return null;
-  return {
-    teamId: row.team_id,
-    appId: row.app_id,
-    botId: row.bot_id,
-    botUserId: row.bot_user_id,
-    enterpriseId: row.enterprise_id,
-    status: row.status,
-  };
+  return row ?? null;
 }
 
-/** Records the installation Slack first confirmed the tokens for, as active. */
-export async function recordInstallation(
-  transaction: Bun.SQL,
-  identity: SlackIdentity,
-): Promise<void> {
-  const row = {
-    id: 1,
-    team_id: identity.teamId,
-    app_id: identity.appId,
-    bot_id: identity.botId,
-    bot_user_id: identity.botUserId,
-    enterprise_id: identity.enterpriseId,
-    status: "active",
-  };
-  await transaction`INSERT INTO installation ${transaction(row)}`;
+export async function recordInstallation(tx: Bun.SQL, identity: SlackIdentity): Promise<void> {
+  await tx`
+    INSERT INTO installation (id, team_id, app_id, bot_id, bot_user_id, enterprise_id, status)
+    VALUES (1, ${identity.teamId}, ${identity.appId}, ${identity.botId}, ${identity.botUserId}, ${identity.enterpriseId}, 'active')
+  `;
 }
 
-/**
- * Puts an installation in auth_failed back to active, and returns when it began failing, which is
- * where recovery's gap starts, or null when it wasn't failing. A failure that wasn't timed counts
- * from the epoch, so its gap reaches back to when each link began.
- */
-export async function reactivateInstallation(transaction: Bun.SQL): Promise<number | null> {
-  const [failing] = await transaction<{ auth_failed_at: number | null }[]>`
+/** Recovery starts at the first rejection, never the latest one. */
+export async function reactivateInstallation(tx: Bun.SQL): Promise<number | null> {
+  const [row] = await tx<{ auth_failed_at: number | null }[]>`
     SELECT auth_failed_at FROM installation WHERE status = 'auth_failed'
   `;
-  if (!failing) return null;
-  await transaction`UPDATE installation SET status = 'active', auth_failed_at = NULL`;
-  return failing.auth_failed_at ?? 0;
+  if (!row) return null;
+  await tx`UPDATE installation SET status = 'active', auth_failed_at = NULL`;
+  return row.auth_failed_at ?? 0;
 }
 
-/**
- * Puts an active installation in auth_failed as of `now`, and returns whether it changed. One
- * that's failing already keeps the moment it began, where recovery's gap starts, and an uninstalled
- * one stays uninstalled.
- */
-export async function markAuthFailed(transaction: Bun.SQL, now: number): Promise<boolean> {
-  const marked = await transaction`
+export async function markAuthFailed(tx: Bun.SQL, now: number): Promise<boolean> {
+  const rows = await tx`
     UPDATE installation SET status = 'auth_failed', auth_failed_at = ${now}
-    WHERE status = 'active'
-    RETURNING id
+    WHERE status = 'active' RETURNING id
   `;
-  return marked.length > 0;
+  return rows.length > 0;
 }
 
-/** When Slack last said hello to the bridge, or null when it never has. */
 export async function readConnectedAt(sql: Bun.SQL): Promise<number | null> {
-  const [row] = await sql<{ connected_at: number | null }[]>`
-    SELECT connected_at FROM installation
-  `;
+  const [row] = await sql<{ connected_at: number | null }[]>`SELECT connected_at FROM installation`;
   return row?.connected_at ?? null;
 }
 
-/** Notes that Slack said hello at `at`. */
-export async function markConnected(transaction: Bun.SQL, at: number): Promise<void> {
-  await transaction`UPDATE installation SET connected_at = ${at}`;
+export async function markConnected(tx: Bun.SQL, at: number): Promise<void> {
+  await tx`UPDATE installation SET connected_at = ${at}`;
 }
 
-/** Notes that the bridge found itself without a connection at `at`. */
-export async function markDisconnected(transaction: Bun.SQL, at: number): Promise<void> {
-  await transaction`UPDATE installation SET disconnected_at = ${at}`;
+export async function markDisconnected(tx: Bun.SQL, at: number): Promise<void> {
+  await tx`UPDATE installation SET disconnected_at = ${at}`;
 }

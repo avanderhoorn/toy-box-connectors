@@ -129,10 +129,6 @@ function readMessages(database: BridgeDatabase) {
   return database.read((sql) => sql`SELECT ts FROM messages ORDER BY ts`);
 }
 
-function readCooldowns(database: BridgeDatabase) {
-  return database.read((sql) => sql`SELECT method, next_attempt_at FROM rate_limits`);
-}
-
 function called(fake: FakeSlack, method: string) {
   return fake.calls.filter((call) => call.method === method).length;
 }
@@ -893,9 +889,9 @@ describe("stopping", () => {
 
   test("stopping while Slack is asked about the tokens waits for what its answer stores, and connects nothing", async () => {
     const link = await linkFakeSlack();
-    link.fake.failNext("auth.test", { retryAfter: 30 });
+    await createStoredInstallation(link.database);
+    link.fake.failNext("auth.test", { error: "invalid_auth" });
     const { supervisor } = link.supervise();
-    // The bot's client reads auth.test's cooldown just before calling it.
     await link.nextRead();
     expect(link.fake.calls).toEqual([]);
     const release = holdDatabase(link.database);
@@ -903,14 +899,15 @@ describe("stopping", () => {
 
     let stopped = false;
     const stopping = supervisor.stop().then(() => (stopped = true));
-    await Bun.sleep(50);
-    expect(stopped).toBe(false);
-    await release();
-    await stopping;
+    try {
+      await Bun.sleep(50);
+      expect(stopped).toBe(false);
+    } finally {
+      await release();
+      await stopping;
+    }
 
-    expect(await readCooldowns(link.database)).toEqual([
-      { method: "auth.test", next_attempt_at: NOW + 30_000 },
-    ]);
+    expect(await link.database.read(readInstallation)).toMatchObject({ status: "auth_failed" });
     expect(link.fake.calls.map(({ method }) => method)).toEqual(["auth.test"]);
     expect(supervisor.state()).toEqual({ connection: "connecting", problem: null });
   });

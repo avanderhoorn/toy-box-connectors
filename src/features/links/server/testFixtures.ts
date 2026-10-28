@@ -4,8 +4,7 @@ import type { Audience } from "@links/model/audience";
 import { privateAudience } from "@links/model/testFixtures";
 import { createStoredOutboxItem } from "@outbox/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
-import { askMessage, channelFacts } from "@slackapi/model/testFixtures";
-import { writeChannelInfo } from "@slackapi/server/channels";
+import { askMessage } from "@slackapi/model/testFixtures";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 
 /**
@@ -49,14 +48,7 @@ export async function fillEveryTable(database: BridgeDatabase): Promise<void> {
   await createStoredRequest(database);
   await createStoredOutboxItem(database, 1);
   await database.write(async (transaction) => {
-    await writeChannelInfo(transaction, channelFacts(), 1_000);
-    await transaction`
-      INSERT INTO receipts (key, type, received_at, disposition)
-      VALUES ('Ev-1', 'events_api', 0, 'applied')
-    `;
-    await transaction`INSERT INTO rate_limits (method, next_attempt_at) VALUES ('chat.postMessage', 0)`;
-    await transaction`INSERT INTO outbox_channels (channel_id, next_post_at) VALUES ('C-link', 1000)`;
-    await transaction`INSERT INTO channel_aliases VALUES ('C-old', 'C-link', 0)`;
+    await transaction`INSERT INTO outbox_channels (link_id, next_post_at) VALUES ('link', 1000)`;
     await transaction`INSERT INTO users (user_id) VALUES ('U-carol')`;
     await transaction`INSERT INTO user_aliases VALUES ('W-carol', 'U-carol')`;
     await transaction`INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-carol', 0)`;

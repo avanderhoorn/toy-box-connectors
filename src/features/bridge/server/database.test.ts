@@ -58,22 +58,18 @@ describe("openBridgeDatabase", () => {
 
     const { version, objects } = await database.read(readSchema);
 
-    expect(version).toBe(3);
+    expect(version).toBe(1);
     expect(
       objects.filter((object) => object.type === "table").map((object) => object.name),
     ).toEqual([
       "allowlist",
       "changes",
-      "channel_aliases",
-      "channel_info",
       "cursors",
       "installation",
       "links",
       "messages",
       "outbox",
       "outbox_channels",
-      "rate_limits",
-      "receipts",
       "request_messages",
       "requests",
       "user_aliases",
@@ -82,13 +78,7 @@ describe("openBridgeDatabase", () => {
     ]);
     expect(
       objects.filter((object) => object.type === "index").map((object) => object.name),
-    ).toEqual([
-      "outbox_one_final",
-      "outbox_one_publication",
-      "receipts_received",
-      "request_messages_one_request",
-      "requests_thread",
-    ]);
+    ).toEqual(["request_messages_one_request", "requests_thread"]);
   });
 
   test("leaves a current schema exactly as it was when the file is opened again", async () => {
@@ -160,7 +150,7 @@ describe("openBridgeDatabase", () => {
 
     const database = await open(join(folder, "bridge.db"));
 
-    expect(await database.read(readSchema)).toMatchObject({ version: 3 });
+    expect(await database.read(readSchema)).toMatchObject({ version: 1 });
     expect(readdirSync(folder)).toContain("bridge.db");
     expect(existsSync(join(folder, "..", "a"))).toBe(false);
   });
@@ -186,28 +176,28 @@ describe("unmetSettings", () => {
 });
 
 describe("BridgeDatabase", () => {
-  function readMethods(database: BridgeDatabase): Promise<string[]> {
+  function readRows(database: BridgeDatabase): Promise<number[]> {
     return database.read(async (sql) => {
-      const rows = await sql<{ method: string }[]>`SELECT method FROM rate_limits ORDER BY method`;
-      return rows.map((row) => row.method);
+      const rows = await sql<{ id: number }[]>`SELECT id FROM probe ORDER BY id`;
+      return rows.map((row) => row.id);
     });
   }
 
   test("runs a read issued while a write is open after that write, outside its transaction", async () => {
-    const database = await openTestDatabase();
+    const database = await open(join(createTestFolder(), "bridge.db"), [createTable("probe", [])]);
     let markOpen!: () => void;
     let release!: () => void;
     const isOpen = new Promise<void>((resolve) => (markOpen = resolve));
     const released = new Promise<void>((resolve) => (release = resolve));
     const write = database.write(async (transaction) => {
-      await transaction`INSERT INTO rate_limits (method, next_attempt_at) VALUES ('chat.postMessage', 1)`;
+      await transaction`INSERT INTO probe (id) VALUES (1)`;
       markOpen();
       await released;
       throw new Error("Rolled back.");
     });
     await isOpen;
 
-    const read = readMethods(database);
+    const read = readRows(database);
     await Bun.sleep(20);
     release();
 
@@ -217,16 +207,14 @@ describe("BridgeDatabase", () => {
 
   test("closes only after the work queued before it", async () => {
     const path = join(createTestFolder(), "bridge.db");
-    const database = await openBridgeDatabase(path);
+    const migrations = [createTable("probe", [])];
+    const database = await openBridgeDatabase(path, migrations);
 
-    const write = database.write(
-      (transaction) =>
-        transaction`INSERT INTO rate_limits (method, next_attempt_at) VALUES ('chat.postMessage', 1)`,
-    );
+    const write = database.write((transaction) => transaction`INSERT INTO probe (id) VALUES (1)`);
     await database.close();
     await write;
 
-    await expect(readMethods(database)).rejects.toThrow("Connection closed");
-    expect(await readMethods(await open(path))).toEqual(["chat.postMessage"]);
+    await expect(readRows(database)).rejects.toThrow("Connection closed");
+    expect(await readRows(await open(path, migrations))).toEqual([1]);
   });
 });

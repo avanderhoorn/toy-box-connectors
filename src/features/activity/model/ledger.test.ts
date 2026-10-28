@@ -48,7 +48,6 @@ test("only text and mentions are a message's content, compared exactly", () => {
       ...message,
       editedTs: "1700000150.000100",
       version: "1700000150.000100",
-      latestReplyTs: "1700000200.000100",
       author: "bot",
     }),
   ).toBe(content);

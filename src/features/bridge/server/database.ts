@@ -9,11 +9,7 @@
 import { pathToFileURL } from "node:url";
 import { initializeActivitySchema } from "@activity/server/schema";
 import { initializeLinkSchema } from "@links/server/schema";
-import {
-  addOutboxDeliverySchema,
-  initializeOutboxSchema,
-  numberOutboxItemsOnce,
-} from "@outbox/server/schema";
+import { initializeOutboxSchema } from "@outbox/server/schema";
 import { initializeRequestSchema } from "@requests/server/schema";
 import { initializeSlackApiSchema } from "@slackapi/server/schema";
 import { initializeWakeSchema } from "@wakes/server/schema";
@@ -38,10 +34,6 @@ export const bridgeMigrations: readonly Migration[] = [
     await initializeRequestSchema(transaction);
     await initializeWakeSchema(transaction);
     await initializeOutboxSchema(transaction);
-  },
-  addOutboxDeliverySchema,
-  async (transaction) => {
-    await numberOutboxItemsOnce(transaction);
   },
 ];
 

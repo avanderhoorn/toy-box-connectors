@@ -1,259 +1,45 @@
-import { describe, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { readFrame } from "./envelopes";
 
 const callback = {
   type: "event_callback",
-  team_id: "THOME",
-  api_app_id: "AAPP",
+  team_id: "T1",
+  api_app_id: "A1",
   event_id: "Ev1",
-  event_time: 1700000000,
-  event: { type: "message", channel: "C1", user: "UALICE", text: "hi", ts: "1700000000.000100" },
+  event_time: 1,
+  event: { type: "message", channel: "C1", text: "private content" },
 };
+const frame = (payload: unknown) =>
+  JSON.stringify({ type: "events_api", envelope_id: "env1", payload });
 
-function frame(value: unknown): string {
-  return JSON.stringify(value);
-}
-
-describe("reading Socket Mode frames", () => {
-  test("hello names the app the token belongs to", () => {
-    expect(
-      readFrame(frame({ type: "hello", num_connections: 1, connection_info: { app_id: "AAPP" } })),
-    ).toEqual({ kind: "hello", appId: "AAPP" });
-    expect(readFrame(frame({ type: "hello" }))).toEqual({ kind: "hello", appId: null });
+test("raw Socket Mode accepts bare and enveloped rate limits, retaining ack identity", () => {
+  const limited = {
+    type: "app_rate_limited",
+    team_id: "T1",
+    api_app_id: "A1",
+    minute_rate_limited: 1,
+  };
+  expect(readFrame(JSON.stringify(limited))).toMatchObject({
+    kind: "rate_limited",
+    envelopeId: null,
   });
-
-  test("disconnect carries its reason", () => {
-    expect(readFrame(frame({ type: "disconnect", reason: "refresh_requested" }))).toEqual({
-      kind: "disconnect",
-      reason: "refresh_requested",
-    });
-    expect(readFrame(frame({ type: "disconnect" }))).toEqual({ kind: "disconnect", reason: null });
-  });
-
-  test("an events_api envelope carries its event for the handler to parse", () => {
-    const read = readFrame(
-      frame({
-        type: "events_api",
-        envelope_id: "env-1",
-        accepts_response_payload: false,
-        retry_attempt: 1,
-        retry_reason: "timeout",
-        payload: callback,
-      }),
-    );
-    expect(read).toEqual({
-      kind: "event",
-      envelopeId: "env-1",
-      callback: {
-        teamId: "THOME",
-        appId: "AAPP",
-        authorizations: null,
-        eventId: "Ev1",
-        eventTime: 1700000000,
-        event: callback.event,
-      },
-    });
-  });
-
-  test("authorizations describe installations, and an empty list isn't a missing one", () => {
-    const authorizationsOf = (authorizations: unknown) => {
-      const read = readFrame(
-        frame({
-          type: "events_api",
-          envelope_id: "env-1",
-          payload: { ...callback, authorizations },
-        }),
-      );
-      return read.kind === "event" ? read.callback.authorizations : read.kind;
-    };
-    expect(authorizationsOf(undefined)).toBeNull();
-    expect(authorizationsOf(null)).toBeNull();
-    expect(authorizationsOf([])).toEqual([]);
-    expect(
-      authorizationsOf([
-        {
-          enterprise_id: "EORG",
-          team_id: "THOME",
-          user_id: "UBOT",
-          is_bot: true,
-          is_enterprise_install: false,
-          is_new_field: "kept out",
-        },
-        { team_id: null, enterprise_id: "EORG", is_enterprise_install: true },
-        { team_id: "THOME" },
-      ]),
-    ).toEqual([
-      {
-        enterpriseId: "EORG",
-        teamId: "THOME",
-        userId: "UBOT",
-        isBot: true,
-        isEnterpriseInstall: false,
-      },
-      {
-        enterpriseId: "EORG",
-        teamId: null,
-        userId: null,
-        isBot: false,
-        isEnterpriseInstall: true,
-      },
-      {
-        enterpriseId: null,
-        teamId: "THOME",
-        userId: null,
-        isBot: false,
-        isEnterpriseInstall: false,
-      },
-    ]);
-  });
-
-  test("app_rate_limited is read whether Slack wraps it in an envelope or not", () => {
-    const limited = {
-      type: "app_rate_limited",
-      token: "ignored",
-      team_id: "THOME",
-      minute_rate_limited: 1700000040,
-      api_app_id: "AAPP",
-    };
-    expect(
-      readFrame(frame({ type: "events_api", envelope_id: "env-2", payload: limited })),
-    ).toEqual({
-      kind: "rate_limited",
-      envelopeId: "env-2",
-      teamId: "THOME",
-      appId: "AAPP",
-      minute: 1700000040,
-    });
-    expect(readFrame(frame(limited))).toEqual({
-      kind: "rate_limited",
-      envelopeId: null,
-      teamId: "THOME",
-      appId: "AAPP",
-      minute: 1700000040,
-    });
-  });
-
-  test("a frame type the bridge doesn't use is passed on with its envelope ID", () => {
-    expect(readFrame(frame({ type: "interactive", envelope_id: "env-4", payload: {} }))).toEqual({
-      kind: "other",
-      type: "interactive",
-      envelopeId: "env-4",
-    });
-  });
+  expect(readFrame(frame(limited))).toMatchObject({ kind: "rate_limited", envelopeId: "env1" });
+  expect(readFrame(frame(callback))).toMatchObject({ kind: "event", envelopeId: "env1" });
 });
-
-describe("malformed frames", () => {
-  test("an unreadable frame has nothing to ack", () => {
-    expect(readFrame("{not json")).toEqual({
-      kind: "malformed",
-      envelopeId: null,
-      hint: { channelId: null, eventTime: null },
-      issues: ["invalid_json"],
-    });
-    expect(readFrame(frame(["hello"]))).toMatchObject({ kind: "malformed", envelopeId: null });
+test("malformed frames retain ack identity without content, and lists retain absent versus empty", () => {
+  const result = readFrame(frame({ ...callback, authorizations: "private content" }));
+  expect(result).toMatchObject({
+    kind: "malformed",
+    envelopeId: "env1",
   });
-
-  test("an envelope whose payload is malformed keeps its ID so it can be acked", () => {
-    const read = readFrame(
-      frame({
-        type: "events_api",
-        envelope_id: "env-5",
-        payload: { ...callback, event_id: undefined, event: { ...callback.event, type: 7 } },
-      }),
-    );
-    expect(read).toEqual({
-      kind: "malformed",
-      envelopeId: "env-5",
-      hint: { channelId: "C1", eventTime: 1700000000 },
-      issues: ["invalid_type at payload.event_id", "invalid_type at payload.event.type"],
+  expect(JSON.stringify(result)).not.toContain("private content");
+  for (const [authorizations, expected] of [
+    [undefined, null],
+    [[], []],
+  ]) {
+    expect(readFrame(frame({ ...callback, authorizations }))).toMatchObject({
+      kind: "event",
+      callback: { authorizations: expected },
     });
-  });
-
-  test("a payload that's neither an event nor a rate limit is malformed", () => {
-    const read = readFrame(
-      frame({ type: "events_api", envelope_id: "env-6", payload: { type: "url_verification" } }),
-    );
-    expect(read).toMatchObject({ kind: "malformed", envelopeId: "env-6" });
-    expect(readFrame(frame({ type: "events_api", envelope_id: "env-7" }))).toMatchObject({
-      kind: "malformed",
-      envelopeId: "env-7",
-    });
-  });
-
-  test("authorizations that can't be read make the event malformed, never missing", () => {
-    const read = (authorizations: unknown) =>
-      readFrame(
-        frame({
-          type: "events_api",
-          envelope_id: "env-10",
-          payload: { ...callback, authorizations },
-        }),
-      );
-    expect(read({ team_id: "THOME" })).toEqual({
-      kind: "malformed",
-      envelopeId: "env-10",
-      hint: { channelId: "C1", eventTime: 1700000000 },
-      issues: ["invalid_type at payload.authorizations"],
-    });
-    expect(read([{ team_id: "THOME", is_bot: "true" }])).toMatchObject({
-      kind: "malformed",
-      issues: ["invalid_type at payload.authorizations.0.is_bot"],
-    });
-  });
-
-  test("a malformed rate limit is still malformed, not a minute to repair", () => {
-    const read = (minute: unknown) =>
-      readFrame(
-        frame({
-          type: "app_rate_limited",
-          team_id: "THOME",
-          api_app_id: "AAPP",
-          minute_rate_limited: minute,
-        }),
-      );
-    expect(read("soon")).toMatchObject({ kind: "malformed", envelopeId: null });
-    expect(read(8_640_000_000_060)).toMatchObject({ kind: "malformed", envelopeId: null });
-    expect(read(8_640_000_000_000)).toMatchObject({ kind: "rate_limited" });
-  });
-
-  test("an event time past the last a Date can hold is malformed, and no hint", () => {
-    const read = readFrame(
-      frame({
-        type: "events_api",
-        envelope_id: "env-11",
-        payload: { ...callback, event_time: 9_007_199_254_740 },
-      }),
-    );
-    expect(read).toEqual({
-      kind: "malformed",
-      envelopeId: "env-11",
-      hint: { channelId: "C1", eventTime: null },
-      issues: ["too_big at payload.event_time"],
-    });
-  });
-
-  test("diagnostics name issue codes and paths but never the payload's content", () => {
-    const secret = "the launch code is 4829-1734";
-    const read = readFrame(
-      frame({
-        type: "events_api",
-        envelope_id: "env-8",
-        payload: { ...callback, team_id: secret, event: secret },
-      }),
-    );
-    expect(read.kind).toBe("malformed");
-    expect(JSON.stringify(read)).not.toContain("4829");
-    expect(read).toMatchObject({ hint: { channelId: null, eventTime: 1700000000 } });
-  });
-
-  test("a hint keeps what it can read and ignores a channel or time that isn't one", () => {
-    const hint = (payload: unknown) =>
-      readFrame(frame({ type: "events_api", envelope_id: "env-9", payload }));
-    expect(hint({ event_time: "now", event: { channel: "C1" } })).toMatchObject({
-      hint: { channelId: "C1", eventTime: null },
-    });
-    expect(hint({ event_time: 1700000000, event: { channel: 42 } })).toMatchObject({
-      hint: { channelId: null, eventTime: 1700000000 },
-    });
-  });
+  }
 });

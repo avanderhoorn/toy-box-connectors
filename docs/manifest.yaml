@@ -22,7 +22,6 @@ oauth_config:
       - users:read
       - chat:write
       - metadata.message:read
-      - files:read
       - reactions:write
 settings:
   socket_mode_enabled: true
@@ -44,4 +43,3 @@ settings:
       - channel_shared
       - channel_unshared
       - channel_id_changed
-      - file_deleted

@@ -1,5 +1,4 @@
 import type { SuspendReason } from "@links/model/status";
-import { invalidateChannelInfo } from "@slackapi/server/channels";
 import { readChannelLink } from "./database";
 import { suspendLink } from "./status";
 
@@ -11,8 +10,8 @@ import { suspendLink } from "./status";
 // owner links the channel again.
 
 /**
- * Suspends the link that watches a channel a signal says can't be used as the owner approved, and
- * casts doubt on what's stored about the channel. A channel made public suspends the link only if
+ * Suspends the link that watches a channel a signal says can't be used as the owner approved.
+ * A channel made public suspends the link only if
  * the owner approved it private. Returns the links whose status changed.
  */
 export async function suspendChannelLinks(
@@ -21,7 +20,6 @@ export async function suspendChannelLinks(
   reason: SuspendReason,
   now: number,
 ): Promise<string[]> {
-  await invalidateChannelInfo(transaction, channelId, now);
   const link = await readChannelLink(transaction, channelId);
   if (!link) return [];
   if (reason === "channel_made_public" && link.approved.kind === "public") return [];

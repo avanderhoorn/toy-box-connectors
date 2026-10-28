@@ -1,52 +1,35 @@
 import { z } from "zod";
-import type { RenderedMessage } from "./rendering";
-import { linkProblem, outputProblem, type OutputProblem } from "./safety";
+import { renderMarkdown, type RenderedMessage, type RenderingProblem } from "./rendering";
 
 const leadMessageSchema = z.strictObject({
   text: z.string().min(1).max(12_000),
   blocks: z
-    .array(
-      z.strictObject({
-        type: z.literal("section"),
-        text: z.strictObject({
-          type: z.literal("mrkdwn"),
-          text: z.string().min(1).max(3_000),
-          verbatim: z.literal(true),
-        }),
-      }),
-    )
-    .min(1)
-    .max(50),
+    .array(z.strictObject({ type: z.literal("markdown"), text: z.string().min(1).max(12_000) }))
+    .length(1),
   mrkdwn: z.literal(false),
   parse: z.literal("none"),
   unfurl_links: z.literal(false),
   unfurl_media: z.literal(false),
 });
-
 export type LeadPayload =
   | { kind: "valid"; message: RenderedMessage }
-  | { kind: "refused"; problem: OutputProblem | "invalid_snapshot" | "message_too_long" };
+  | { kind: "refused"; problem: RenderingProblem | "invalid_snapshot" };
 
-/** Recheck the stored output without rendering it again or changing the bytes its hash names. */
+/** Recheck canonical output and secrets without changing the bytes the stored hash names. */
 export function checkLeadPayload(payload: unknown): LeadPayload {
   const parsed = leadMessageSchema.safeParse(payload);
   if (!parsed.success) return { kind: "refused", problem: "invalid_snapshot" };
   const message = parsed.data;
-  if (/[<>]/.test(message.text)) return { kind: "refused", problem: "invalid_snapshot" };
-  const sections = message.blocks.map((block) => block.text.text);
-  if (sections.reduce((length, text) => length + text.length, 0) > 12_000) {
-    return { kind: "refused", problem: "message_too_long" };
-  }
-  for (const text of [message.text, ...sections]) {
-    const secret = outputProblem(text);
-    if (secret) return { kind: "refused", problem: secret };
-  }
-  for (const section of sections) {
-    for (const match of section.matchAll(/<([^>]*)>/g)) {
-      const target = match[1]!.split("|", 1)[0]!;
-      const problem = linkProblem(target);
-      if (problem) return { kind: "refused", problem };
-    }
-  }
-  return { kind: "valid", message };
+  if (message.blocks[0]!.text !== message.text)
+    return { kind: "refused", problem: "invalid_snapshot" };
+  const source = message.text
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&")
+    .replace(/@\u200b(here|channel|everyone)\b/gi, "@$1");
+  const rendered = renderMarkdown(source);
+  if (rendered.kind === "refused") return rendered;
+  return rendered.message.text === message.text
+    ? { kind: "valid", message }
+    : { kind: "refused", problem: "invalid_snapshot" };
 }

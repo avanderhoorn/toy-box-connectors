@@ -94,8 +94,6 @@ async function ask<Result>(
     case "ok":
     case "auth_failed":
       return call;
-    case "unusable":
-      return unavailable(`The bridge cannot use Slack for ${method} right now`);
     case "rate_limited":
       return unavailable(`Slack is holding back ${method}`, call.until);
     case "error":

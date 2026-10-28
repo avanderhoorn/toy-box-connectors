@@ -55,7 +55,6 @@ export function lifecycleAction(event: SlackEvent, botUserId: string): Lifecycle
       return { kind: "uninstall" };
     case "tokens_revoked":
       return event.botUserIds.includes(botUserId) ? { kind: "uninstall" } : null;
-    case "file_deleted":
     case "other":
     case "malformed":
       return null;

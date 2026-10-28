@@ -16,7 +16,6 @@
     "@slack/web-api": "8.2.0",
     "citty": "^0.2.2",
     "cron-parser": "^5.10.2",
-    "marked": "18.1.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {

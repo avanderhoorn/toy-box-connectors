@@ -1,131 +1,165 @@
+import { readChannelLink } from "@links/server/database";
+import {
+  beginAnswer,
+  confirmAnswer,
+  RequestStateError,
+  returnToSeen,
+} from "@requests/model/lifecycle";
+import { readRequest, saveRequest } from "@requests/server/database";
+import { canonicalUserId } from "@slackapi/server/users";
 import type { SlackTs } from "@slackapi/model/ts";
-import { channelFailureReason } from "@slackapi/model/errors";
 import { z } from "zod";
-import { nextReconciliation, type OutboxMethod } from "../model/delivery";
+import { nextReconciliation } from "../model/delivery";
+import { renderMarkdown, type RenderedMessage } from "../model/rendering";
 
-// Stored outbox items.
-//
-// An item is queued in the transaction of whatever owes it and numbered after every item there has
-// ever been, so a purge never lets a number the lead still holds name another item. Reactions
-// carry only what names their target.
-
-/** An item to queue, by column. Queueing assigns its ID, number, payload hash and state. */
-export type NewOutboxItem = {
-  kind: "reply" | "progress" | "publication" | "retract" | "reaction" | "status";
-  /** final or follow_up for a reply. */
-  phase?: string | null;
-  linkId?: string | null;
-  requestId?: number | null;
-  /** The request revision a reply answers. */
-  requestRev?: number | null;
-  channelId: string;
-  threadTs?: SlackTs | null;
-  publicationKey?: string | null;
-  /** The ID of the item a publication replaces. */
-  replaces?: string | null;
-  payload: Record<string, unknown>;
-};
-
+export class OutboxRefusedError extends Error {}
 export type OutboxState =
   | "queued"
   | "sending"
   | "sent"
   | "failed"
   | "delivery_unknown"
-  | "stray"
-  | "superseded"
   | "retracted"
-  | "dropped"
-  | "cancelled"
-  | "skipped";
-
-type DeliveryEvidence = "response" | "metadata" | "text";
-
+  | "cancelled";
 export type OutboxItem = {
   id: string;
   number: number;
-  linkId: string | null;
+  linkId: string;
   requestId: number | null;
-  requestRev: number | null;
-  kind: NewOutboxItem["kind"];
-  phase: "final" | "follow_up" | null;
+  kind: "reply" | "publication";
   channelId: string;
   threadTs: SlackTs | null;
-  publicationKey: string | null;
-  replaces: string | null;
+  series: string | null;
+  scheduledAt: number | null;
   payload: Record<string, unknown>;
   payloadHash: string;
-  metadataOk: boolean | null;
   state: OutboxState;
   attempts: number;
-  attemptMethod: OutboxMethod | null;
   attemptStartedAt: number | null;
-  reconcilePass: number;
   nextAttemptAt: number | null;
+  unknownSince: number | null;
+  reconcilePass: number;
   slackTs: SlackTs | null;
   error: string | null;
-  evidence: DeliveryEvidence | null;
   createdAt: number;
   updatedAt: number;
 };
-
 type OutboxRow = {
   id: string;
   number: number;
-  link_id: string | null;
+  link_id: string;
   request_id: number | null;
-  request_rev: number | null;
-  kind: NewOutboxItem["kind"];
-  phase: OutboxItem["phase"];
+  kind: OutboxItem["kind"];
   channel_id: string;
   thread_ts: SlackTs | null;
-  publication_key: string | null;
-  replaces: string | null;
+  series: string | null;
+  scheduled_at: number | null;
   payload: string;
   payload_hash: string;
-  metadata_ok: 0 | 1 | null;
   state: OutboxState;
   attempts: number;
-  attempt_method: OutboxMethod | null;
   attempt_started_at: number | null;
-  reconcile_pass: number;
   next_attempt_at: number | null;
+  unknown_since: number | null;
+  reconcile_pass: number;
   slack_ts: SlackTs | null;
   error: string | null;
-  evidence: DeliveryEvidence | null;
   created_at: number;
   updated_at: number;
 };
-
 export type OutboxSettlement =
-  | {
-      state: "sent";
-      slackTs: SlackTs | null;
-      evidence: DeliveryEvidence;
-      metadataOk: boolean | null;
-    }
-  | {
-      state: "queued" | "delivery_unknown";
-      error: string;
-      nextAttemptAt: number | null;
-      called?: false;
-    }
-  | { state: "failed" | "dropped"; error: string; called?: false }
-  | {
-      state: "stray";
-      slackTs: SlackTs;
-      error: string;
-      evidence: DeliveryEvidence;
-      metadataOk: boolean | null;
-      nextAttemptAt: number | null;
-    };
+  | { state: "sent"; slackTs: SlackTs }
+  | { state: "queued"; error: string; nextAttemptAt: number | null }
+  | { state: "delivery_unknown"; error: string; slackTs?: SlackTs }
+  | { state: "failed"; error: string };
 
-type AttemptStart =
-  | { kind: "started"; item: OutboxItem }
-  | { kind: "waiting"; reason: "retry_after" | "post_slot"; until: number }
-  | { kind: "changed" };
+export async function queueReply(
+  tx: Bun.SQL,
+  input: { requestId: number; text: string },
+  now: number,
+): Promise<OutboxItem> {
+  const [existing] = await tx<
+    OutboxRow[]
+  >`SELECT * FROM outbox WHERE request_id = ${input.requestId}`;
+  if (existing && existing.state !== "failed")
+    throw new OutboxRefusedError(
+      `Request r${input.requestId} is already reserved by o${existing.number} (${existing.state}).`,
+    );
+  const request = await readRequest(tx, input.requestId);
+  if (!request) throw new OutboxRefusedError(`Request r${input.requestId} no longer exists.`);
+  const link = await readChannelLink(tx, request.channelId);
+  if (!link || link.id !== request.linkId || link.status !== "active")
+    throw new OutboxRefusedError("This request's link isn't active.");
+  if (!link.allowlist.has(await canonicalUserId(tx, request.requesterUserId)))
+    throw new OutboxRefusedError("This requester is no longer allowed.");
+  const payload = rendered(input.text);
+  try {
+    await saveRequest(tx, beginAnswer(request, now));
+  } catch (error) {
+    if (!(error instanceof RequestStateError)) throw error;
+    throw new OutboxRefusedError(error.message);
+  }
+  return existing
+    ? retryFailed(tx, existing.id, payload, now)
+    : insertItem(
+        tx,
+        {
+          linkId: request.linkId,
+          requestId: request.id,
+          kind: "reply",
+          channelId: request.channelId,
+          threadTs: request.rootTs,
+          series: null,
+          scheduledAt: null,
+        },
+        payload,
+        now,
+      );
+}
 
-/** Reads an opaque ID, or the number shown to the lead as o31. */
+export async function queuePublication(
+  tx: Bun.SQL,
+  input: { linkId: string; series: string; scheduledAt: number; text: string },
+  now: number,
+): Promise<OutboxItem> {
+  if (
+    !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(input.series) ||
+    !Number.isSafeInteger(input.scheduledAt) ||
+    input.scheduledAt < 0 ||
+    input.scheduledAt > now
+  )
+    throw new OutboxRefusedError(
+      "A publication needs a series name and its scheduled slot at or before now.",
+    );
+  const [existing] = await tx<OutboxRow[]>`
+    SELECT * FROM outbox WHERE link_id = ${input.linkId} AND series = ${input.series}
+      AND scheduled_at = ${input.scheduledAt}
+  `;
+  if (existing && existing.state !== "failed")
+    throw new OutboxRefusedError(
+      `This publication slot is already reserved by o${existing.number} (${existing.state}).`,
+    );
+  const [link] = await tx<{ slack_channel_id: string; status: string }[]>`
+    SELECT slack_channel_id, status FROM links WHERE id = ${input.linkId}
+  `;
+  if (!link || link.status !== "active") throw new OutboxRefusedError("This link isn't active.");
+  const payload = rendered(input.text);
+  return existing
+    ? retryFailed(tx, existing.id, payload, now)
+    : insertItem(
+        tx,
+        {
+          ...input,
+          requestId: null,
+          kind: "publication",
+          channelId: link.slack_channel_id,
+          threadTs: null,
+        },
+        payload,
+        now,
+      );
+}
+
 export async function readOutboxItem(
   sql: Bun.SQL,
   reference: string | number,
@@ -137,385 +171,217 @@ export async function readOutboxItem(
   return row ? outboxItem(row) : null;
 }
 
-/** Feedback comes last. Only idempotent cleanup and feedback can retry an unknown operation. */
+export async function readUnconfirmedItems(sql: Bun.SQL, linkId: string) {
+  const rows = await sql<OutboxRow[]>`
+    SELECT * FROM outbox WHERE link_id = ${linkId} AND state IN ('queued', 'sending', 'delivery_unknown', 'failed')
+    ORDER BY number
+  `;
+  return rows.map((row) => ({
+    number: row.number,
+    requestId: row.request_id,
+    series: row.series,
+    state: row.state,
+    problem: row.error,
+    unknownSince: row.unknown_since,
+  }));
+}
+
 export async function readReadyOutbox(sql: Bun.SQL, now: number): Promise<OutboxItem[]> {
   const rows = await sql<OutboxRow[]>`
-    SELECT * FROM outbox WHERE (state = 'queued' OR (state = 'delivery_unknown'
-      AND kind IN ('retract', 'reaction', 'status')))
-      AND (next_attempt_at IS NULL OR next_attempt_at <= ${now})
-    ORDER BY CASE kind
-      WHEN 'retract' THEN 0 WHEN 'reply' THEN 1 WHEN 'publication' THEN 1
-      WHEN 'progress' THEN 2 ELSE 3 END, number
+    SELECT outbox.* FROM outbox JOIN links ON links.id = outbox.link_id
+    WHERE outbox.state = 'queued' AND links.status = 'active'
+      AND (next_attempt_at IS NULL OR next_attempt_at <= ${now}) ORDER BY number LIMIT 100
   `;
   return rows.map(outboxItem);
 }
 
-/** Exhausted linked work stops; stopped orphans remain due for local disposal. */
 export async function readDueReconciliations(sql: Bun.SQL, now: number): Promise<OutboxItem[]> {
-  const rows = await sql<(OutboxRow & { link_status: string | null })[]>`
-    SELECT outbox.*, links.status AS link_status FROM outbox
-    LEFT JOIN links ON links.id = outbox.link_id
-    WHERE outbox.state = 'delivery_unknown' AND outbox.kind IN ('reply', 'progress', 'publication')
-      AND (outbox.reconcile_pass < 3
-      OR (outbox.link_id IS NOT NULL AND links.id IS NULL))
-      AND (outbox.next_attempt_at IS NULL OR outbox.next_attempt_at <= ${now})
-    ORDER BY outbox.next_attempt_at, outbox.number
+  const rows = await sql<OutboxRow[]>`
+    SELECT outbox.* FROM outbox JOIN links ON links.id = outbox.link_id
+    WHERE outbox.state = 'delivery_unknown' AND links.status = 'active'
+      AND reconcile_pass < 2 AND next_attempt_at <= ${now} ORDER BY next_attempt_at, number LIMIT 100
   `;
-  return rows
-    .filter(
-      (row) =>
-        (row.link_id !== null && row.link_status === null) ||
-        (channelFailureReason(row.error ?? "") !== null
-          ? row.link_status === "active"
-          : row.next_attempt_at !== null),
-    )
-    .map(outboxItem);
+  return rows.map(outboxItem);
 }
 
-/**
- * Commits the exact send-time payload and its hash with sending. Call in the transaction that
- * rechecked policy, then make the network call only after it commits. Only chat.postMessage takes
- * a channel slot; edits, retractions and feedback don't consume a post's turn.
- */
-export async function startOutboxAttempt(
-  transaction: Bun.SQL,
-  item: OutboxItem,
-  payload: Record<string, unknown>,
-  method: OutboxMethod,
-  now: number,
-): Promise<AttemptStart> {
-  const postsMessage = method === "chat.postMessage";
-  const current = await readOutboxItem(transaction, item.id);
+/** Call only after policy checks, then commit before invoking Slack. */
+export async function startOutboxAttempt(tx: Bun.SQL, item: OutboxItem, now: number) {
+  const current = await readOutboxItem(tx, item.id);
   if (
     !current ||
     current.state !== "queued" ||
     current.attempts !== item.attempts ||
-    current.payloadHash !== item.payloadHash ||
-    current.channelId !== item.channelId ||
-    current.updatedAt !== item.updatedAt
-  ) {
-    return { kind: "changed" };
-  }
-  if (current.nextAttemptAt !== null && current.nextAttemptAt > now) {
-    return { kind: "waiting", reason: "retry_after", until: current.nextAttemptAt };
-  }
-  if (postsMessage) {
-    const [slot] = await transaction<{ next_post_at: number }[]>`
-      SELECT next_post_at FROM outbox_channels WHERE channel_id = ${current.channelId}
-    `;
-    if (slot && slot.next_post_at > now) {
-      return { kind: "waiting", reason: "post_slot", until: slot.next_post_at };
-    }
-  }
-  const encoded = encodePayload(payload);
-  if (
-    current.attempts > 0 &&
-    (encoded.hash !== current.payloadHash ||
-      (current.attemptMethod !== null && current.attemptMethod !== method))
-  ) {
-    throw new Error(`Retry o${current.number} with its stored method and payload snapshot.`);
-  }
-  const [row] = await transaction<OutboxRow[]>`
-    UPDATE outbox SET state = 'sending', attempts = attempts + 1,
-      attempt_method = ${method}, attempt_started_at = ${now},
-      reconcile_pass = 0, next_attempt_at = NULL, error = NULL,
-      payload = ${encoded.text}, payload_hash = ${encoded.hash}, updated_at = ${now}
-    WHERE id = ${current.id}
-    RETURNING *
+    current.payloadHash !== item.payloadHash
+  )
+    return { kind: "changed" as const };
+  const [slot] = await tx<
+    { next_post_at: number }[]
+  >`SELECT next_post_at FROM outbox_channels WHERE link_id = ${item.linkId}`;
+  const until = Math.max(current.nextAttemptAt ?? 0, slot?.next_post_at ?? 0);
+  if (until > now) return { kind: "waiting" as const, reason: "post_slot", until };
+  await tx`
+    INSERT INTO outbox_channels (link_id, next_post_at) VALUES (${item.linkId}, ${now + 1000})
+    ON CONFLICT(link_id) DO UPDATE SET next_post_at = excluded.next_post_at
   `;
-  if (postsMessage) {
-    await transaction`
-      INSERT INTO outbox_channels (channel_id, next_post_at)
-      VALUES (${current.channelId}, ${now + 1_000})
-      ON CONFLICT (channel_id) DO UPDATE SET next_post_at = excluded.next_post_at
-    `;
-  }
-  return { kind: "started", item: outboxItem(row!) };
+  const [row] = await tx<OutboxRow[]>`
+    UPDATE outbox SET state = 'sending', attempts = attempts + 1, attempt_started_at = ${now},
+      next_attempt_at = NULL, error = NULL, updated_at = ${now}
+    WHERE id = ${item.id} AND state = 'queued' RETURNING *
+  `;
+  return { kind: "started" as const, item: outboxItem(row!) };
 }
 
-/**
- * Settles only the attempt the caller observed. A late response or reconciliation cannot
- * overwrite a manual resolution or a newer attempt.
- * A locally skipped call undoes its tentative attempt increment.
- */
+/** A late response cannot settle a newer attempt, or resurrect an unlinked item. */
 export async function settleOutboxAttempt(
-  transaction: Bun.SQL,
+  tx: Bun.SQL,
   item: OutboxItem,
   outcome: OutboxSettlement,
   now: number,
 ): Promise<OutboxItem | null> {
-  const allowed =
-    item.state === "sending" ||
-    (item.state === "delivery_unknown" &&
-      (["sent", "delivery_unknown", "stray"].includes(outcome.state) ||
-        (item.attemptMethod !== null && item.attemptMethod !== "chat.postMessage"))) ||
-    (item.state === "stray" && ["stray", "failed"].includes(outcome.state));
-  if (!allowed) {
-    throw new Error(
-      `Outbox item o${item.number} cannot settle from ${item.state} to ${outcome.state}.`,
-    );
-  }
-  const uncalled = "called" in outcome && outcome.called === false;
-  if (uncalled && (item.state !== "sending" || item.attempts < 1)) {
-    throw new Error(`Outbox item o${item.number} has no started call to undo.`);
-  }
-  const metadataOk = "metadataOk" in outcome ? outcome.metadataOk : item.metadataOk;
-  const [row] = await transaction<OutboxRow[]>`
-    UPDATE outbox SET state = ${outcome.state}, attempts = ${item.attempts - Number(uncalled)},
-      slack_ts = ${"slackTs" in outcome ? outcome.slackTs : item.slackTs},
-      evidence = ${"evidence" in outcome ? outcome.evidence : item.evidence},
-      metadata_ok = ${metadataOk === null ? null : Number(metadataOk)},
-      next_attempt_at = ${"nextAttemptAt" in outcome ? outcome.nextAttemptAt : null},
-      error = ${"error" in outcome ? outcome.error : null}, updated_at = ${now}
-    WHERE id = ${item.id} AND attempts = ${item.attempts}
-      AND payload_hash = ${item.payloadHash} AND state = ${item.state}
-      AND state IN ('sending', 'delivery_unknown', 'stray')
-    RETURNING *
+  const unknown = outcome.state === "delivery_unknown";
+  const next =
+    outcome.state === "queued"
+      ? outcome.nextAttemptAt
+      : unknown
+        ? nextReconciliation(item.attemptStartedAt!, 0)
+        : null;
+  const ts =
+    outcome.state === "sent" ? outcome.slackTs : unknown ? (outcome.slackTs ?? null) : null;
+  const [row] = await tx<OutboxRow[]>`
+    UPDATE outbox SET state = ${outcome.state}, slack_ts = ${ts},
+      error = ${outcome.state === "sent" ? null : outcome.error}, next_attempt_at = ${next},
+      unknown_since = ${unknown ? (item.unknownSince ?? now) : null},
+      updated_at = ${now}
+    WHERE id = ${item.id} AND state = ${item.state} AND state IN ('sending', 'delivery_unknown')
+      AND (state = 'sending' OR ${outcome.state} = 'sent')
+      AND attempts = ${item.attempts} AND payload_hash = ${item.payloadHash} RETURNING *
   `;
-  return row ? outboxItem(row) : null;
+  if (!row) return null;
+  const settled = outboxItem(row);
+  await settleRequest(tx, settled, now);
+  return settled;
 }
 
-/** Record a fully read, unsuccessful pass. Rate-limited or partial reads must not spend a pass. */
-export async function advanceReconciliation(
-  transaction: Bun.SQL,
+export async function failQueuedItem(
+  tx: Bun.SQL,
   item: OutboxItem,
+  error: string,
   now: number,
 ): Promise<OutboxItem | null> {
-  if (item.state !== "delivery_unknown" || item.reconcilePass === 3) return null;
-  if (item.attemptStartedAt === null) {
-    throw new Error(`Outbox item o${item.number} has no attempt time for reconciliation.`);
-  }
-  const pass = item.reconcilePass + 1;
-  const next = nextReconciliation(item.attemptStartedAt, pass);
-  const [row] = await transaction<OutboxRow[]>`
-    UPDATE outbox SET reconcile_pass = ${pass}, next_attempt_at = ${next}, updated_at = ${now}
-    WHERE id = ${item.id} AND state = 'delivery_unknown' AND attempts = ${item.attempts}
-      AND payload_hash = ${item.payloadHash} AND reconcile_pass = ${item.reconcilePass}
-      AND next_attempt_at IS NOT NULL AND next_attempt_at <= ${now}
-    RETURNING *
+  const [row] = await tx<OutboxRow[]>`
+    UPDATE outbox SET state = 'failed', error = ${error}, next_attempt_at = NULL, updated_at = ${now}
+    WHERE id = ${item.id} AND state = 'queued' AND attempts = ${item.attempts} RETURNING *
   `;
-  return row ? outboxItem(row) : null;
+  if (!row) return null;
+  const settled = outboxItem(row);
+  await settleRequest(tx, settled, now);
+  return settled;
 }
 
-/** Startup never retries a write interrupted after its sending transaction committed. */
-export async function recoverOutboxAttempts(transaction: Bun.SQL, now: number): Promise<string[]> {
-  const rows = await transaction<{ id: string }[]>`
-    UPDATE outbox SET state = 'delivery_unknown', error = 'interrupted',
-      attempt_started_at = COALESCE(attempt_started_at, created_at), reconcile_pass = 0,
-      next_attempt_at = MAX(${now}, COALESCE(attempt_started_at, created_at) + 10000),
+export async function advanceReconciliation(
+  tx: Bun.SQL,
+  item: OutboxItem,
+  error: string | null,
+  until: number | null,
+  now: number,
+) {
+  const pass = item.reconcilePass + (error === null ? 1 : 0);
+  await tx`
+    UPDATE outbox SET reconcile_pass = ${pass}, error = ${error ?? item.error},
+      next_attempt_at = ${error === null ? nextReconciliation(item.attemptStartedAt!, pass) : until},
       updated_at = ${now}
-    WHERE state = 'sending'
-    RETURNING id
+    WHERE id = ${item.id} AND state = 'delivery_unknown' AND attempts = ${item.attempts}
+      AND reconcile_pass = ${item.reconcilePass}
+  `;
+}
+
+export async function recoverOutboxAttempts(tx: Bun.SQL, now: number): Promise<string[]> {
+  const rows = await tx<{ id: string }[]>`
+    UPDATE outbox SET state = 'delivery_unknown', unknown_since = ${now},
+      error = 'interrupted_send', next_attempt_at = attempt_started_at + 60000, updated_at = ${now}
+    WHERE state = 'sending' RETURNING id
   `;
   return rows.map((row) => row.id);
 }
 
-/** Expired post slots carry no content or continuing delivery obligation. */
-export async function expirePostSlots(transaction: Bun.SQL, now: number): Promise<void> {
-  await transaction`DELETE FROM outbox_channels WHERE next_post_at <= ${now}`;
-}
-
-/**
- * Cancels a request's replies and progress notes that are still queued. One already sending may
- * still land, so it's left to finish.
- */
 export async function cancelQueuedRequestItems(
-  transaction: Bun.SQL,
+  tx: Bun.SQL,
   requestId: number,
   now: number,
 ): Promise<void> {
-  await transaction`
-    UPDATE outbox SET state = 'cancelled', updated_at = ${now}
-    WHERE request_id = ${requestId} AND state = 'queued' AND kind IN ('reply', 'progress')
+  await tx`
+    UPDATE outbox SET state = 'cancelled', error = 'request_cancelled', next_attempt_at = NULL, updated_at = ${now}
+    WHERE request_id = ${requestId} AND state = 'queued'
   `;
 }
 
-/** Queues adding or removing a reaction, such as 👀 on a request the lead is reading. */
-export async function queueReaction(
-  transaction: Bun.SQL,
-  reaction: {
-    channelId: string;
-    ts: SlackTs;
-    name: string;
-    action?: "add" | "remove";
-    linkId?: string | null;
-    requestId?: number | null;
-  },
+function rendered(text: string): RenderedMessage {
+  const result = renderMarkdown(text);
+  if (result.kind === "refused") {
+    const problem =
+      result.problem === "message_too_long"
+        ? `${result.actual} escaped characters exceeds ${result.limit}. Shorten the text`
+        : result.problem === "empty"
+          ? "Provide nonblank text"
+          : `Remove credentials (${result.problem})`;
+    throw new OutboxRefusedError(`Cannot post: ${problem}.`);
+  }
+  return result.message;
+}
+
+async function settleRequest(tx: Bun.SQL, item: OutboxItem, now: number): Promise<void> {
+  if (item.requestId === null) return;
+  const request = await readRequest(tx, item.requestId);
+  if (request?.state !== "answering") return;
+  if (item.state === "sent") await saveRequest(tx, confirmAnswer(request));
+  if (item.state === "failed") await saveRequest(tx, returnToSeen(request, now));
+}
+
+async function retryFailed(
+  tx: Bun.SQL,
+  id: string,
+  payload: RenderedMessage,
   now: number,
-): Promise<void> {
-  if (reaction.action === "remove") {
-    const [queued] = await transaction`
-      SELECT id FROM outbox WHERE kind = 'reaction' AND state = 'queued'
-        AND channel_id = ${reaction.channelId}
-        AND link_id IS ${reaction.linkId ?? null} AND request_id IS ${reaction.requestId ?? null}
-        AND json_extract(payload, '$.action') = 'remove'
-        AND json_extract(payload, '$.name') = ${reaction.name}
-        AND json_extract(payload, '$.timestamp') = ${reaction.ts}
-      LIMIT 1
-    `;
-    if (queued) return;
-  }
-  await queueItem(
-    transaction,
-    {
-      kind: "reaction",
-      linkId: reaction.linkId,
-      requestId: reaction.requestId,
-      channelId: reaction.channelId,
-      payload: { action: reaction.action ?? "add", name: reaction.name, timestamp: reaction.ts },
-    },
-    now,
-  );
+): Promise<OutboxItem> {
+  const [row] = await tx<OutboxRow[]>`
+    UPDATE outbox SET state = 'queued', payload = ${JSON.stringify(payload)}, payload_hash = ${hash(payload)},
+      next_attempt_at = NULL, error = NULL, updated_at = ${now} WHERE id = ${id} AND state = 'failed' RETURNING *
+  `;
+  return outboxItem(row!);
 }
 
-/** Repeated cleanup or an explicit retract shares the outstanding operation for this item. */
-export async function queueRetraction(
-  transaction: Bun.SQL,
-  target: OutboxItem,
+async function insertItem(
+  tx: Bun.SQL,
+  item: Pick<
+    OutboxItem,
+    "linkId" | "requestId" | "kind" | "channelId" | "threadTs" | "series" | "scheduledAt"
+  >,
+  payload: RenderedMessage,
   now: number,
-): Promise<{ id: string; number: number }> {
-  const [existing] = await transaction<{ id: string; number: number }[]>`
-    SELECT id, number FROM outbox WHERE kind = 'retract'
-      AND json_extract(payload, '$.target') = ${target.id}
-      AND channel_id = ${target.channelId} AND link_id IS ${target.linkId}
-      AND request_id IS ${target.requestId} AND thread_ts IS ${target.threadTs}
-      AND state IN ('queued', 'sending', 'delivery_unknown', 'sent')
-    ORDER BY number DESC LIMIT 1
+): Promise<OutboxItem> {
+  const [row] = await tx<OutboxRow[]>`
+    INSERT INTO outbox ${tx({
+      id: crypto.randomUUID(),
+      link_id: item.linkId,
+      request_id: item.requestId,
+      kind: item.kind,
+      channel_id: item.channelId,
+      thread_ts: item.threadTs,
+      series: item.series,
+      scheduled_at: item.scheduledAt,
+      payload: JSON.stringify(payload),
+      payload_hash: hash(payload),
+      state: "queued",
+      created_at: now,
+      updated_at: now,
+    })} RETURNING *
   `;
-  return (
-    existing ??
-    queueItem(
-      transaction,
-      {
-        kind: "retract",
-        linkId: target.linkId,
-        requestId: target.requestId,
-        channelId: target.channelId,
-        threadTs: target.threadTs,
-        payload: { target: target.id },
-      },
-      now,
-    )
-  );
+  return outboxItem(row!);
 }
 
-/**
- * Lets go of what the outbox holds for a link that's being removed, but for what Slack may still
- * settle and the removals the bridge owes. A post, edit, reaction, status or withdrawal already
- * sending or of unknown delivery stays until it settles. So do a queued 👀 removal, a queued status
- * clear, and a queued withdrawal of a post that reached Slack, with that post. A post that reached
- * the wrong place stays too, with one more withdrawal queued unless one is pending already. What
- * stays keeps no text, and an edit only the ts of the message it changes. Everything else goes, so
- * nothing else queued for the link reaches Slack.
- */
-export async function forgetLinkOutbox(
-  transaction: Bun.SQL,
-  linkId: string,
-  now: number,
-): Promise<void> {
-  const rows = await transaction<OutboxRow[]>`
-    SELECT * FROM outbox WHERE link_id = ${linkId} ORDER BY number
-  `;
-  const items = new Map(rows.map((row) => [row.id, outboxItem(row)]));
-  const kept = new Set([...items.values()].filter((item) => owed(item, items)));
-  for (const item of kept) {
-    const target = item.kind === "retract" ? items.get(String(item.payload.target)) : undefined;
-    if (target) kept.add(target);
-  }
-  const forgotten = [...items.keys()].filter((id) => !kept.has(items.get(id)!));
-  if (forgotten.length) {
-    await transaction`DELETE FROM outbox WHERE id IN ${transaction(forgotten)}`;
-  }
-  for (const item of kept) {
-    if (["reply", "progress", "publication"].includes(item.kind)) await redact(transaction, item);
-    if (item.state === "stray") await queueRetraction(transaction, item, now);
-  }
+function hash(payload: RenderedMessage): string {
+  return new Bun.CryptoHasher("sha256").update(JSON.stringify(payload)).digest("hex");
 }
-
-/** Whether the bridge still owes Slack something for an item of a link that's going. */
-function owed(item: OutboxItem, items: ReadonlyMap<string, OutboxItem>): boolean {
-  if (["sending", "delivery_unknown", "stray"].includes(item.state)) return true;
-  if (item.state !== "queued") return false;
-  switch (item.kind) {
-    case "reaction":
-      return item.payload.action === "remove";
-    case "status":
-      return item.payload.status === "";
-    case "retract": {
-      const target = items.get(String(item.payload.target));
-      return target !== undefined && ["sent", "stray"].includes(target.state);
-    }
-    default:
-      return false;
-  }
-}
-
-/**
- * Forgets what a kept item says once what it was about is gone. Its hash still names its attempt,
- * and an edit keeps the ts of the message it changes, which proving where it landed needs.
- */
-async function redact(transaction: Bun.SQL, item: OutboxItem): Promise<void> {
-  const ts = item.attemptMethod === "chat.update" ? item.payload.ts : undefined;
-  const payload = typeof ts === "string" ? { ...REDACTED, ts } : REDACTED;
-  await transaction`UPDATE outbox SET payload = ${JSON.stringify(payload)} WHERE id = ${item.id}`;
-}
-
-const REDACTED = { redacted: "unlink" };
-
-/**
- * Readdresses every item for a channel, sent or not, to the new ID Slack gave it, so a post still
- * to send, an update or a retraction reaches the channel.
- */
-export async function moveOutboxChannel(
-  transaction: Bun.SQL,
-  oldId: string,
-  newId: string,
-): Promise<void> {
-  await transaction`UPDATE outbox SET channel_id = ${newId} WHERE channel_id = ${oldId}`;
-  await transaction`
-    INSERT INTO outbox_channels (channel_id, next_post_at)
-    SELECT ${newId}, next_post_at FROM outbox_channels WHERE channel_id = ${oldId}
-    ON CONFLICT (channel_id) DO UPDATE
-      SET next_post_at = MAX(outbox_channels.next_post_at, excluded.next_post_at)
-  `;
-  await transaction`
-    DELETE FROM outbox_channels WHERE channel_id = ${oldId} AND channel_id <> ${newId}
-  `;
-}
-
-/** Queues an item after every item before it. Returns the ID and number it's known by. */
-export async function queueItem(
-  transaction: Bun.SQL,
-  item: NewOutboxItem,
-  now: number,
-): Promise<{ id: string; number: number }> {
-  const payload = encodePayload(item.payload);
-  const [queued] = await transaction<{ id: string; number: number }[]>`
-    INSERT INTO outbox (
-      id, link_id, request_id, request_rev, kind, phase, channel_id,
-      thread_ts, publication_key, replaces, payload, payload_hash, state, created_at, updated_at
-    )
-    VALUES (
-      ${crypto.randomUUID()},
-      ${item.linkId ?? null}, ${item.requestId ?? null},
-      ${item.requestRev ?? null}, ${item.kind}, ${item.phase ?? null}, ${item.channelId},
-      ${item.threadTs ?? null}, ${item.publicationKey ?? null}, ${item.replaces ?? null},
-      ${payload.text}, ${payload.hash}, 'queued', ${now}, ${now}
-    )
-    RETURNING id, number
-  `;
-  return queued!;
-}
-
-function encodePayload(payload: Record<string, unknown>): { text: string; hash: string } {
-  if (Object.hasOwn(payload, "metadata")) {
-    throw new Error("Outbox snapshots must not contain Slack metadata. Add it at call time.");
-  }
-  const text = JSON.stringify(payload);
-  return { text, hash: Bun.SHA256.hash(text, "hex") };
-}
-
-const payloadSchema = z.record(z.string(), z.unknown());
 
 function outboxItem(row: OutboxRow): OutboxItem {
   return {
@@ -523,25 +389,21 @@ function outboxItem(row: OutboxRow): OutboxItem {
     number: row.number,
     linkId: row.link_id,
     requestId: row.request_id,
-    requestRev: row.request_rev,
     kind: row.kind,
-    phase: row.phase,
     channelId: row.channel_id,
     threadTs: row.thread_ts,
-    publicationKey: row.publication_key,
-    replaces: row.replaces,
-    payload: payloadSchema.parse(JSON.parse(row.payload)),
+    series: row.series,
+    scheduledAt: row.scheduled_at,
+    payload: z.record(z.string(), z.unknown()).parse(JSON.parse(row.payload)),
     payloadHash: row.payload_hash,
-    metadataOk: row.metadata_ok === null ? null : row.metadata_ok === 1,
     state: row.state,
     attempts: row.attempts,
-    attemptMethod: row.attempt_method,
     attemptStartedAt: row.attempt_started_at,
-    reconcilePass: row.reconcile_pass,
     nextAttemptAt: row.next_attempt_at,
+    unknownSince: row.unknown_since,
+    reconcilePass: row.reconcile_pass,
     slackTs: row.slack_ts,
     error: row.error,
-    evidence: row.evidence,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
