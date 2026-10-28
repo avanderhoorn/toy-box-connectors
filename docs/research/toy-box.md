@@ -850,10 +850,11 @@ temporary folder. This settles the open auth question in B7 and C4.
   login didn't help.
 - **`COPILOT_GITHUB_TOKEN` in the server's environment works.** Passing `gh auth token` output only
   through the environment, never a file, listed every Copilot model.
-- **A lead ran in isolation.** `POST /api/v1/channels` created a channel without starting a turn. The
-  first user message did. With a skill written to the temporary `~/.copilot/skills` before the channel
-  existed, a `claude-sonnet-5` lead answered with the skill's secret word and its shell's
-  `COPILOT_AGENT_SESSION_ID`, which equaled the channel ID.
+- **A lead ran in isolation.** `POST /api/v1/channels` created the channel, but I saw no kickoff post.
+  The code does start a kickoff turn, so it probably failed quietly (see the analyst's note below).
+  The first user message started a turn that worked. With a skill written to the temporary
+  `~/.copilot/skills` before the channel existed, a `claude-sonnet-5` lead answered with the skill's
+  secret word and its shell's `COPILOT_AGENT_SESSION_ID`, which equaled the channel ID.
 - **A small model wasn't reliable.** A `claude-haiku-4.5` lead ran twice and both times called a channel
   tool without its `content`, so it never posted. End-to-end tests should pin a stronger model.
 - **`GET /api/v1/channels/:id/messages` needs `?before=`.** Without it the server answers
@@ -861,3 +862,23 @@ temporary folder. This settles the open auth question in B7 and C4.
 - **A lead's shell has no terminal.** In this channel's own Copilot lead, `test -t 0` and `test -t 1`
   both fail, so a command that insists on an interactive terminal can't be run by the lead by mistake.
   A process that wants one can still fake it, for example with `script`.
+
+**Analyst note on §9 (code contradicts one observation).** `createChannel` spawns the lead with the
+first message *"This channel was just created. Begin working toward its purpose."*
+(`channels/server/index.ts:140-157`). `superviseAdmittedWorker` passes it straight to `createSession`
+(`workers/server/supervisor.ts:88-99`), so channel creation **does** start a turn.
+
+If no turn appeared in the spike, my best guess is that the first execution failed and was recorded
+as a failed completion with no post. That could happen if the channel was created before auth
+worked, or if the failure only shows in the server log. This is unverified.
+
+For e2e this matters:
+- **Wait for the kickoff turn.** After `POST /api/v1/channels`, wait for the lead's presence to
+  leave `working` before driving the scenario. Otherwise the first Slack wake steers into the
+  kickoff.
+- **Keep the kickoff cheap and bounded.** A channel with a purpose makes the lead frame the work,
+  post a kickoff, and possibly create tasks or members (lead prompt, "Frame and kick off"). Give the
+  e2e channel a narrow purpose. For example: "Answer Slack requests from the linked channel through
+  toy-box-slack. This is a test channel: do not create members or tasks."
+- **Assert the kickoff succeeded.** Check that the lead posted its kickoff, so an auth failure
+  surfaces as an error instead of a silent no-op.
