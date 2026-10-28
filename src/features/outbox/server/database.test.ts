@@ -10,23 +10,27 @@ import {
 } from "./database";
 import { createOutboxWorld, createStoredOutboxItem } from "./testFixtures";
 
-test("the database reserves request keys in every outcome, not only live states", async () => {
-  const world = await createOutboxWorld();
-  await world.queue();
-  for (const state of ["queued", "sent", "failed", "delivery_unknown", "retracted", "cancelled"]) {
-    await world.database.write((tx) => tx`UPDATE outbox SET state = ${state}`);
-    await expect(createStoredOutboxItem(world.database, 2)).rejects.toThrow("UNIQUE");
-  }
-});
-
-test("a request reserves one immutable item and begins answering atomically", async () => {
+test("queueing atomically begins answering and reserves the request key in every outcome", async () => {
   const world = await createOutboxWorld();
   const item = await world.queue();
   await expect(world.queue("A different answer")).rejects.toThrow(`reserved by o${item.number}`);
   expect(await world.database.read((sql) => readRequest(sql, world.request.id))).toMatchObject({
     state: "answering",
   });
-  expect(await world.database.read((sql) => sql`SELECT id FROM outbox`)).toHaveLength(1);
+  for (const state of ["queued", "sent", "failed", "delivery_unknown", "retracted", "cancelled"]) {
+    await world.database.write((tx) => tx`UPDATE outbox SET state = ${state}`);
+    await expect(createStoredOutboxItem(world.database, 2)).rejects.toThrow("UNIQUE");
+  }
+});
+
+test.each(["deny", "pause"])("a %s before queueing refuses the reply", async (cause) => {
+  const world = await createOutboxWorld();
+  await world.database.write((tx) =>
+    cause === "deny"
+      ? tx`DELETE FROM allowlist WHERE link_id = 'link'`
+      : tx`UPDATE links SET status = 'paused' WHERE id = 'link'`,
+  );
+  await expect(world.queue()).rejects.toThrow(cause === "deny" ? "no longer allowed" : "active");
 });
 
 test("scheduled slots reserve publications across retraction, without using today's date", async () => {

@@ -8,6 +8,7 @@ import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../../../../tests/fakes/slack";
 import { renderMarkdown } from "../model/rendering";
 import { queueReply, readOutboxItem } from "./database";
+import { createPostDelivery } from "./posts";
 
 export function createStoredOutboxItem(
   database: BridgeDatabase,
@@ -88,5 +89,6 @@ export async function createOutboxWorld() {
     queue: (text = "A **safe answer**.") =>
       database.write((tx) => queueReply(tx, { requestId: request.id, text }, now())),
     read: (id: string) => database.read((sql) => readOutboxItem(sql, id)),
+    post: createPostDelivery(database, bot, { now }).post,
   };
 }

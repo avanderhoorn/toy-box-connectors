@@ -61,6 +61,7 @@ test("read proof requires exact metadata, our identity, live content and the int
     { metadata: outboxMetadata({ ...post, id: "other" }) },
     { metadata: outboxMetadata({ ...post, payloadHash: "other" }) },
     { bot_id: "BOTHER" },
+    { bot_id: undefined },
     { app_id: "AOTHER" },
     { channel: "COTHER" },
     { thread_ts: undefined },

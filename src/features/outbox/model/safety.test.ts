@@ -19,16 +19,12 @@ test.each<readonly [OutputProblem, string]>([
   expect(outputProblem(`\`\`\`\n${secret}\n\`\`\``)).toBe(category);
 });
 
-test("ordinary release notes and key-family names are not secrets", () => {
-  expect(
-    outputProblem(
-      [
-        `Shipped ${"a".repeat(40)}.`,
-        "Prefixes xoxb- and ghp_ identify key families.",
-        "-----BEGIN PUBLIC KEY-----",
-        "Read https://docs.slack.dev/.",
-        `ssh://${"user"}@example.com`,
-      ].join("\n"),
-    ),
-  ).toBeNull();
+test.each([
+  `Shipped ${"a".repeat(40)}.`,
+  "Prefixes xoxb- and ghp_ identify key families.",
+  "-----BEGIN PUBLIC KEY-----",
+  "Read https://docs.slack.dev/.",
+  `ssh://${"user"}@example.com`,
+])("ordinary text is not a secret: %s", (source) => {
+  expect(outputProblem(source)).toBeNull();
 });
