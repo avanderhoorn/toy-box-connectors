@@ -1,16 +1,17 @@
 /** Install the tables whose meaning is owned by the outbox. */
 export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
   await db.unsafe(`
-    -- id is opaque and carried in message metadata. Replies and publications always carry the
-    -- columns their unique index covers, because SQLite treats NULLs as distinct.
+    -- id is opaque and carried in message metadata. request_rev is the revision the lead read, from
+    -- reply --revision. Replies and publications always carry the columns their unique index
+    -- covers, because SQLite treats NULLs as distinct. evidence says how we know a post landed.
     CREATE TABLE outbox (
       id              TEXT PRIMARY KEY,
       number          INTEGER NOT NULL UNIQUE CHECK (typeof(number) = 'integer' AND number > 0),
       link_id         TEXT,
       request_id      INTEGER,
+      approval_id     TEXT,
       request_rev     INTEGER
         CHECK (request_rev IS NULL OR (typeof(request_rev) = 'integer' AND request_rev >= 1)),
-      approval_id     TEXT,
       kind            TEXT NOT NULL CHECK (kind IN (
         'reply', 'progress', 'publication', 'retract', 'card', 'reaction', 'status'
       )),
@@ -30,8 +31,8 @@ export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
         CHECK (typeof(attempts) = 'integer' AND attempts >= 0),
       next_attempt_at INTEGER,
       slack_ts        TEXT,
-      evidence        TEXT CHECK (evidence IS NULL OR evidence IN ('response', 'metadata', 'text')),
       error           TEXT,
+      evidence        TEXT CHECK (evidence IS NULL OR evidence IN ('response', 'metadata', 'text')),
       created_at      INTEGER NOT NULL,
       updated_at      INTEGER NOT NULL,
       CHECK ((phase IS NOT NULL) = (kind IN ('reply', 'card'))),

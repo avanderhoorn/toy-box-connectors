@@ -1,19 +1,25 @@
 /** Install the tables whose meaning is owned by Links. */
 export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
   await db.unsafe(`
+    -- posted_* say who posted the right code, where and when. A claim voided after that keeps them.
     CREATE TABLE claims (
       id                INTEGER PRIMARY KEY,
       code_hash         TEXT NOT NULL,
-      created_at        INTEGER NOT NULL,
-      expires_at        INTEGER NOT NULL,
-      failed_attempts   INTEGER NOT NULL DEFAULT 0
-        CHECK (typeof(failed_attempts) = 'integer' AND failed_attempts >= 0),
       state             TEXT NOT NULL
         CHECK (state IN ('live', 'posted', 'confirmed', 'declined', 'void')),
+      failed_attempts   INTEGER NOT NULL DEFAULT 0
+        CHECK (typeof(failed_attempts) = 'integer' AND failed_attempts >= 0),
+      created_at        INTEGER NOT NULL,
+      expires_at        INTEGER NOT NULL,
       posted_by         TEXT,
       posted_channel_id TEXT,
       posted_at         INTEGER,
-      decided_at        INTEGER
+      decided_at        INTEGER,
+      CHECK ((posted_channel_id IS NULL) = (posted_by IS NULL)
+        AND (posted_at IS NULL) = (posted_by IS NULL)),
+      CHECK (state = 'void'
+        OR (posted_by IS NOT NULL) = (state IN ('posted', 'confirmed', 'declined'))),
+      CHECK ((decided_at IS NOT NULL) = (state IN ('confirmed', 'declined', 'void')))
     );
 
     -- Every open claim indexes the same constant, so at most one can be open.
@@ -57,6 +63,7 @@ export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
 
     -- id is opaque and the only value a button carries. link_id is NULL for a new link. patch holds
     -- only the fields that change, and read_set holds every value the approval was decided against.
+    -- An approval can expire or go stale before or after the owner decides it.
     CREATE TABLE approvals (
       id                TEXT PRIMARY KEY,
       number            INTEGER NOT NULL UNIQUE CHECK (typeof(number) = 'integer' AND number > 0),
@@ -71,13 +78,18 @@ export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
       state             TEXT NOT NULL
         CHECK (state IN ('pending', 'approved', 'applied', 'rejected', 'expired', 'stale')),
       stale_reason      TEXT,
+      applied_at        INTEGER,
       decided_by        TEXT,
       decided_at        INTEGER,
-      applied_at        INTEGER,
       reported_at       INTEGER,
       created_by        TEXT NOT NULL,
       created_at        INTEGER NOT NULL,
-      expires_at        INTEGER NOT NULL
+      expires_at        INTEGER NOT NULL,
+      CHECK ((stale_reason IS NOT NULL) = (state = 'stale')),
+      CHECK ((applied_at IS NOT NULL) = (state = 'applied')),
+      CHECK ((decided_at IS NULL) = (decided_by IS NULL)),
+      CHECK (state IN ('expired', 'stale')
+        OR (decided_by IS NOT NULL) = (state IN ('approved', 'applied', 'rejected')))
     );
 
     -- IDs only, never message text.
