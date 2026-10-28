@@ -383,6 +383,19 @@ describe("durable attempts", () => {
     ).toBeNull();
   });
 
+  test("a late response cannot fail an attempt that has since become unknown", async () => {
+    const database = await openTestDatabase();
+    const sending = await start(database, await queue(database));
+    const unresolved = await unknown(database, sending);
+
+    expect(
+      await database.write((tx) =>
+        settleOutboxAttempt(tx, sending, { state: "failed", error: "msg_too_long" }, 12_000),
+      ),
+    ).toBeNull();
+    expect(await item(database, sending.id)).toEqual(unresolved);
+  });
+
   test.each([
     { state: "queued", error: "retry", nextAttemptAt: null },
     { state: "failed", error: "not_found_is_not_proof" },
@@ -523,6 +536,25 @@ describe("bounded reconciliation", () => {
     expect(deferred).toMatchObject({ reconcilePass: 0, attemptStartedAt: 1_000 });
     expect(await database.read((sql) => readDueReconciliations(sql, 60_999))).toEqual([]);
     expect(await database.read((sql) => readDueReconciliations(sql, 61_000))).toEqual([deferred!]);
+  });
+
+  test("an exhausted unknown is never due again, whatever time it holds", async () => {
+    const database = await openTestDatabase();
+    let unresolved = await unknown(database, await start(database, await queue(database)));
+    for (const at of [11_000, 61_000, 121_000]) {
+      unresolved = (await database.write((tx) => advanceReconciliation(tx, unresolved, at)))!;
+    }
+    const deferred = await database.write((tx) =>
+      settleOutboxAttempt(
+        tx,
+        unresolved,
+        { state: "delivery_unknown", error: "rate_limited", nextAttemptAt: 181_000 },
+        121_000,
+      ),
+    );
+
+    expect(deferred).toMatchObject({ reconcilePass: 3, nextAttemptAt: 181_000 });
+    expect(await database.read((sql) => readDueReconciliations(sql, 181_000))).toEqual([]);
   });
 
   test("startup recovery and the channel slot survive closing and reopening the file", async () => {
