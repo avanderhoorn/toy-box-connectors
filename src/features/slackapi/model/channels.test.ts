@@ -19,6 +19,7 @@ const privateChannel = {
   is_ext_shared: false,
   is_member: true,
   context_team_id: "T0HOME",
+  shared_team_ids: ["T0HOME"],
   topic: { value: "deploys", creator: "U0OWNER", last_set: 1700000000 },
   num_members: 4,
 };
@@ -33,7 +34,31 @@ test("a channel reads as the facts that decide its audience", () => {
     isExtShared: false,
     isPendingExtShared: false,
     isOrgShared: false,
+    enterpriseId: null,
+    contextTeamId: "T0HOME",
+    sharedTeamIds: ["T0HOME"],
   });
+});
+
+test("a channel in an Enterprise org names the org and each of its workspaces once, sorted", () => {
+  const facts = slackConversationSchema.parse({
+    ...privateChannel,
+    is_org_shared: true,
+    enterprise_id: "E0ORG",
+    shared_team_ids: ["T0SIBLING", "T0HOME", "T0SIBLING"],
+  });
+  expect(facts).toMatchObject({ enterpriseId: "E0ORG", sharedTeamIds: ["T0HOME", "T0SIBLING"] });
+});
+
+test("a channel that leaves out its workspaces lists none, and names none it's in", () => {
+  for (const absent of [undefined, null]) {
+    const facts = slackConversationSchema.parse({
+      ...privateChannel,
+      context_team_id: absent,
+      shared_team_ids: absent,
+    });
+    expect(facts).toMatchObject({ contextTeamId: null, sharedTeamIds: [] });
+  }
 });
 
 test("each flag reads as Slack set it", () => {

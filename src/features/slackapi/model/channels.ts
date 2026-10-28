@@ -3,10 +3,11 @@ import { z } from "zod";
 // Channels as conversations.info describes them.
 //
 // The bridge keeps only what decides who can read a channel: its kind, whether it's archived,
-// whether our bot is in it, and the three flags that say it's shared beyond the workspace. Slack
-// adds fields without notice, so unknown keys are dropped. A conversation that leaves out an
-// archive or sharing flag is refused rather than assumed unshared, and one that leaves out whether
-// it's private reads as public, the wider audience.
+// whether our bot is in it, the three flags that say it's shared beyond the workspace, and the org
+// and workspaces it's in. Slack adds fields without notice, so unknown keys are dropped. A
+// conversation that leaves out an archive or sharing flag is refused rather than assumed unshared,
+// and one that leaves out whether it's private reads as public, the wider audience. One that
+// leaves out its workspaces lists none, which says nothing about who can read it.
 
 export type ChannelKind = "public" | "private" | "im" | "mpim";
 
@@ -20,6 +21,12 @@ export type ChannelFacts = {
   isExtShared: boolean;
   isPendingExtShared: boolean;
   isOrgShared: boolean;
+  /** The Enterprise org it belongs to, or null outside one. */
+  enterpriseId: string | null;
+  /** The workspace it's in, or null when Slack didn't say. */
+  contextTeamId: string | null;
+  /** The workspaces it's shared with, sorted. Empty when Slack didn't list them. */
+  sharedTeamIds: readonly string[];
 };
 
 /** A conversation object from conversations.info, read into the facts the bridge keeps. */
@@ -35,6 +42,12 @@ export const slackConversationSchema = z
     is_ext_shared: z.boolean().describe("It's shared with another organization"),
     is_pending_ext_shared: z.boolean().describe("An invitation to share it externally is pending"),
     is_org_shared: z.boolean().describe("It's shared with other workspaces in an Enterprise org"),
+    enterprise_id: z.string().min(1).nullish().describe("The Enterprise org it belongs to"),
+    context_team_id: z.string().min(1).nullish().describe("The workspace it's in"),
+    shared_team_ids: z
+      .array(z.string().min(1))
+      .nullish()
+      .describe("The workspaces it's shared with, its own included"),
   })
   .describe("A Slack conversation")
   .transform((conversation): ChannelFacts => ({
@@ -46,6 +59,9 @@ export const slackConversationSchema = z
     isExtShared: conversation.is_ext_shared,
     isPendingExtShared: conversation.is_pending_ext_shared,
     isOrgShared: conversation.is_org_shared,
+    enterpriseId: conversation.enterprise_id ?? null,
+    contextTeamId: conversation.context_team_id ?? null,
+    sharedTeamIds: [...new Set(conversation.shared_team_ids ?? [])].sort(),
   }));
 
 function channelKind(conversation: {

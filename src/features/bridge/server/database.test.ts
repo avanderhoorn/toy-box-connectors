@@ -83,6 +83,7 @@ describe("openBridgeDatabase", () => {
       "requests",
       "threads",
       "toybox_streams",
+      "user_aliases",
       "users",
       "wake_state",
       "wakes",

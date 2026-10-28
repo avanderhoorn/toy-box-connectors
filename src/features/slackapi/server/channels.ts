@@ -24,6 +24,9 @@ type ChannelInfoRow = {
   is_ext_shared: number;
   is_pending_ext_shared: number;
   is_org_shared: number;
+  enterprise_id: string | null;
+  context_team_id: string | null;
+  shared_team_ids: string;
   refreshed_at: number;
   invalidated_at: number | null;
 };
@@ -47,6 +50,9 @@ export async function readChannelInfo(
       isExtShared: row.is_ext_shared === 1,
       isPendingExtShared: row.is_pending_ext_shared === 1,
       isOrgShared: row.is_org_shared === 1,
+      enterpriseId: row.enterprise_id,
+      contextTeamId: row.context_team_id,
+      sharedTeamIds: JSON.parse(row.shared_team_ids) as string[],
     },
     refreshedAt: row.refreshed_at,
     invalidatedAt: row.invalidated_at,
@@ -68,6 +74,9 @@ export async function writeChannelInfo(
     is_ext_shared: facts.isExtShared ? 1 : 0,
     is_pending_ext_shared: facts.isPendingExtShared ? 1 : 0,
     is_org_shared: facts.isOrgShared ? 1 : 0,
+    enterprise_id: facts.enterpriseId,
+    context_team_id: facts.contextTeamId,
+    shared_team_ids: JSON.stringify(facts.sharedTeamIds),
     refreshed_at: readAt,
     invalidated_at: null,
   };
@@ -81,6 +90,9 @@ export async function writeChannelInfo(
       is_ext_shared = excluded.is_ext_shared,
       is_pending_ext_shared = excluded.is_pending_ext_shared,
       is_org_shared = excluded.is_org_shared,
+      enterprise_id = excluded.enterprise_id,
+      context_team_id = excluded.context_team_id,
+      shared_team_ids = excluded.shared_team_ids,
       refreshed_at = excluded.refreshed_at,
       invalidated_at = CASE
         WHEN channel_info.invalidated_at >= excluded.refreshed_at THEN channel_info.invalidated_at

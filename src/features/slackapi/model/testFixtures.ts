@@ -73,6 +73,9 @@ export function channelFacts(changes: Partial<ChannelFacts> = {}): ChannelFacts 
     isExtShared: false,
     isPendingExtShared: false,
     isOrgShared: false,
+    enterpriseId: null,
+    contextTeamId: "T-home",
+    sharedTeamIds: ["T-home"],
     ...changes,
   };
 }

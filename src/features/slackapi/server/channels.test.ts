@@ -34,6 +34,9 @@ test("a later read replaces every fact", async () => {
     isExtShared: true,
     isPendingExtShared: true,
     isOrgShared: true,
+    enterpriseId: "E-org",
+    contextTeamId: "T-sibling",
+    sharedTeamIds: ["T-home", "T-sibling"],
   });
   await database.write(async (transaction) => {
     await writeChannelInfo(transaction, channelFacts(), 1_000);
