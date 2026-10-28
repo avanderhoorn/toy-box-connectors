@@ -10,6 +10,7 @@ import {
   type SettingOutcome,
   type WaitingRequest,
 } from "./inbox";
+import { notLinked } from "./unlinked";
 
 const AT = Date.parse("2026-10-27T16:00:00Z");
 const MINUTE = 60_000;
@@ -97,6 +98,7 @@ function setting(changes: Partial<SettingOutcome>): SettingOutcome {
 function inbox(changes: Partial<InboxResult> = {}): InboxResult {
   return {
     linked: true,
+    linkProposal: null,
     settings: [],
     requests: [],
     more: 0,
@@ -191,18 +193,21 @@ describe("presenting inbox", () => {
     expect(present(inbox())).toBe("No Slack requests need you right now.");
   });
 
-  test("an unlinked channel shows only its settings and how to link it", () => {
+  test("an unlinked channel shows only its settings, and says to delete its routines", () => {
     const rejected = setting({
       state: "rejected",
       changes: [{ kind: "watch", channel: releaseEng }],
     });
     expect(present(inbox({ linked: false, settings: [rejected] }))).toBe(
-      [
-        "## Settings",
-        "- a4 rejected by Alice Chen: link #release-eng",
-        "",
-        "This Toy Box channel isn't linked to Slack. Run `toy-box-slack link --slack-channel <id> --routine <id>` to link it.",
-      ].join("\n"),
+      ["## Settings", "- a4 rejected by Alice Chen: link #release-eng", "", notLinked("lead")].join(
+        "\n",
+      ),
+    );
+  });
+
+  test("a channel whose link waits on a proposal says to keep its routines until it applies", () => {
+    expect(present(inbox({ linked: false, linkProposal: 4 }))).toBe(
+      "This Toy Box channel isn't linked to Slack until a4 applies, so keep the routines here that run toy-box-slack.",
     );
   });
 

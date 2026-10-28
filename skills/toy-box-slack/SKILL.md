@@ -103,6 +103,7 @@ Register the digest or release notes routine only if the owner asks. `toy-box-sl
 The banner names what needs attention and points to `toy-box-slack status`, which says what's wrong and how to fix it.
 
 - For a routine that's gone or no longer runs its command, run `toy-box-slack routines` and follow what it says for that routine.
+- The bridge never deletes a routine, so the ones that run toy-box-slack keep waking you while this Toy Box channel has no link. Unless the owner means to link it, use delete_routine on the routines here that run toy-box-slack, so they stop waking you for nothing.
 - A post whose delivery is unknown may have landed, so never send it again yourself. Check the thread, then run `toy-box-slack resolve o31 --delivered <permalink>` if it's there, or `--drop` if it isn't. A dropped answer comes back to you in inbox.
 - A paused or suspended link holds your posts until it's active again, so tell the owner what status says.
 - Flag anything you can't fix to the owner.

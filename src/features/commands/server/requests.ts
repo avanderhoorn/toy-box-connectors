@@ -4,7 +4,9 @@
 // transaction that then changes it, so the checks it runs still hold when it writes.
 
 import type { BridgeDatabase } from "@bridge/server/database";
+import type { ChannelCaller } from "@commands/model/callers";
 import { CommandRefusedError } from "@commands/model/contract";
+import { notLinked } from "@commands/model/unlinked";
 import { readRequest, type StoredRequest } from "@requests/server/database";
 import type { WakeScheduler } from "@wakes/server";
 
@@ -20,17 +22,14 @@ export type RequestCommandOptions = {
  */
 export async function readCallerRequest(
   transaction: Bun.SQL,
-  channelId: string,
+  caller: ChannelCaller,
   id: number,
 ): Promise<StoredRequest> {
   const [link] = await transaction<{ id: string }[]>`
-    SELECT id FROM links WHERE toybox_channel_id = ${channelId}
+    SELECT id FROM links WHERE toybox_channel_id = ${caller.channelId}
   `;
   if (!link) {
-    throw new CommandRefusedError(
-      "not_linked",
-      `This Toy Box channel isn't linked to Slack, so it has no r${id}.`,
-    );
+    throw new CommandRefusedError("not_linked", notLinked(caller.role, `so it has no r${id}`));
   }
   const request = await readRequest(transaction, id);
   if (request === null || request.linkId !== link.id) {

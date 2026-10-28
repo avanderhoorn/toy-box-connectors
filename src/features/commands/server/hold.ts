@@ -17,7 +17,7 @@ export function holdCommand({
 }: RequestCommandOptions): CommandHandler<typeof holdContract> {
   return async ({ request: id, reason }, { caller, at }) => {
     const held = await database.write(async (transaction) => {
-      const request = await readCallerRequest(transaction, caller.channelId, id);
+      const request = await readCallerRequest(transaction, caller, id);
       const problem = requestStateProblem(request);
       if (problem) throw new CommandRefusedError(problem.rule, problem.message);
       const held = holdRequest(request, reason, at);

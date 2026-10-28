@@ -18,7 +18,7 @@ export function dismissCommand({
 }: RequestCommandOptions): CommandHandler<typeof dismissContract> {
   return async ({ request: id, revision, reason }, { caller, at }) => {
     await database.write(async (transaction) => {
-      const request = await readCallerRequest(transaction, caller.channelId, id);
+      const request = await readCallerRequest(transaction, caller, id);
       const problem = requestStateProblem(request) ?? revisionProblem(request, revision);
       if (problem) throw new CommandRefusedError(problem.rule, problem.message);
       await dismissStoredRequest(transaction, request, reason, at);

@@ -5,6 +5,8 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import type { ChannelCaller } from "@commands/model/callers";
 import { inboxContract } from "@commands/model/inbox";
+import { notLinked } from "@commands/model/unlinked";
+import type { Approval } from "@links/model/approvals";
 import { pendingApproval } from "@links/model/testFixtures";
 import { createStoredApproval, createStoredLink } from "@links/server/testFixtures";
 import {
@@ -130,6 +132,7 @@ describe("reading requests", () => {
 
     expect(await inbox.read()).toEqual({
       linked: true,
+      linkProposal: null,
       settings: [],
       requests: [
         {
@@ -614,6 +617,7 @@ describe("reporting settings", () => {
     const result = await inbox.read(caller);
     expect(result).toEqual({
       linked: false,
+      linkProposal: null,
       settings: [
         {
           approval: 1,
@@ -643,10 +647,42 @@ describe("reporting settings", () => {
         "## Settings",
         "- a1 rejected by Alice Chen: link #toy-box-private, and let Carol Chen ask for help",
         "",
-        "This Toy Box channel isn't linked to Slack. Run `toy-box-slack link --slack-channel <id> --routine <id>` to link it.",
+        notLinked("lead"),
       ].join("\n"),
     );
     expect(await readWakeState(database)).toEqual([]);
     expect(inbox.reconsidered()).toBe(1);
+  });
+
+  test("an unlinked channel names the newest open proposal to link it", async () => {
+    const database = await openInbox();
+    const proposal = (number: number, changes: Partial<Approval> = {}) =>
+      createStoredApproval(database, {
+        id: `approval-${number}`,
+        number,
+        toyboxChannelId: "toybox-new",
+        linkId: null,
+        action: "link",
+        readSet: { ...pendingApproval().readSet, link: "none", before: {} },
+        patch: [{ field: "slack_channel_id", after: "C-link" }],
+        ...changes,
+      });
+    await proposal(1);
+    await proposal(2, { state: "approved", decidedBy: "U-owner", decidedAt: NOW });
+    await proposal(3, { state: "rejected", decidedBy: "U-owner", decidedAt: NOW });
+    await proposal(4, { toyboxChannelId: "toybox-other" });
+    await proposal(5, { action: "allow", patch: pendingApproval().patch });
+    const inbox = inboxFor(database);
+
+    const result = await inbox.read({ ...lead, channelId: "toybox-new" });
+    expect(result).toMatchObject({ linked: false, linkProposal: 2 });
+    expect(inboxContract.present(result, { at: AT })).toBe(
+      [
+        "## Settings",
+        "- a3 rejected by Alice Chen: link #toy-box-private",
+        "",
+        "This Toy Box channel isn't linked to Slack until a2 applies, so keep the routines here that run toy-box-slack.",
+      ].join("\n"),
+    );
   });
 });

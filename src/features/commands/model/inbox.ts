@@ -7,7 +7,9 @@
 // lead read that were cancelled or expired, with why but never what they said, so it stops work on
 // them. Reading serves what it shows, so the next inbox shows only what changed since. Slack text
 // is fenced and labeled with its author's role now, which only the bridge can write, and every
-// name is one line that can't pass for a label.
+// name is one line that can't pass for a label. In a channel with no link it tells the lead to
+// delete the routines that would only wake it, except while a proposal to link the channel waits,
+// since the requests routine is registered before the link that runs it.
 
 import { z } from "zod";
 import type { StaleReason } from "@links/model/approvals";
@@ -17,6 +19,7 @@ import { isPending, type WakeRequest } from "@wakes/model";
 import { commandContract, type PresentContext } from "./contract";
 import { cancelReasonSchema, requestEnding, requestIdSchema } from "./requests";
 import { fenceFor, NAME_LIMIT, oneLine, personName } from "./slackText";
+import { notLinked } from "./unlinked";
 import { ago, count, duration, joinNames } from "./wording";
 
 const personSchema = z
@@ -150,6 +153,12 @@ export type EndedRequest = z.output<typeof endedRequestSchema>;
 export const inboxResultSchema = z
   .object({
     linked: z.boolean().describe("Whether the caller's Toy Box channel is linked to Slack"),
+    linkProposal: z
+      .number()
+      .int()
+      .positive()
+      .nullable()
+      .describe("The open proposal to link the unlinked channel, shown as a4, or null for none"),
     settings: z.array(settingSchema).describe("Outcomes the lead hasn't been shown, oldest first"),
     requests: z.array(servedRequestSchema).describe("New or changed requests, now read"),
     more: z.number().int().nonnegative().describe("New or changed requests past the limit"),
@@ -228,7 +237,9 @@ export function presentInbox(inbox: InboxResult, { at }: PresentContext): string
   }
   if (!inbox.linked) {
     sections.push(
-      "This Toy Box channel isn't linked to Slack. Run `toy-box-slack link --slack-channel <id> --routine <id>` to link it.",
+      inbox.linkProposal === null
+        ? notLinked("lead")
+        : `This Toy Box channel isn't linked to Slack until a${inbox.linkProposal} applies, so keep the routines here that run toy-box-slack.`,
     );
     return sections.join("\n\n");
   }

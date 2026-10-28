@@ -5,7 +5,8 @@
 // with every message the request holds and marks it read at that revision, lists the requests the
 // lead read and hasn't answered, reports once each one it read that was cancelled or expired, and
 // records the read, which ends the link's wake backoff and any stall. Roles, names and files are
-// read as they are now, not as they were when someone asked.
+// read as they are now, not as they were when someone asked. With no link, it says which open
+// proposal would link the channel, if one does.
 
 import type { BridgeDatabase } from "@bridge/server/database";
 import type { CommandHandler } from "@commands/model/contract";
@@ -30,6 +31,7 @@ import {
 } from "@commands/model/slackText";
 import {
   allowlistUser,
+  approvalStates,
   isOpen,
   type Approval,
   type ApprovalState,
@@ -84,7 +86,10 @@ export function inboxCommand({
         ended: [],
         moreEnded: 0,
       };
-      if (!link) return checked({ linked: false, settings, ...unlinked });
+      if (!link) {
+        const linkProposal = await readLinkProposal(transaction, caller.channelId);
+        return checked({ linked: false, linkProposal, settings, ...unlinked });
+      }
 
       const installation = await readInstallation(transaction);
       const audience: Audience = {
@@ -110,7 +115,16 @@ export function inboxCommand({
       const endings = await reportEndings(reading, link.id, limit, at);
       await recordInbox(transaction, link.id, at);
       const { more, moreWaiting } = listed;
-      return checked({ linked: true, settings, requests, more, waiting, moreWaiting, ...endings });
+      return checked({
+        linked: true,
+        linkProposal: null,
+        settings,
+        requests,
+        more,
+        waiting,
+        moreWaiting,
+        ...endings,
+      });
     });
     wakes.reconsider();
     return inbox;
@@ -163,6 +177,22 @@ function hasEnded(
   approval: Approval,
 ): approval is Approval & { state: Exclude<ApprovalState, "pending" | "approved"> } {
   return !isOpen(approval.state);
+}
+
+const openStates = approvalStates.filter(isOpen);
+
+/**
+ * The newest open proposal to link the caller's channel, which names no link until it applies. The
+ * bridge refuses to propose a link for a channel that has one, and unlink voids this one.
+ */
+async function readLinkProposal(transaction: Bun.SQL, channelId: string): Promise<number | null> {
+  const [proposal] = await transaction<{ number: number }[]>`
+    SELECT number FROM approvals
+    WHERE toybox_channel_id = ${channelId} AND action = 'link'
+      AND state IN ${transaction(openStates)}
+    ORDER BY number DESC LIMIT 1
+  `;
+  return proposal?.number ?? null;
 }
 
 async function settingOutcome(

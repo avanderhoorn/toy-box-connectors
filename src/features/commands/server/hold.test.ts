@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import type { ChannelCaller } from "@commands/model/callers";
+import { deleteUnlinkedRoutines } from "@commands/model/unlinked";
 import { createStoredLink } from "@links/server/testFixtures";
 import type { Request, RequestState } from "@requests/model/lifecycle";
 import { readRequest } from "@requests/server/database";
@@ -120,7 +121,7 @@ describe("holding a request", () => {
       hold(1, "Asked the owner", AT, { ...lead, channelId: "toybox-unlinked" }),
     ).rejects.toMatchObject({
       rule: "not_linked",
-      message: "This Toy Box channel isn't linked to Slack, so it has no r1.",
+      message: `This Toy Box channel isn't linked to Slack, so it has no r1. ${deleteUnlinkedRoutines}`,
     });
     expect(await readStored(database)).toMatchObject({ heldAt: null });
     expect(reconsidered()).toBe(0);
