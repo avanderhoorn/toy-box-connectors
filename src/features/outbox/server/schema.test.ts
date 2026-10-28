@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
-import type { BridgeDatabase } from "@bridge/server/database";
-import { openTestDatabase } from "@bridge/server/testFixtures";
+import { describe, expect, onTestFinished, test } from "bun:test";
+import { join } from "node:path";
+import { bridgeMigrations, openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
+import { createTestFolder, openTestDatabase } from "@bridge/server/testFixtures";
 
 const LIVE_STATES = [
   "queued",
@@ -154,4 +155,55 @@ test("pairs each phase with the kind of item it belongs to", async () => {
   for (const item of invalid) {
     await expect(insertItem(database, item)).rejects.toThrow("CHECK constraint failed");
   }
+});
+
+describe("version 2 upgrades", () => {
+  test("keep every item as it was, and number the next after every item there has been", async () => {
+    const path = join(createTestFolder(), "bridge.db");
+    const old = await openBridgeDatabase(path, bridgeMigrations.slice(0, 2));
+    await old.write(async (transaction) => {
+      for (const number of [1, 2]) {
+        await transaction`INSERT INTO outbox ${transaction({
+          id: `item-${number}`,
+          number,
+          link_id: "link",
+          request_id: 14 + number,
+          approval_id: "approval",
+          request_rev: 2,
+          kind: "reply",
+          phase: "final",
+          channel_id: "C0123",
+          thread_ts: "1700000100.000100",
+          publication_key: `release-notes/${number}`,
+          replaces: "item-0",
+          payload: '{"text":"Done"}',
+          payload_hash: "hash",
+          metadata_ok: 1,
+          state: "sent",
+          attempts: 2,
+          next_attempt_at: 3,
+          slack_ts: "1700000200.000100",
+          error: "ratelimited",
+          evidence: "response",
+          created_at: 4,
+          updated_at: 5,
+          attempt_method: "chat.postMessage",
+          attempt_started_at: 6,
+          reconcile_pass: 1,
+        })}`;
+      }
+    });
+    const items = await old.read((sql) => sql`SELECT * FROM outbox ORDER BY number`);
+    await old.close();
+
+    const database = await openBridgeDatabase(path);
+    onTestFinished(() => database.close());
+
+    expect(await database.read((sql) => sql`SELECT * FROM outbox ORDER BY number`)).toEqual(items);
+    await database.write((transaction) => transaction`DELETE FROM outbox WHERE number = 2`);
+    await insertItem(database, { number: undefined, request_id: 20 });
+    expect(
+      await database.read((sql) => sql`SELECT number FROM outbox WHERE request_id = 20`),
+    ).toEqual([{ number: 3 }]);
+  });
 });

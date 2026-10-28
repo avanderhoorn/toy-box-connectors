@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
-import type { BridgeDatabase } from "@bridge/server/database";
-import { openTestDatabase } from "@bridge/server/testFixtures";
+import { describe, expect, onTestFinished, test } from "bun:test";
+import { join } from "node:path";
+import { bridgeMigrations, openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
+import { createTestFolder, openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "./testFixtures";
 
 const OWNED_BY_LINK = ["allowlist", "coverage", "cursors", "link_routines", "wake_state"];
@@ -275,5 +276,42 @@ describe("approvals", () => {
         insertApproval(database, { ...approvalIn(state), decided_by: null, decided_at: null }),
       ).rejects.toThrow(tie);
     }
+  });
+});
+
+describe("version 2 upgrades", () => {
+  test("keep every approval as it was, and number the next after every approval there has been", async () => {
+    const path = join(createTestFolder(), "bridge.db");
+    const old = await openBridgeDatabase(path, bridgeMigrations.slice(0, 2));
+    for (const [number, state] of [
+      [1, "applied"],
+      [2, "stale"],
+    ] as const) {
+      await insertApproval(old, {
+        id: `approval-${number}`,
+        number,
+        card_ts: "1700000100.000100",
+        ...approvalIn(state),
+        reported_at: 240_000,
+      });
+    }
+    const approvals = await old.read((sql) => sql`SELECT * FROM approvals ORDER BY number`);
+    await old.close();
+
+    const database = await openBridgeDatabase(path);
+    onTestFinished(() => database.close());
+
+    expect(await database.read((sql) => sql`SELECT * FROM approvals ORDER BY number`)).toEqual(
+      approvals,
+    );
+    await database.write((transaction) => transaction`DELETE FROM approvals WHERE number = 2`);
+    await insertApproval(database, {
+      id: "approval-next",
+      number: undefined,
+      ...approvalIn("pending"),
+    });
+    expect(
+      await database.read((sql) => sql`SELECT number FROM approvals WHERE id = 'approval-next'`),
+    ).toEqual([{ number: 3 }]);
   });
 });

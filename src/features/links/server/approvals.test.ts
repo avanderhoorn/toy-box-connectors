@@ -390,6 +390,18 @@ describe("making a proposal", () => {
       },
     ]);
   });
+
+  test("never takes the number of an approval deleted before it", async () => {
+    const database = await openTestDatabase();
+    const create = () =>
+      database.write((transaction) => createApproval(transaction, proposal, 60_000));
+    const newest = await create();
+    await database.write(
+      (transaction) => transaction`DELETE FROM approvals WHERE id = ${newest.id}`,
+    );
+
+    expect((await create()).number).toBe(2);
+  });
 });
 
 describe("reading proposals", () => {

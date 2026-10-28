@@ -27,6 +27,7 @@ Coverage records the spans of time the bridge may have missed. A gap opens when 
 - A claim is consumed before anything else and never stored.
 - Live events and repair merge through one idempotent function.
 - A gap is marked repaired only after a complete scan. A partial scan stays partial.
+- A gap's ID is never reused, so a repair that outlives its gap can't close a newer one.
 - A message missing from a history page is never treated as deleted.
 - Nothing from an unlinked channel is stored.
 - SDK retries are off. Every Web API call goes through the shared bot client in `src/features/slackapi`, which makes one attempt per call, holds a rate-limited method back for every caller, and leaves what happens next to its caller.

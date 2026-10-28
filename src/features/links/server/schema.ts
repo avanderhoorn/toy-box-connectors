@@ -115,3 +115,50 @@ export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
     );
   `);
 }
+
+/**
+ * Version 3: number every approval after every approval there has ever been. A card and the lead
+ * call it a4, and a purge used to let the next approval take a number someone still held.
+ * Rebuilding the table makes the number its AUTOINCREMENT key, which SQLite never hands out again,
+ * and keeps every approval with the number it had.
+ */
+export async function numberApprovalsOnce(db: Bun.SQL): Promise<void> {
+  const columns = `
+    id, number, toybox_channel_id, link_id, action, patch, read_set, owner_user_id,
+    card_channel_id, card_ts, state, stale_reason, applied_at, decided_by, decided_at, reported_at,
+    created_by, created_at, expires_at
+  `;
+  await db.unsafe(`
+    CREATE TABLE numbered_approvals (
+      id                TEXT NOT NULL UNIQUE,
+      number            INTEGER PRIMARY KEY AUTOINCREMENT CHECK (number > 0),
+      toybox_channel_id TEXT NOT NULL,
+      link_id           TEXT,
+      action            TEXT NOT NULL CHECK (action IN ('link', 'allow', 'set', 'resume', 'owner')),
+      patch             TEXT NOT NULL CHECK (json_valid(patch)),
+      read_set          TEXT NOT NULL CHECK (json_valid(read_set)),
+      owner_user_id     TEXT NOT NULL,
+      card_channel_id   TEXT NOT NULL,
+      card_ts           TEXT,
+      state             TEXT NOT NULL
+        CHECK (state IN ('pending', 'approved', 'applied', 'rejected', 'expired', 'stale')),
+      stale_reason      TEXT,
+      applied_at        INTEGER,
+      decided_by        TEXT,
+      decided_at        INTEGER,
+      reported_at       INTEGER,
+      created_by        TEXT NOT NULL,
+      created_at        INTEGER NOT NULL,
+      expires_at        INTEGER NOT NULL,
+      CHECK ((stale_reason IS NOT NULL) = (state = 'stale')),
+      CHECK ((applied_at IS NOT NULL) = (state = 'applied')),
+      CHECK ((decided_at IS NULL) = (decided_by IS NULL)),
+      CHECK (state IN ('expired', 'stale')
+        OR (decided_by IS NOT NULL) = (state IN ('approved', 'applied', 'rejected')))
+    );
+
+    INSERT INTO numbered_approvals (${columns}) SELECT ${columns} FROM approvals;
+    DROP TABLE approvals;
+    ALTER TABLE numbered_approvals RENAME TO approvals;
+  `);
+}

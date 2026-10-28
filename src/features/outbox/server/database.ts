@@ -5,9 +5,10 @@ import { nextReconciliation, type OutboxMethod } from "../model/delivery";
 
 // Stored outbox items.
 //
-// An item is queued in the transaction of whatever owes it and numbered after every item before
-// it. Cards and reactions carry only what names their target, because a card is rendered from its
-// approval when it's sent.
+// An item is queued in the transaction of whatever owes it and numbered after every item there has
+// ever been, so a purge never lets a number the lead still holds name another item. Cards and
+// reactions carry only what names their target, because a card is rendered from its approval when
+// it's sent.
 
 /** An item to queue, by column. Queueing assigns its ID, number, payload hash and state. */
 export type NewOutboxItem = {
@@ -453,11 +454,11 @@ export async function queueItem(
   const payload = encodePayload(item.payload);
   const [queued] = await transaction<{ id: string; number: number }[]>`
     INSERT INTO outbox (
-      id, number, link_id, request_id, approval_id, request_rev, kind, phase, channel_id,
+      id, link_id, request_id, approval_id, request_rev, kind, phase, channel_id,
       thread_ts, publication_key, replaces, payload, payload_hash, state, created_at, updated_at
     )
     VALUES (
-      ${crypto.randomUUID()}, (SELECT COALESCE(MAX(number), 0) + 1 FROM outbox),
+      ${crypto.randomUUID()},
       ${item.linkId ?? null}, ${item.requestId ?? null}, ${item.approvalId ?? null},
       ${item.requestRev ?? null}, ${item.kind}, ${item.phase ?? null}, ${item.channelId},
       ${item.threadTs ?? null}, ${item.publicationKey ?? null}, ${item.replaces ?? null},

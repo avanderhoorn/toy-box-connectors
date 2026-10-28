@@ -124,6 +124,29 @@ test("a link that began after an interruption holds none of its requests", async
   ]);
 });
 
+test("a gap never takes the ID of one deleted before it", async () => {
+  const database = await openTestDatabase();
+  await createStoredLink(database, "watch");
+  const record = async () => {
+    const gap = {
+      linkId: "watch",
+      channelId: "C-watch",
+      threadTs: null,
+      window: { oldestTs: "1700000000.000100", latestTs: "1700000600.000200" },
+      reason: "disconnect",
+    } as const;
+    await database.write((transaction) => recordGap(transaction, gap, NOW));
+    const [row] = await database.read(
+      (sql) => sql<{ id: number }[]>`SELECT MAX(id) AS id FROM coverage`,
+    );
+    return row!.id;
+  };
+  const newest = await record();
+  await database.write((transaction) => transaction`DELETE FROM coverage WHERE id = ${newest}`);
+
+  expect(await record()).toBe(newest + 1);
+});
+
 describe("holding pending replies", () => {
   test("a channel gap holds its link's pending requests, and a held one keeps its first hold", async () => {
     const database = await openTestDatabase();

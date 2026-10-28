@@ -1,6 +1,6 @@
 import { describe, expect, onTestFinished, test } from "bun:test";
 import { join } from "node:path";
-import { openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
+import { bridgeMigrations, openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
 import { createTestFolder, openTestDatabase } from "@bridge/server/testFixtures";
 import { purgeForUninstall } from "@links/server/purge";
 import type { OutboxMethod } from "../model/delivery";
@@ -21,7 +21,6 @@ import {
   type OutboxSettlement,
 } from "./database";
 import { settleQueuedDelivery } from "./delivery";
-import { initializeOutboxSchema } from "./schema";
 
 async function item(database: BridgeDatabase, reference: string | number): Promise<OutboxItem> {
   const found = await database.read((sql) => readOutboxItem(sql, reference));
@@ -899,14 +898,16 @@ describe("shared channel post slots", () => {
 describe("version 1 upgrades", () => {
   test("preserves old items and searches from queue time, not a later response time", async () => {
     const path = join(createTestFolder(), "bridge.db");
-    const old = await openBridgeDatabase(path, [initializeOutboxSchema]);
-    const queued = await old.write((tx) =>
-      queueItem(tx, { kind: "progress", channelId: "C-one", payload: { text: "Old" } }, 1_000),
-    );
+    const old = await openBridgeDatabase(path, bridgeMigrations.slice(0, 1));
+    const queued = { id: crypto.randomUUID(), number: 1 };
     await old.write(
       (tx) => tx`
-        UPDATE outbox SET state = 'delivery_unknown', attempts = 1, updated_at = 11000
-        WHERE id = ${queued.id}
+        INSERT INTO outbox (
+          id, number, kind, channel_id, payload, payload_hash, state, attempts, created_at,
+          updated_at
+        )
+        VALUES (${queued.id}, ${queued.number}, 'progress', 'C-one', '{"text":"Old"}', 'hash',
+          'delivery_unknown', 1, 1000, 11000)
       `,
     );
     await old.close();
@@ -927,7 +928,9 @@ describe("version 1 upgrades", () => {
     expect(await database.read((sql) => sql`SELECT * FROM outbox_channels`)).toEqual([
       { channel_id: "C-one", next_post_at: 12_000 },
     ]);
-    expect(await database.read((sql) => sql`PRAGMA user_version`)).toEqual([{ user_version: 2 }]);
+    expect(await database.read((sql) => sql`PRAGMA user_version`)).toEqual([
+      { user_version: bridgeMigrations.length },
+    ]);
   });
 
   test.each([

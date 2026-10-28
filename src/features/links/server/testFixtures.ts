@@ -62,9 +62,8 @@ export async function createStoredApproval(
   changes: Partial<Approval> = {},
 ): Promise<Approval> {
   const approval = pendingApproval(changes);
-  await database.write(
-    (transaction) => transaction`INSERT INTO approvals ${transaction(approvalColumns(approval))}`,
-  );
+  const row = { ...approvalColumns(approval), number: approval.number };
+  await database.write((transaction) => transaction`INSERT INTO approvals ${transaction(row)}`);
   return approval;
 }
 

@@ -58,7 +58,7 @@ describe("openBridgeDatabase", () => {
 
     const { version, objects } = await database.read(readSchema);
 
-    expect(version).toBe(2);
+    expect(version).toBe(3);
     expect(
       objects.filter((object) => object.type === "table").map((object) => object.name),
     ).toEqual([
@@ -171,7 +171,7 @@ describe("openBridgeDatabase", () => {
 
     const database = await open(join(folder, "bridge.db"));
 
-    expect(await database.read(readSchema)).toMatchObject({ version: 2 });
+    expect(await database.read(readSchema)).toMatchObject({ version: 3 });
     expect(readdirSync(folder)).toContain("bridge.db");
     expect(existsSync(join(folder, "..", "a"))).toBe(false);
   });

@@ -7,9 +7,13 @@
 // runs in its own `BEGIN IMMEDIATE` transaction.
 
 import { pathToFileURL } from "node:url";
-import { initializeActivitySchema } from "@activity/server/schema";
-import { initializeLinkSchema } from "@links/server/schema";
-import { addOutboxDeliverySchema, initializeOutboxSchema } from "@outbox/server/schema";
+import { initializeActivitySchema, numberGapsOnce } from "@activity/server/schema";
+import { initializeLinkSchema, numberApprovalsOnce } from "@links/server/schema";
+import {
+  addOutboxDeliverySchema,
+  initializeOutboxSchema,
+  numberOutboxItemsOnce,
+} from "@outbox/server/schema";
 import { initializeRequestSchema } from "@requests/server/schema";
 import { initializeSlackApiSchema } from "@slackapi/server/schema";
 import { initializeToyBoxSchema } from "@toybox/server/schema";
@@ -27,7 +31,7 @@ export type Migration = (transaction: Bun.SQL) => Promise<void>;
  * changes, including the feature schemas it installs, so later changes append
  * a new one.
  */
-const bridgeMigrations: readonly Migration[] = [
+export const bridgeMigrations: readonly Migration[] = [
   async (transaction) => {
     await initializeSlackApiSchema(transaction);
     await initializeLinkSchema(transaction);
@@ -38,6 +42,11 @@ const bridgeMigrations: readonly Migration[] = [
     await initializeOutboxSchema(transaction);
   },
   addOutboxDeliverySchema,
+  async (transaction) => {
+    await numberOutboxItemsOnce(transaction);
+    await numberApprovalsOnce(transaction);
+    await numberGapsOnce(transaction);
+  },
 ];
 
 /** The settings that keep an acked event on disk through a power loss and keep references whole. */

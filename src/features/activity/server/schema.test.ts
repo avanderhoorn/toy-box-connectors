@@ -1,6 +1,7 @@
-import { expect, test } from "bun:test";
-import type { BridgeDatabase } from "@bridge/server/database";
-import { openTestDatabase } from "@bridge/server/testFixtures";
+import { expect, onTestFinished, test } from "bun:test";
+import { join } from "node:path";
+import { bridgeMigrations, openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
+import { createTestFolder, openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 
 /** Store an open channel-wide coverage gap unless `gap` says otherwise. */
@@ -165,4 +166,34 @@ test("a coverage gap names a thread exactly when it covers one", async () => {
   await expect(
     insertGap(database, { scope: "channel", thread_ts: "1700000000.000100" }),
   ).rejects.toThrow(pairing);
+});
+
+test("a version 2 file keeps every gap as it was, and gives the next an ID no gap has had", async () => {
+  const path = join(createTestFolder(), "bridge.db");
+  const old = await openBridgeDatabase(path, bridgeMigrations.slice(0, 2));
+  await createStoredLink(old);
+  for (const id of [1, 2]) {
+    await insertGap(old, {
+      id,
+      scope: "thread",
+      thread_ts: "1700000100.000100",
+      cursor: "cursor",
+      state: "repaired",
+      reason: "thread",
+      repaired_at: 60_000,
+    });
+  }
+  const gaps = await old.read((sql) => sql`SELECT * FROM coverage ORDER BY id`);
+  await old.close();
+
+  const database = await openBridgeDatabase(path);
+  onTestFinished(() => database.close());
+
+  expect(await database.read((sql) => sql`SELECT * FROM coverage ORDER BY id`)).toEqual(gaps);
+  await database.write((transaction) => transaction`DELETE FROM coverage WHERE id = 2`);
+  await insertGap(database, {});
+  expect(await database.read((sql) => sql`SELECT id FROM coverage ORDER BY id`)).toEqual([
+    { id: 1 },
+    { id: 3 },
+  ]);
 });

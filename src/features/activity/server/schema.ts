@@ -98,3 +98,39 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
     CREATE INDEX files_message ON files(channel_id, ts);
   `);
 }
+
+/**
+ * Version 3: never give a gap an ID another gap has had. Repair holds a gap's ID across its reads
+ * of Slack, and a purge or an unlink used to let a newer gap take it, so finishing the old gap's
+ * repair could close the new one. Rebuilding the table makes the ID its AUTOINCREMENT key.
+ */
+export async function numberGapsOnce(db: Bun.SQL): Promise<void> {
+  const columns = `
+    id, link_id, channel_id, scope, thread_ts, oldest_ts, latest_ts, cursor, state, reason,
+    opened_at, repaired_at
+  `;
+  await db.unsafe(`
+    CREATE TABLE numbered_coverage (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      link_id     TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE,
+      channel_id  TEXT NOT NULL,
+      scope       TEXT NOT NULL CHECK (scope IN ('channel', 'thread')),
+      thread_ts   TEXT,
+      oldest_ts   TEXT NOT NULL,
+      latest_ts   TEXT NOT NULL,
+      cursor      TEXT,
+      state       TEXT NOT NULL CHECK (state IN ('open', 'repairing', 'repaired', 'partial')),
+      reason      TEXT NOT NULL
+        CHECK (reason IN (
+          'disconnect', 'rate_limited', 'malformed', 'startup', 'thread', 'moved', 'auth_failed'
+        )),
+      opened_at   INTEGER NOT NULL,
+      repaired_at INTEGER,
+      CHECK ((thread_ts IS NOT NULL) = (scope = 'thread'))
+    );
+
+    INSERT INTO numbered_coverage (${columns}) SELECT ${columns} FROM coverage;
+    DROP TABLE coverage;
+    ALTER TABLE numbered_coverage RENAME TO coverage;
+  `);
+}

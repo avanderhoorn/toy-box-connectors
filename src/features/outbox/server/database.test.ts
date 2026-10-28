@@ -183,3 +183,16 @@ test("an item is queued with every column it names, and comes back as its ID and
     updated_at: 60_000,
   });
 });
+
+test("an item never takes the number of one deleted before it", async () => {
+  const database = await openTestDatabase();
+  await createStoredOutboxItem(database, 3);
+  const queue = () =>
+    database.write((transaction) =>
+      queueItem(transaction, { kind: "progress", channelId: "C-link", payload: {} }, 60_000),
+    );
+  const newest = await queue();
+  await database.write((transaction) => transaction`DELETE FROM outbox WHERE id = ${newest.id}`);
+
+  expect(await queue()).toEqual({ id: expect.any(String), number: 5 });
+});

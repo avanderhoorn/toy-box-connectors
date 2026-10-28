@@ -116,19 +116,15 @@ export type NewProposal = ProposalDraft & {
 
 /**
  * Stores a proposal for the owner to decide within the hour, queues posting its card and audits
- * it. It gets 128 random bits as the ID its buttons carry, and the next number.
+ * it. It gets 128 random bits as the ID its buttons carry, and a number no approval has had.
  */
 export async function createApproval(
   transaction: Bun.SQL,
   proposal: NewProposal,
   now: number,
 ): Promise<Approval> {
-  const [next] = await transaction<{ number: number }[]>`
-    SELECT COALESCE(MAX(number), 0) + 1 AS number FROM approvals
-  `;
-  const approval: Approval = {
+  const pending: Omit<Approval, "number"> = {
     id: Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("hex"),
-    number: next!.number,
     toyboxChannelId: proposal.toyboxChannelId,
     linkId: proposal.linkId,
     action: proposal.action,
@@ -145,7 +141,10 @@ export async function createApproval(
     createdAt: now,
     expiresAt: now + APPROVAL_LIFETIME_MS,
   };
-  await transaction`INSERT INTO approvals ${transaction(approvalColumns(approval))}`;
+  const [row] = await transaction<{ number: number }[]>`
+    INSERT INTO approvals ${transaction(approvalColumns(pending))} RETURNING number
+  `;
+  const approval: Approval = { ...pending, number: row!.number };
   await queueCard(
     transaction,
     {
@@ -375,11 +374,13 @@ function approvalFromRow(row: ApprovalRow): Approval {
   };
 }
 
-/** An approval's columns. The owner a card asks is kept in its read-set and as a column. */
-export function approvalColumns(approval: Approval): ApprovalRow {
+/**
+ * An approval's columns but its number, which SQLite assigns and nothing changes. The owner a card
+ * asks is kept in its read-set and as a column.
+ */
+export function approvalColumns(approval: Omit<Approval, "number">): Omit<ApprovalRow, "number"> {
   return {
     id: approval.id,
-    number: approval.number,
     toybox_channel_id: approval.toyboxChannelId,
     link_id: approval.linkId,
     action: approval.action,
