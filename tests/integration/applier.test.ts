@@ -96,7 +96,7 @@ async function linkFakeChannel() {
     }: { proposedAt?: number; clickedAt?: number } = {},
   ): Promise<Approval> {
     const caller = { role: "lead", channelId } as const;
-    const outcome = await changeSetup(database, reader, caller, request, proposedAt);
+    const outcome = await changeSetup(database, reader, caller, request, true, proposedAt);
     if (outcome.kind !== "proposed") throw new Error(`Setup was ${outcome.kind}, not a proposal.`);
     const cardTs = `1000.${String(++cards).padStart(6, "0")}`;
     return database.write(async (transaction) => {
@@ -115,7 +115,12 @@ async function linkFakeChannel() {
   function startApplying({
     timings = TIMINGS,
     wrap = (reader) => reader,
-  }: { timings?: ApplierTimings; wrap?: (reader: FactsReader) => FactsReader } = {}) {
+    slackUsable = () => true,
+  }: {
+    timings?: ApplierTimings;
+    wrap?: (reader: FactsReader) => FactsReader;
+    slackUsable?: () => boolean;
+  } = {}) {
     const attempts: number[] = [];
     const noted: FactsReader = {
       ...reader,
@@ -125,6 +130,7 @@ async function linkFakeChannel() {
       },
     };
     const applier = startApplier(database, wrap(noted), {
+      slackUsable,
       onChange: () => changes.push(now()),
       onError: (error) => errors.push(error),
       now,
@@ -386,6 +392,28 @@ describe("a read that proves nothing", () => {
 });
 
 describe("while Slack isn't connected", () => {
+  test("a change approved before a restart waits, unread, until Socket Mode says hello", async () => {
+    const world = await linkFakeChannel();
+    const approval = await world.approve(allow("U-carol"));
+    let slackUsable = false;
+
+    const { applier, attempts } = world.startApplying({ slackUsable: () => slackUsable });
+
+    await Bun.sleep(300);
+    expect(attempts).toEqual([]);
+    expect(await readState(world.database, approval)).toEqual({
+      state: "approved",
+      staleReason: null,
+    });
+
+    slackUsable = true;
+    applier.reconsider();
+
+    await waitFor(() => expect(world.changes).toHaveLength(1));
+    expect(await readState(world.database, approval)).toEqual(applied);
+    expect(attempts).toHaveLength(1);
+  });
+
   test("a change Slack rejects the token for waits without a read until it's connected again", async () => {
     const world = await linkFakeChannel();
     const approval = await world.approve(allow("U-carol"));

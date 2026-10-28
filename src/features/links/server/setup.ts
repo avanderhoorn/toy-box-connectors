@@ -88,10 +88,14 @@ type SetupLinkRow = {
   approved_audience: string;
 };
 
-/** What setup for `toyboxChannelId` is decided against, or null before the bridge is installed. */
+/**
+ * What setup for `toyboxChannelId` is decided against, or null before the bridge is installed.
+ * `slackUsable` says whether the bridge can use Slack now, which isn't stored.
+ */
 export async function readSetupState(
   sql: Bun.SQL,
   toyboxChannelId: string,
+  slackUsable: boolean,
 ): Promise<SetupState | null> {
   const installation = await readInstallation(sql);
   if (!installation) return null;
@@ -103,6 +107,7 @@ export async function readSetupState(
   const { teamId, enterpriseId, ownerUserId, status } = installation;
   return {
     installation: { teamId, enterpriseId, ownerUserId, status },
+    slackUsable,
     toyboxChannelId,
     link: row ? await readSetupLink(sql, row) : null,
   };
@@ -110,7 +115,8 @@ export async function readSetupState(
 
 /**
  * Runs a setup command for `caller`'s Toy Box channel as of `at`. A refusal, or a change that
- * changes nothing, returns at once, and a set that only narrows applies at once. A proposal is
+ * changes nothing, returns at once, and a set that only narrows applies at once, even when
+ * `slackUsable` says the bridge can't use Slack now, which refuses anything else. A proposal is
  * stored, with its card queued, only once facts read for it show it's valid, and the reads give
  * up when `signal` aborts.
  */
@@ -119,6 +125,7 @@ export async function changeSetup(
   reader: FactsReader,
   caller: SetupCaller,
   request: SetupRequest,
+  slackUsable: boolean,
   at: number,
   signal: AbortSignal = AbortSignal.timeout(SETUP_READ_MS),
 ): Promise<SetupOutcome> {
@@ -126,7 +133,7 @@ export async function changeSetup(
   for (let reads = 0; ; reads++) {
     const read: Fresh | null = fresh;
     const step: SetupStep = await database.write((transaction) =>
-      takeStep(transaction, caller, request, read, at),
+      takeStep(transaction, caller, request, slackUsable, read, at),
     );
     if (step.kind !== "read") return step;
     if (reads === MAX_READS) return { kind: "refused", reason: "changed" };
@@ -162,11 +169,12 @@ async function takeStep(
   transaction: Bun.SQL,
   caller: SetupCaller,
   request: SetupRequest,
+  slackUsable: boolean,
   fresh: Fresh | null,
   at: number,
 ): Promise<SetupStep> {
   await expireApprovals(transaction, at);
-  const state = await readSetupState(transaction, caller.channelId);
+  const state = await readSetupState(transaction, caller.channelId, slackUsable);
   if (!state) return { kind: "refused", reason: "not_connected" };
   const draft = draftSetup(state, request);
   switch (draft.kind) {

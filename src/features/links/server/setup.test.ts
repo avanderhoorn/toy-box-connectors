@@ -86,7 +86,7 @@ function change(
   request: SetupRequest,
   caller = lead,
 ) {
-  return changeSetup(database, reader, caller, request, NOW);
+  return changeSetup(database, reader, caller, request, true, NOW);
 }
 
 function proposal(outcome: SetupOutcome): Approval {
@@ -633,6 +633,28 @@ describe("proposing a setup change", () => {
     expect(reads).toEqual([]);
   });
 
+  test("until the bridge can use Slack, a set that only narrows applies and anything else is refused unread", async () => {
+    const database = await linked({ request_mode: "all" });
+    const { reader, reads } = fakeFactsReader(world());
+    const connecting = (request: SetupRequest) =>
+      changeSetup(database, reader, lead, request, false, NOW);
+
+    expect(await connecting({ action: "set", change: { observe: "channel" } })).toEqual({
+      kind: "refused",
+      reason: "not_connected",
+    });
+    expect(await connecting({ action: "set", change: { requestMode: "mention" } })).toEqual({
+      kind: "narrowed",
+      patch: [{ field: "request_mode", after: "mention" }],
+      voided: [],
+    });
+    expect(await connecting(allowCarol)).toEqual({ kind: "refused", reason: "not_connected" });
+    expect(reads).toEqual([]);
+    expect(await readCounts(database)).toEqual({ links: 1, allowlist: 0, approvals: 0, outbox: 0 });
+    const [link] = await database.read((sql) => sql`SELECT request_mode, observe FROM links`);
+    expect(link).toEqual({ request_mode: "mention", observe: "requesters" });
+  });
+
   test("a change that changes nothing stores and reads nothing", async () => {
     const database = await linked();
     const { reader, reads } = fakeFactsReader(world());
@@ -674,13 +696,14 @@ describe("reading setup state", () => {
       `,
     );
 
-    expect(await database.read((sql) => readSetupState(sql, "toybox-link"))).toEqual({
+    expect(await database.read((sql) => readSetupState(sql, "toybox-link", true))).toEqual({
       installation: {
         teamId: "T-home",
         enterpriseId: null,
         ownerUserId: "U-owner",
         status: "active",
       },
+      slackUsable: true,
       toyboxChannelId: "toybox-link",
       link: {
         id: "link",
@@ -698,7 +721,8 @@ describe("reading setup state", () => {
         ]),
       },
     });
-    expect(await database.read((sql) => readSetupState(sql, "toybox-new"))).toMatchObject({
+    expect(await database.read((sql) => readSetupState(sql, "toybox-new", false))).toMatchObject({
+      slackUsable: false,
       toyboxChannelId: "toybox-new",
       link: null,
     });
@@ -707,6 +731,6 @@ describe("reading setup state", () => {
   test("there's nothing to read before the bridge is installed", async () => {
     const database = await openTestDatabase();
 
-    expect(await database.read((sql) => readSetupState(sql, "toybox-link"))).toBeNull();
+    expect(await database.read((sql) => readSetupState(sql, "toybox-link", true))).toBeNull();
   });
 });

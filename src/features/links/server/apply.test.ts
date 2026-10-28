@@ -123,7 +123,7 @@ async function propose(
   caller = lead,
 ): Promise<Approval> {
   const { reader } = fakeFactsReader(facts);
-  const outcome = await changeSetup(database, reader, caller, request, PROPOSED);
+  const outcome = await changeSetup(database, reader, caller, request, true, PROPOSED);
   if (outcome.kind !== "proposed") throw new Error(`Setup was ${outcome.kind}, not a proposal.`);
   return outcome.approval;
 }
@@ -155,7 +155,11 @@ function attempt(
   at = NOW,
   signal = new AbortController().signal,
 ) {
-  return verifyAndApply(database, reader, approval.id, { now: () => at, signal });
+  return verifyAndApply(database, reader, approval.id, {
+    slackUsable: () => true,
+    now: () => at,
+    signal,
+  });
 }
 
 /** What applying `approval` at `at` settles, naming `linkId`, the link it changed or made. */
@@ -654,6 +658,28 @@ describe("an approved change that waits", () => {
     expect(await attempt(database, reader, approval, CLICKED + APPLY_VERIFY_MS)).toEqual(
       staled(approval, "not_verified"),
     );
+  });
+
+  test("until the bridge can use Slack, it waits without a read, and applies once it can", async () => {
+    const database = await linked();
+    const facts = world();
+    const approval = await approve(database, facts, allowCarol);
+    const { reader, reads } = fakeFactsReader(facts);
+    let slackUsable = false;
+    const options = {
+      slackUsable: () => slackUsable,
+      now: () => NOW,
+      signal: new AbortController().signal,
+    };
+
+    expect(await verifyAndApply(database, reader, approval.id, options)).toEqual({
+      kind: "waiting",
+    });
+    expect(reads).toEqual([]);
+    expect(await readState(database, approval)).toEqual({ state: "approved", staleReason: null });
+
+    slackUsable = true;
+    expect(await verifyAndApply(database, reader, approval.id, options)).toEqual(applied(approval));
   });
 
   test("when Toy Box or Slack can't be read, nothing is settled and it stays approved", async () => {

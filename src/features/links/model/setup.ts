@@ -57,6 +57,11 @@ export type SetupLink = LinkSettings & {
 /** What setup for a Toy Box channel is decided against. */
 export type SetupState = {
   installation: Pick<Installation, "teamId" | "enterpriseId" | "ownerUserId" | "status">;
+  /**
+   * Whether the bridge can use Slack now, which takes Socket Mode's hello in this run and nothing
+   * rejecting the bridge since. It isn't stored, so whoever reads the state says.
+   */
+  slackUsable: boolean;
   toyboxChannelId: string;
   /** The Toy Box channel's link, whatever its status, or null. */
   link: SetupLink | null;
@@ -81,7 +86,10 @@ export type SetupRequest =
 
 /** Why a setup command can't go ahead, whatever Slack and Toy Box say. */
 export type SetupRefusal =
-  /** Slack rejected the tokens or the app was uninstalled, so nobody could approve. */
+  /**
+   * The bridge can't use Slack now, because it rejected the tokens, the app was uninstalled or
+   * Socket Mode hasn't said hello in this run, so nobody could approve.
+   */
   | "not_connected"
   /** Nobody has claimed the bridge, so nobody could approve. */
   | "no_owner"
@@ -100,13 +108,22 @@ export type SetupDraft =
   | { kind: "proposal"; proposal: ProposalDraft; needed: FactsNeeded };
 
 /**
- * Drafts a setup command. A new link holds every setting its patch can carry, with requests only
- * when mentioned and text kept only from requesters unless asked otherwise. Allowing the owner, or
- * someone allowed already with the same label, changes nothing.
+ * Drafts a setup command. A set that only narrows needs neither Slack nor the owner, so it's
+ * drafted whatever the installation's state, and anything else is refused until the bridge can
+ * use Slack and someone has claimed it. A new link holds every setting its patch can carry, with
+ * requests only when mentioned and text kept only from requesters unless asked otherwise.
+ * Allowing the owner, or someone allowed already with the same label, changes nothing.
  */
 export function draftSetup(state: SetupState, request: SetupRequest): SetupDraft {
   const { installation, link } = state;
-  if (installation.status !== "active") return refused("not_connected");
+  if (request.action === "set" && link) {
+    const patch = settingsPatch(link, request.change);
+    if (patch.length === 0) return { kind: "unchanged" };
+    if (patch.every((entry) => narrows(entry, link))) {
+      return { kind: "narrowing", linkId: link.id, patch };
+    }
+  }
+  if (installation.status !== "active" || !state.slackUsable) return refused("not_connected");
   const owner = installation.ownerUserId;
   if (owner === null) return refused("no_owner");
   if (request.action === "link") {
@@ -117,13 +134,8 @@ export function draftSetup(state: SetupState, request: SetupRequest): SetupDraft
   switch (request.action) {
     case "allow":
       return proposal(state, link.id, "allow", allowPatch(link, owner, request));
-    case "set": {
-      const patch = settingsPatch(link, request.change);
-      if (patch.length > 0 && patch.every((entry) => narrows(entry, link))) {
-        return { kind: "narrowing", linkId: link.id, patch };
-      }
-      return proposal(state, link.id, "set", patch);
-    }
+    case "set":
+      return proposal(state, link.id, "set", settingsPatch(link, request.change));
     case "resume":
       if (link.status === "active") return { kind: "unchanged" };
       if (link.status === "suspended" && link.statusReason === "toybox_channel_deleted") {

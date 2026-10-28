@@ -39,7 +39,12 @@ const link: SetupLink = {
   allowlist: new Map([["U-dave", { label: "design" }]]),
 };
 
-const linked: SetupState = { installation, toyboxChannelId: "toybox-link", link };
+const linked: SetupState = {
+  installation,
+  slackUsable: true,
+  toyboxChannelId: "toybox-link",
+  link,
+};
 const unlinked: SetupState = { ...linked, link: null };
 
 const requestsRoutine: ToyBoxRoutine = {
@@ -100,6 +105,44 @@ describe("drafting a setup command", () => {
       kind: "refused",
       reason: "no_owner",
     });
+  });
+
+  test("nothing is drafted until the bridge can use Slack, whatever the installation says", () => {
+    const connecting = { ...linked, slackUsable: false };
+    const requests: SetupRequest[] = [
+      { action: "allow", userIds: ["U-carol"] },
+      { action: "set", change: { requestMode: "all" } },
+      { action: "resume" },
+      { action: "owner", userId: "U-carol" },
+    ];
+    for (const request of requests) {
+      expect(draftSetup(connecting, request)).toEqual({ kind: "refused", reason: "not_connected" });
+    }
+    expect(draftSetup({ ...connecting, link: null }, linkRequest)).toEqual({
+      kind: "refused",
+      reason: "not_connected",
+    });
+  });
+
+  test("a set that only narrows needs neither Slack nor an owner, but one that widens needs both", () => {
+    const narrow: SetupRequest = { action: "set", change: { requestMode: "mention" } };
+    const widen: SetupRequest = { action: "set", change: { observe: "channel" } };
+    const all = withLink({ requestMode: "all" });
+    const stopped = [
+      [{ ...all, slackUsable: false }, "not_connected"],
+      [{ ...all, installation: { ...installation, status: "auth_failed" } }, "not_connected"],
+      [{ ...all, installation: { ...installation, ownerUserId: null } }, "no_owner"],
+    ] as const;
+    for (const [state, reason] of stopped) {
+      expect(draftSetup(state, narrow)).toEqual({
+        kind: "narrowing",
+        linkId: "link",
+        patch: [{ field: "request_mode", after: "mention" }],
+      });
+      expect(draftSetup(state, { action: "set", change: {} })).toEqual({ kind: "unchanged" });
+      expect(draftSetup(state, widen)).toEqual({ kind: "refused", reason });
+      expect(draftSetup({ ...state, link: null }, narrow)).toEqual({ kind: "refused", reason });
+    }
   });
 
   test("every command but link needs a link, and a Toy Box channel has one link whatever its status", () => {

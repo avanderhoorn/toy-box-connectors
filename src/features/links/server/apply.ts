@@ -32,9 +32,10 @@ import { linkedElsewhere, readSetupState } from "./setup";
 // it reads the approval and what it's judged against again, and puts exactly its patch in, with
 // an audit entry, while the card's read-set still holds and the change is still valid, or marks it
 // stale with the reason. A read that proves nothing is tried again with backoff, and an approval
-// still unverified 15 minutes after the click goes stale, as does one Slack stays disconnected
-// for. The applier starts with every approval left approved, so a decision committed before a
-// crash still applies or goes stale, and it expires every card whose hour is up.
+// still unverified 15 minutes after the click goes stale, as does one that waits that long for
+// the bridge to be able to use Slack, which after a restart takes Socket Mode's hello. The applier
+// starts with every approval left approved, so a decision committed before a crash still applies
+// or goes stale, and it expires every card whose hour is up.
 
 export interface Applier {
   /** Applies again, because the owner decided a card or something an approval waits on changed. */
@@ -53,6 +54,8 @@ export type ApplierTimings = {
 export const defaultApplierTimings: ApplierTimings = { retry: 5_000, retryLimit: 120_000 };
 
 export type ApplierOptions = {
+  /** Whether the bridge can use Slack now. Call `reconsider` when it changes. */
+  slackUsable: () => boolean;
   /** Called once the applier settles an approval, so its card, its link and its lead are seen to. */
   onChange?: () => void;
   /** Called when the applier stops on an error that applying again can't fix. */
@@ -68,7 +71,7 @@ export type ApplyAttempt =
    * when something else settled it first.
    */
   | { kind: "settled"; approval: Approval | null }
-  /** Slack isn't connected, so nothing about it can be verified until it is. */
+  /** The bridge can't use Slack now, so nothing about it can be verified until it can. */
   | { kind: "waiting" }
   | Unverified;
 
@@ -86,11 +89,12 @@ export function startApplier(
   database: BridgeDatabase,
   reader: FactsReader,
   {
+    slackUsable,
     onChange = () => {},
     onError = () => {},
     now = Date.now,
     timings = defaultApplierTimings,
-  }: ApplierOptions = {},
+  }: ApplierOptions,
 ): Applier {
   // The approvals whose last read proved nothing, how many reads in a row did, and when to retry.
   const retries = new Map<string, { count: number; at: number }>();
@@ -144,6 +148,7 @@ export function startApplier(
         continue;
       }
       const attempt = await verifyAndApply(database, reader, approval.id, {
+        slackUsable,
         now,
         signal: stopping.signal,
       });
@@ -202,18 +207,23 @@ export function startApplier(
  * Applies an approved approval, or marks it stale, once facts read fresh for exactly what it
  * needs say which. One that can't be verified by its deadline, APPLY_VERIFY_MS after the click,
  * goes stale without a read, and each read gives up when `signal` aborts or the deadline comes.
+ * Until then it waits, without a read, while `slackUsable` says the bridge can't use Slack.
  */
 export async function verifyAndApply(
   database: BridgeDatabase,
   reader: FactsReader,
   approvalId: string,
-  { now, signal }: { now: () => number; signal: AbortSignal },
+  {
+    slackUsable,
+    now,
+    signal,
+  }: { slackUsable: () => boolean; now: () => number; signal: AbortSignal },
 ): Promise<ApplyAttempt> {
   let fresh: Fresh | null = null;
   for (let reads = 0; ; reads++) {
     const read: Fresh | null = fresh;
     const step: ApplyStep = await database.write((transaction) =>
-      takeApplyStep(transaction, approvalId, read, now()),
+      takeApplyStep(transaction, approvalId, read, slackUsable(), now()),
     );
     if (step.kind !== "read") return step;
     if (reads === MAX_READS) {
@@ -257,20 +267,21 @@ const nothingRead: FreshFacts = {
  * Settles an approved approval when it can be: as not verified once its deadline has come, and
  * otherwise by judging it against facts read for exactly what it needs now, or against nothing
  * when it needs nothing, because its link or the owner is gone. Asks for a read when there are no
- * such facts, and waits while Slack isn't connected.
+ * such facts, and waits while the bridge can't use Slack.
  */
 async function takeApplyStep(
   transaction: Bun.SQL,
   approvalId: string,
   fresh: Fresh | null,
+  slackUsable: boolean,
   at: number,
 ): Promise<ApplyStep> {
   const approval = await readApproval(transaction, approvalId);
   if (approval?.state !== "approved") return { kind: "settled", approval: null };
   const deadline = verifyDeadline(approval);
   if (at >= deadline) return stale(transaction, approval, "not_verified", at);
-  const state = await readSetupState(transaction, approval.toyboxChannelId);
-  if (state?.installation.status !== "active") return { kind: "waiting" };
+  const state = await readSetupState(transaction, approval.toyboxChannelId, slackUsable);
+  if (!state?.slackUsable || state.installation.status !== "active") return { kind: "waiting" };
   const needed = factsNeeded(state, approval);
   if (needed && !Bun.deepEquals(fresh?.needed, needed, true)) {
     const ownerIds = await readPersonIds(transaction, needed.owner);
