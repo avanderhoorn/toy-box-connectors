@@ -118,6 +118,15 @@ test("a page of members lists their IDs and the cursor for the next page", () =>
   ).toEqual({ members: ["U0OWNER", "W0CAROL"], nextCursor: "dXNlcjpVMEc5V0ZYTlo=" });
 });
 
+test("a page with nobody on it still has the next page's cursor", () => {
+  expect(
+    channelMembersPageSchema.parse({
+      members: [],
+      response_metadata: { next_cursor: "dXNlcjpVMEc5V0ZYTlo=" },
+    }),
+  ).toEqual({ members: [], nextCursor: "dXNlcjpVMEc5V0ZYTlo=" });
+});
+
 test("an empty or missing cursor ends the list, even after a page with nobody on it", () => {
   for (const response_metadata of [
     { next_cursor: "" },
