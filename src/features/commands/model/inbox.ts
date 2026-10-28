@@ -13,7 +13,9 @@ import { staleReasons } from "@links/model/cards";
 import type { Request } from "@requests/model/lifecycle";
 import { isPending, type WakeRequest } from "@wakes/model";
 import { commandContract, type PresentContext } from "./contract";
+import { requestIdSchema } from "./requests";
 import { fenceFor, NAME_LIMIT, oneLine, personName } from "./slackText";
+import { ago, count, duration } from "./wording";
 
 const personSchema = z
   .object({
@@ -70,8 +72,6 @@ const requesterSchema = personSchema
   })
   .strict();
 type Requester = z.output<typeof requesterSchema>;
-
-const requestIdSchema = z.number().int().positive().describe("The request's number, shown as r14");
 
 const fileSchema = z
   .object({
@@ -452,25 +452,6 @@ function channel({ id, name }: z.output<typeof channelSchema>): string {
 function joinNames(names: readonly string[]): string {
   if (names.length <= 2) return names.join(" and ");
   return `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`;
-}
-
-function count(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? "" : "s"}`;
-}
-
-/** How long ago something happened, to the minute. */
-function ago(milliseconds: number): string {
-  return milliseconds < 60_000 ? "just now" : `${duration(milliseconds)} ago`;
-}
-
-/** A span in whole minutes, hours under two days, or days. */
-function duration(milliseconds: number): string {
-  const minutes = Math.floor(Math.max(milliseconds, 0) / 60_000);
-  if (minutes < 1) return "less than a minute";
-  if (minutes < 60) return count(minutes, "minute");
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return count(hours, "hour");
-  return count(Math.floor(hours / 24), "day");
 }
 
 /** A file's size in bytes, KB or MB, counting 1024 to each. */

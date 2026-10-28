@@ -175,6 +175,10 @@ test.each([
     ["serve", "extra"],
     "`serve` takes no arguments, but also got extra. Run `toy-box-slack serve --help`.",
   ],
+  [
+    ["dismiss", "14", "--revision", "2", "--reason", " "],
+    "<request>: Write it as inbox shows it, such as r14. --reason: Can't be blank. Run `toy-box-slack dismiss --help`.",
+  ],
 ])(
   "refuses `toy-box-slack %j` on stderr with exit 1, before calling any bridge",
   async (args, message) => {
@@ -198,9 +202,11 @@ test.each([
 Usage: toy-box-slack <command> [options]
 
 Commands:
-  status  Show Slack's connection and the health of each link
-  inbox   Read new and changed Slack requests, and how the owner decided your proposals
-  serve   Run the bridge in the foreground until SIGTERM or SIGINT
+  status   Show Slack's connection and the health of each link
+  inbox    Read new and changed Slack requests, and how the owner decided your proposals
+  hold     Stop reminders about a request while you wait for the owner to decide
+  dismiss  Close a request that needs no answer, without replying in Slack
+  serve    Run the bridge in the foreground until SIGTERM or SIGINT
 
 Run \`toy-box-slack <command> --help\` to see a command's options.
 `,
@@ -226,6 +232,37 @@ Options:
   --limit <number>  The most requests to show in each list
   --channel <id>    The Toy Box channel to act for, from a terminal
   --json            Print the bridge's answer as JSON
+`,
+  ],
+  [
+    ["hold", "--help"],
+    `Stop reminders about a request while you wait for the owner to decide
+
+Usage: toy-box-slack hold <request> --reason <value> [options]
+
+Arguments:
+  <request>         The request, such as r14
+
+Options:
+  --reason <value>  What you're waiting for the owner to decide
+  --channel <id>    The Toy Box channel to act for, from a terminal
+  --json            Print the bridge's answer as JSON
+`,
+  ],
+  [
+    ["dismiss", "--help"],
+    `Close a request that needs no answer, without replying in Slack
+
+Usage: toy-box-slack dismiss <request> --revision <number> --reason <value> [options]
+
+Arguments:
+  <request>            The request, such as r14
+
+Options:
+  --revision <number>  The revision you read, which inbox and thread show
+  --reason <value>     Why it needs no answer
+  --channel <id>       The Toy Box channel to act for, from a terminal
+  --json               Print the bridge's answer as JSON
 `,
   ],
   [

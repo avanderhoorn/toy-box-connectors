@@ -157,6 +157,44 @@ describe("the arguments a contract takes", () => {
     expect(kebabCase("wakeAfterMinutes")).toBe("wake-after-minutes");
     expect(kebabCase("text")).toBe("text");
   });
+
+  test("take what the caller writes for a field the contract transforms", () => {
+    const hold = commandContract({
+      description: "Stop reminders about a request",
+      roles: ["lead"],
+      scope: "channel",
+      input: z
+        .object({
+          request: z
+            .string()
+            .regex(/^r\d+$/)
+            .transform((reference) => Number(reference.slice(1)))
+            .describe("The request, such as r14"),
+        })
+        .strict(),
+      positionals: ["request"],
+      result,
+      present,
+    });
+
+    expect(commandArguments("hold", hold)).toEqual([
+      {
+        field: "request",
+        label: "<request>",
+        positional: true,
+        type: "string",
+        multiple: false,
+        required: true,
+        choices: null,
+        description: "The request, such as r14",
+      },
+    ]);
+    expect(parse(hold, "r14")).toMatchObject({ values: { request: "r14" } });
+    expect(checkCommandInput("hold", hold, { request: "r14" })).toEqual({
+      kind: "checked",
+      input: { request: 14 },
+    });
+  });
 });
 
 describe("parsing a command line", () => {

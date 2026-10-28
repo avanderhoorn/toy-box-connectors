@@ -299,12 +299,14 @@ function describeArgument(
 ): CommandArgument {
   let inner: z.ZodType = schema;
   let description = schema.description;
+  // A transform reads what the caller wrote, so the command line gives it what the pipe takes in.
   while (
     inner instanceof z.ZodOptional ||
     inner instanceof z.ZodDefault ||
-    inner instanceof z.ZodNullable
+    inner instanceof z.ZodNullable ||
+    inner instanceof z.ZodPipe
   ) {
-    inner = inner.unwrap() as z.ZodType;
+    inner = (inner instanceof z.ZodPipe ? inner.in : inner.unwrap()) as z.ZodType;
     description ??= inner.description;
   }
   const element = inner instanceof z.ZodArray ? (inner.element as z.ZodType) : inner;

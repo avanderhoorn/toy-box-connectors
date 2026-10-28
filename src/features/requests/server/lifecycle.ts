@@ -1,7 +1,8 @@
 import { settleRequestAnswer } from "@outbox/server/answers";
-import { cancelQueuedRequestItems } from "@outbox/server/database";
+import { cancelQueuedRequestItems, queueReaction } from "@outbox/server/database";
 import {
   cancelRequest,
+  dismissRequest,
   expireRequest,
   isDueToExpire,
   markSourceUnverified,
@@ -82,6 +83,32 @@ export async function markLinkSourcesUnverified(
     const marked = markSourceUnverified(request, now);
     if (marked !== request) await saveRequest(transaction, marked);
   }
+}
+
+/**
+ * Dismisses a request the lead decided needs no answer, along with its replies and progress notes
+ * that are still queued, and takes back the 👀 that told the requester the lead was coming.
+ */
+export async function dismissStoredRequest(
+  transaction: Bun.SQL,
+  request: StoredRequest,
+  reason: string,
+  now: number,
+): Promise<void> {
+  await saveRequest(transaction, dismissRequest(request, reason));
+  await cancelQueuedRequestItems(transaction, request.id, now);
+  await queueReaction(
+    transaction,
+    {
+      action: "remove",
+      name: "eyes",
+      channelId: request.channelId,
+      ts: request.sourceTs,
+      linkId: request.linkId,
+      requestId: request.id,
+    },
+    now,
+  );
 }
 
 /** Cancels every active request of a link. Returns whether there were any. */

@@ -4,12 +4,16 @@
 // map must name one handler for each, so a command can't exist on one side only.
 
 import type { CommandContract, CommandHandlersFor } from "./contract";
+import { dismissContract } from "./dismiss";
+import { holdContract } from "./hold";
 import { inboxContract } from "./inbox";
 import { statusContract } from "./status";
 
 export const commandContracts = {
   status: statusContract,
   inbox: inboxContract,
+  hold: holdContract,
+  dismiss: dismissContract,
 } satisfies Record<string, CommandContract>;
 
 export type CommandName = keyof typeof commandContracts;

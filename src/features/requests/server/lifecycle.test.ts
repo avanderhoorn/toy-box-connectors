@@ -7,7 +7,13 @@ import { createStoredOutboxItem } from "@outbox/server/testFixtures";
 import type { Request } from "@requests/model/lifecycle";
 import { askMessage, editMessage } from "@slackapi/model/testFixtures";
 import { assignRequestMessage, hashInput, readRequest } from "./database";
-import { cancelLinkRequests, expireRequests, releaseHolds, reviseStoredRequest } from "./lifecycle";
+import {
+  cancelLinkRequests,
+  dismissStoredRequest,
+  expireRequests,
+  releaseHolds,
+  reviseStoredRequest,
+} from "./lifecycle";
 import { createStoredRequest } from "./testFixtures";
 
 const ask = askMessage();
@@ -97,6 +103,57 @@ test("cancelling a link's requests closes its active ones with their queued repl
     { number: 9, state: "queued" },
   ]);
   expect(await cancel()).toBe(false);
+});
+
+test("dismissing a stored request closes it without its queued replies and takes back 👀", async () => {
+  const database = await openTestDatabase();
+  const request = await createStoredRequest(database, {
+    sourceTs: "1700000160.000100",
+    state: "in_progress",
+    seenAt: 1,
+    attention: "updated",
+    heldAt: 1,
+    holdReason: "Asked the owner",
+  });
+  await createStoredOutboxItem(database, 1);
+  await createStoredOutboxItem(database, 2, { kind: "progress", phase: null });
+  await createStoredOutboxItem(database, 3, { kind: "progress", phase: null, state: "sending" });
+  await createStoredOutboxItem(database, 4, { request_id: 2 });
+
+  await database.write((transaction) =>
+    dismissStoredRequest(transaction, request, "Duplicate of r12", 60_000),
+  );
+  expect(await database.read((sql) => readRequest(sql, request.id))).toEqual({
+    ...request,
+    state: "dismissed",
+    closedReason: "Duplicate of r12",
+    attention: null,
+    heldAt: null,
+    holdReason: null,
+  });
+  expect(
+    await database.read(
+      (sql) => sql`
+        SELECT number, kind, state, link_id, request_id, channel_id, payload, created_at
+        FROM outbox ORDER BY number
+      `,
+    ),
+  ).toEqual([
+    expect.objectContaining({ number: 1, state: "cancelled" }),
+    expect.objectContaining({ number: 2, state: "cancelled" }),
+    expect.objectContaining({ number: 3, state: "sending" }),
+    expect.objectContaining({ number: 4, state: "queued" }),
+    {
+      number: 5,
+      kind: "reaction",
+      state: "queued",
+      link_id: "link",
+      request_id: 1,
+      channel_id: "C-link",
+      payload: '{"action":"remove","name":"eyes","timestamp":"1700000160.000100"}',
+      created_at: 60_000,
+    },
+  ]);
 });
 
 test("releasing holds frees the link's requests held before the owner spoke", async () => {
