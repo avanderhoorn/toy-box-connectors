@@ -50,10 +50,5 @@ export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
     CREATE UNIQUE INDEX outbox_one_publication
       ON outbox(link_id, publication_key)
       WHERE state IN ('queued', 'sending', 'sent', 'delivery_unknown', 'stray', 'retracted', 'skipped');
-
-    CREATE TABLE rate_limits (
-      method          TEXT PRIMARY KEY,
-      next_attempt_at INTEGER NOT NULL
-    );
   `);
 }

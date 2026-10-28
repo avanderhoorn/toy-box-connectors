@@ -21,4 +21,4 @@ Coverage records the spans of time the bridge may have missed. A gap opens when 
 - A gap is marked repaired only after a complete scan. A partial scan stays partial.
 - A message missing from a history page is never treated as deleted.
 - Nothing from an unlinked channel is stored.
-- SDK retries are off. The Web API client makes one attempt per call, and its caller decides what happens next.
+- SDK retries are off. Every Web API call goes through the shared bot client in `src/features/slackapi`, which makes one attempt per call, holds a rate-limited method back for every caller, and leaves what happens next to its caller.

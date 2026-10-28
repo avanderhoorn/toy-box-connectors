@@ -29,6 +29,12 @@ export async function initializeSlackApiSchema(db: Bun.SQL): Promise<void> {
 
     CREATE INDEX receipts_received ON receipts(received_at);
 
+    -- When a Web API method may next be called, after Slack answered it with a 429.
+    CREATE TABLE rate_limits (
+      method          TEXT PRIMARY KEY,
+      next_attempt_at INTEGER NOT NULL
+    );
+
     CREATE TABLE channel_info (
       channel_id            TEXT PRIMARY KEY,
       name                  TEXT,

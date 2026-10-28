@@ -29,3 +29,17 @@ export async function readInstallation(sql: Bun.SQL): Promise<Installation | nul
     status: row.status,
   };
 }
+
+/**
+ * Puts an active installation in auth_failed as of `now`, and returns whether it changed. One
+ * that's failing already keeps the moment it began, where recovery's gap starts, and an uninstalled
+ * one stays uninstalled.
+ */
+export async function markAuthFailed(transaction: Bun.SQL, now: number): Promise<boolean> {
+  const marked = await transaction`
+    UPDATE installation SET status = 'auth_failed', auth_failed_at = ${now}
+    WHERE status = 'active'
+    RETURNING id
+  `;
+  return marked.length > 0;
+}
