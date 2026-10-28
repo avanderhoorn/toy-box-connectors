@@ -31,6 +31,7 @@ test("a link's wake state is its open and seen requests and its runs, newest fir
       id: "link",
       channelId: "toybox-link",
       active: true,
+      suspendedAt: null,
       requests: [
         { state: "open", attention: null, changedAt: 5, touchedAt: null },
         { state: "seen", attention: "updated", changedAt: 7, touchedAt: 6 },
@@ -40,7 +41,14 @@ test("a link's wake state is its open and seen requests and its runs, newest fir
         { at: 10, outcome: "failed" },
       ],
     },
-    { id: "paused", channelId: "toybox-paused", active: false, requests: [], runs: [] },
+    {
+      id: "paused",
+      channelId: "toybox-paused",
+      active: false,
+      suspendedAt: null,
+      requests: [],
+      runs: [],
+    },
   ]);
 });
 

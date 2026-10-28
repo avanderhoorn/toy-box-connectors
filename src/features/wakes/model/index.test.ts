@@ -21,7 +21,7 @@ const ran = (at: number) => run(at, "ran");
 const waitUntil = (until: number): WakeDecision => ({ kind: "wait", until });
 
 function decide(at: number, requests: WakeRequest[], runs: WakeRun[] = []): WakeDecision {
-  return decideWake(at, { active: true, requests, runs });
+  return decideWake(at, { active: true, requests, suspendedAt: null, runs });
 }
 
 describe("deciding whether to wake a link's lead", () => {
@@ -82,9 +82,14 @@ describe("deciding whether to wake a link's lead", () => {
     expect(decide(NOW + MINUTE, [open(NOW + 30 * SECOND)], runs)).toEqual(waitUntil(until));
   });
 
-  test("leaves a link alone while it's paused or nothing waits", () => {
-    const paused = { active: false, requests: [open(NOW - MINUTE)], runs: [] };
+  test("leaves a paused or quiet link alone, but wakes a suspended link's lead once", () => {
+    const requests = [open(NOW - MINUTE), read(NOW - HOUR)];
+    const paused = { active: false, requests, suspendedAt: null, runs: [] };
     expect(decideWake(NOW, paused)).toEqual({ kind: "idle" });
     expect(decide(NOW, [], [ran(NOW - MINUTE)])).toEqual({ kind: "idle" });
+    const suspended = { ...paused, suspendedAt: NOW - MINUTE };
+    expect(decideWake(NOW, suspended)).toEqual({ kind: "wake" });
+    // The wake covers the suspension, and the requests wait for the link.
+    expect(decideWake(NOW, { ...suspended, runs: [ran(NOW - SECOND)] })).toEqual({ kind: "idle" });
   });
 });

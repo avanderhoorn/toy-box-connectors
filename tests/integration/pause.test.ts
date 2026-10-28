@@ -1,8 +1,10 @@
-// A rare event in Slack pauses a link until the owner resumes it. Status says why, and what an
-// allowed person asks while it's paused doesn't reach the lead.
+// A rare event in Slack pauses a link until the owner resumes it, and wakes the lead once so it can
+// tell them. Status says why, and what an allowed person asks while it's paused doesn't reach the
+// lead.
 
 import { expect, test } from "bun:test";
 import { ALICE, BOT, connectedBridge, posted, said, timestamps } from "./connectedBridge";
+import { waitFor } from "./waitFor";
 
 const [changedTs, askedTs] = timestamps(2);
 
@@ -54,9 +56,10 @@ test.each([
     reason: "channel_id_changed",
   },
 ])(
-  "a link pauses when $cause, and what Alice asks then doesn't reach the lead",
+  "a link pauses when $cause and wakes the lead once, and what Alice asks then doesn't reach it",
   async ({ event, reason }) => {
-    const { channelId, status, inbox, deliver, post, stop, saying } = await connectedBridge();
+    const { channelId, toyBox, status, inbox, deliver, post, stop, saying } =
+      await connectedBridge();
     await deliver(event);
     await post(said(ALICE, askedTs, `<@${BOT}> can you check the deploy?`));
 
@@ -64,6 +67,8 @@ test.each([
       json: { links: [{ status: "suspended", statusReason: reason }] },
     });
     expect(await inbox()).toMatchObject({ linkStatus: "suspended", requests: [] });
+    await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
     expect(await stop()).toEqual({ code: 0, stderr: saying() });
+    expect(toyBox.runs).toHaveLength(1);
   },
 );

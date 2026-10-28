@@ -13,8 +13,12 @@ const HOUR = 60 * 60_000;
 
 /** Every link with what its wake decision reads. */
 export async function readLinkWakes(sql: Bun.SQL): Promise<LinkWakes[]> {
-  const links = await sql<{ id: string; channelId: string; status: string }[]>`
-    SELECT id, toybox_channel_id AS channelId, status FROM links ORDER BY id
+  const links = await sql<
+    { id: string; channelId: string; status: string; suspendedAt: number | null }[]
+  >`
+    SELECT id, toybox_channel_id AS channelId, status,
+      CASE WHEN status = 'suspended' THEN updated_at END AS suspendedAt
+    FROM links ORDER BY id
   `;
   const requests = await sql<(WakeRequest & { linkId: string })[]>`
     SELECT link_id AS linkId, state, attention, changed_at AS changedAt, touched_at AS touchedAt
@@ -23,12 +27,11 @@ export async function readLinkWakes(sql: Bun.SQL): Promise<LinkWakes[]> {
   const runs = await sql<(WakeRun & { linkId: string })[]>`
     SELECT link_id AS linkId, at, outcome FROM wakes ORDER BY id DESC
   `;
-  return links.map(({ id, channelId, status }) => ({
-    id,
-    channelId,
+  return links.map(({ status, ...link }) => ({
+    ...link,
     active: status === "active",
-    requests: ofLink(requests, id),
-    runs: ofLink(runs, id),
+    requests: ofLink(requests, link.id),
+    runs: ofLink(runs, link.id),
   }));
 }
 

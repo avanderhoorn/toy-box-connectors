@@ -1,12 +1,13 @@
 // When the bridge wakes a link's lead.
 //
 // Toy Box's own wakes live in memory and fire at most once, so the bridge decides from what it
-// stored: the link's open and seen requests and the log of routine runs it attempted. A burst of
-// new requests earns one wake once it settles. A lead that leaves them unread is woken again after
-// longer and longer waits, then left alone until something new arrives. A request the lead read
-// and left gets one reminder unless the lead is woken first. A run Toy Box couldn't take retries
-// with backoff, one it refused waits for something new, and no lead is woken more than 12 times an
-// hour.
+// stored: the link's open and seen requests, when the bridge suspended it, and the log of routine
+// runs it attempted. A burst of new requests earns one wake once it settles. A lead that leaves
+// them unread is woken again after longer and longer waits, then left alone until something new
+// arrives. A request the lead read and left gets one reminder unless the lead is woken first. A
+// suspended link's requests wait, but its suspension wakes the lead once to tell the owner. A run
+// Toy Box couldn't take retries with backoff, one it refused waits for something new, and no lead
+// is woken more than 12 times an hour.
 
 import { z } from "zod";
 import type { Request, RequestAttention } from "@requests/model/lifecycle";
@@ -29,6 +30,8 @@ export type WakeRun = { at: number; outcome: RoutineRunOutcome };
 export type LinkWakeState = {
   active: boolean;
   requests: readonly WakeRequest[];
+  /** When the bridge suspended the link, or null if it isn't suspended. */
+  suspendedAt: number | null;
   runs: readonly WakeRun[];
 };
 
@@ -82,15 +85,17 @@ export function decideWake(
   link: LinkWakeState,
   timings = defaultWakeTimings,
 ): WakeDecision {
-  if (!link.active) return { kind: "idle" };
-  const pending = link.requests.filter(isPending).map(({ changedAt }) => changedAt);
+  const requests = link.active ? link.requests : [];
+  const pending = requests.filter(isPending).map(({ changedAt }) => changedAt);
+  // A suspension is news like a changed request, which the first wake after it covers.
+  const changes = link.suspendedAt === null ? pending : [...pending, link.suspendedAt];
   const [latest] = link.runs;
-  if (latest?.outcome === "refused" && !pending.some((changedAt) => changedAt > latest.at)) {
+  if (latest?.outcome === "refused" && !changes.some((changedAt) => changedAt > latest.at)) {
     return { kind: "blocked" };
   }
   const woken = link.runs.flatMap(({ at, outcome }) => (outcome === "ran" ? [at] : []));
   const lastWokenAt = woken[0] ?? -Infinity;
-  const fresh = pending.filter((changedAt) => changedAt > lastWokenAt);
+  const fresh = changes.filter((changedAt) => changedAt > lastWokenAt);
 
   let due: number;
   if (fresh.length) {
@@ -104,7 +109,7 @@ export function decideWake(
     if (unread >= STALL_AFTER) return { kind: "stalled" };
     due = lastWokenAt + timings.backoff[unread - 1]!;
   } else {
-    const reminders = link.requests.flatMap(({ touchedAt }) =>
+    const reminders = requests.flatMap(({ touchedAt }) =>
       touchedAt !== null && touchedAt > lastWokenAt ? [touchedAt + timings.remind] : [],
     );
     if (!reminders.length) return { kind: "idle" };
