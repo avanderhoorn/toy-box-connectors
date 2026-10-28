@@ -6,8 +6,18 @@ import { createTestFolder, openTestDatabase } from "@bridge/server/testFixtures"
 import { pendingApproval } from "@links/model/testFixtures";
 import { queueItem } from "@outbox/server/database";
 import { recordGap } from "@activity/server/coverage";
+import { createStoredMessage } from "@activity/server/testFixtures";
+import { askMessage } from "@slackapi/model/testFixtures";
 import { createApproval } from "./approvals";
-import { purgeForReset, purgeForUninstall, resetPurge, sweepFiles, uninstallPurge } from "./purge";
+import {
+  purgeForReset,
+  purgeForUninstall,
+  purgeForUnlink,
+  resetPurge,
+  sweepFiles,
+  uninstallPurge,
+  unlinkPurge,
+} from "./purge";
 import { countRows, createStoredLink, fillEveryTable } from "./testFixtures";
 
 function writeFiles(folder: string, paths: readonly string[]) {
@@ -90,6 +100,12 @@ describe("what each purge does", () => {
     expect(Object.keys(uninstallPurge).sort()).toEqual(await readTableNames(database));
   });
 
+  test("unlinking decides the fate of every table", async () => {
+    const database = await openTestDatabase();
+
+    expect(Object.keys(unlinkPurge).sort()).toEqual(await readTableNames(database));
+  });
+
   test("resetting decides the fate of every table", async () => {
     const database = await openTestDatabase();
 
@@ -105,6 +121,77 @@ describe("what each purge does", () => {
 
     await database.write((transaction) => purgeForReset(transaction, 180_000));
     expect(await createNumbered(database)).toEqual({ item: 5, approval: 3, card: 6, gap: 3 });
+  });
+});
+
+describe("unlinking", () => {
+  test("purges the link, and what the bridge kept of its channel under every ID, but nothing of another link's", async () => {
+    const database = await openTestDatabase();
+    await fillEveryTable(database);
+    await createStoredLink(database, "other");
+    await createStoredMessage(database, askMessage("1700000200.000100", { channelId: "C-old" }));
+    await createStoredMessage(database, askMessage("1700000300.000100", { channelId: "C-other" }), {
+      id: "other",
+      audience: { ownerUserId: "U-owner", allowlist: new Set(), observe: "channel" },
+    });
+    await database.write(async (transaction) => {
+      await transaction`UPDATE links SET publish_channel_id = 'C-other' WHERE id = 'link'`;
+      await transaction`
+        INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('other', 'U-carol', 0)
+      `;
+      await transaction`INSERT INTO cursors (link_id) VALUES ('other')`;
+      await transaction`
+        INSERT INTO files (file_id, channel_id, ts, state, local_path, fetched_at) VALUES
+          ('F-old', 'C-old', '1700000200.000100', 'fetched', 'F-old/log.txt', 0),
+          ('F-other', 'C-other', '1700000300.000100', 'fetched', 'F-other/notes.txt', 0)
+      `;
+    });
+    const before = await countRows(database);
+
+    const copies = await database.write((transaction) =>
+      purgeForUnlink(transaction, { id: "link", slackChannelId: "C-link" }),
+    );
+
+    expect(copies.sort()).toEqual(["F-kept/report.pdf", "F-old/log.txt"]);
+    const after = await countRows(database);
+    const purged = Object.keys(after).filter((table) => after[table] !== before[table]);
+    expect(purged).toEqual(
+      Object.keys(unlinkPurge)
+        .filter((table) => typeof unlinkPurge[table as keyof typeof unlinkPurge] !== "string")
+        .sort(),
+    );
+    expect(Object.fromEntries(purged.map((table) => [table, after[table]]))).toEqual({
+      allowlist: 1,
+      changes: 1,
+      coverage: 0,
+      cursors: 1,
+      files: 1,
+      link_routines: 0,
+      links: 1,
+      messages: 1,
+      request_messages: 0,
+      requests: 0,
+      threads: 0,
+      wake_state: 0,
+    });
+    expect(
+      await database.read(
+        (sql) => sql`
+        SELECT (SELECT link_id FROM allowlist) AS allowed, (SELECT link_id FROM changes) AS changed,
+          (SELECT link_id FROM cursors) AS cursor, (SELECT channel_id FROM files) AS file,
+          (SELECT id FROM links) AS link, (SELECT channel_id FROM messages) AS message
+      `,
+      ),
+    ).toEqual([
+      {
+        allowed: "other",
+        changed: "other",
+        cursor: "other",
+        file: "C-other",
+        link: "other",
+        message: "C-other",
+      },
+    ]);
   });
 });
 

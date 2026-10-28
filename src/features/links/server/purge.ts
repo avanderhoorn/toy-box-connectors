@@ -81,6 +81,85 @@ export async function purgeForReset(transaction: Bun.SQL, now: number): Promise<
   return copies;
 }
 
+/** What unlinking does to a table's rows. */
+export type UnlinkPurge =
+  | "keep"
+  /** Rows stay while Slack may still settle them, and the outbox and approvals let go after. */
+  | "settled"
+  /** Rows whose column names the link go. */
+  | { link: string }
+  /** Rows whose column names the Slack channel the link watched go, under any ID it had. */
+  | { channel: string };
+
+/**
+ * What unlinking does to each table, children before the tables they reference. The link goes with
+ * its settings, requests and gaps, and so does what the bridge kept of the channel it watched,
+ * which no other link watches. The publish channel's is another link's when it watches it. Who's
+ * who in Slack, what's known of its channels, the claim, the wakes that ran and the audit log hold
+ * no message text and serve the installation's other links and its owner, so they stay.
+ */
+export const unlinkPurge = {
+  installation: "keep",
+  receipts: "keep",
+  rate_limits: "keep",
+  channel_info: "keep",
+  channel_aliases: "keep",
+  users: "keep",
+  user_aliases: "keep",
+  claims: "keep",
+  link_routines: { link: "link_id" },
+  allowlist: { link: "link_id" },
+  approvals: "settled",
+  audit: "keep",
+  messages: { channel: "channel_id" },
+  changes: { link: "link_id" },
+  threads: { channel: "channel_id" },
+  coverage: { link: "link_id" },
+  cursors: { link: "link_id" },
+  files: { channel: "channel_id" },
+  wake_state: { link: "link_id" },
+  wakes: "keep",
+  request_messages: { channel: "channel_id" },
+  requests: { link: "link_id" },
+  outbox: "settled",
+  outbox_channels: "keep",
+  toybox_streams: "keep",
+  links: { link: "id" },
+} as const satisfies Record<string, UnlinkPurge>;
+
+/**
+ * Deletes the rows unlinking purges for `link` and returns the local copies of the files it
+ * forgot. The watched channel's rows go under every ID Slack gave it, since the ledger keeps the
+ * one a message arrived with.
+ */
+export async function purgeForUnlink(
+  transaction: Bun.SQL,
+  link: { id: string; slackChannelId: string },
+): Promise<string[]> {
+  const aliases = await transaction<{ old_id: string }[]>`
+    SELECT old_id FROM channel_aliases WHERE channel_id = ${link.slackChannelId}
+  `;
+  const channelIds = [link.slackChannelId, ...aliases.map((alias) => alias.old_id)];
+  const copies = await transaction<{ local_path: string | null }[]>`
+    SELECT local_path FROM files
+    WHERE channel_id IN ${transaction(channelIds)} AND local_path IS NOT NULL
+  `;
+  for (const [table, purge] of Object.entries(unlinkPurge)) {
+    if (typeof purge === "string") continue;
+    if ("link" in purge) {
+      await transaction`
+        DELETE FROM ${transaction(table)} WHERE ${transaction(purge.link)} = ${link.id}
+      `;
+    } else {
+      await transaction`
+        DELETE FROM ${transaction(table)}
+        WHERE ${transaction(purge.channel)} IN ${transaction(channelIds)}
+      `;
+    }
+  }
+  return copies.flatMap((copy) => (copy.local_path === null ? [] : [copy.local_path]));
+}
+
 /**
  * Deletes every table `purges` marks, in order, and returns the local copies of the files it
  * forgot. It never touches SQLite's own tables, so numbers keep counting from where they were.
