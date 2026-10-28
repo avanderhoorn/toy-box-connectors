@@ -8,7 +8,7 @@ import { openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { APPROVE_ACTION_ID, type Approval } from "@links/model/approvals";
 import type { SetupRequest } from "@links/model/setup";
-import { recordCardPosted } from "@links/server/approvals";
+import { recordCardPosted, takeClick } from "@links/server/approvals";
 import { createFactsReader } from "@links/server/facts";
 import { changeSetup } from "@links/server/setup";
 import { createStoredLink } from "@links/server/testFixtures";
@@ -117,7 +117,13 @@ async function withDatabase<T>(dataFolder: string, use: (database: BridgeDatabas
 async function approve(slack: FakeSlack, approval: Approval) {
   // Slack says hello as a connection opens, so the click reaches the bridge after it.
   await waitFor(() => expect(slack.activeConnections).toBe(1), 5_000);
-  const click = slack.sendInteraction({
+  const click = slack.sendInteraction(approveClick(approval));
+  expect(await slack.waitForAck(click.envelopeId, 5_000)).not.toBeNull();
+}
+
+/** The owner's click on Approve on `approval`'s card. */
+function approveClick(approval: Approval) {
+  return {
     type: "block_actions",
     api_app_id: "A-app",
     team: { id: "T-home", domain: "home" },
@@ -138,8 +144,7 @@ async function approve(slack: FakeSlack, approval: Approval) {
         action_ts: "1000.900000",
       },
     ],
-  });
-  expect(await slack.waitForAck(click.envelopeId, 5_000)).not.toBeNull();
+  };
 }
 
 test("a link the owner approves on a running bridge is applied, followed, and its lead woken", async () => {
@@ -229,5 +234,40 @@ test("Slack rejecting the bot token while a change is checked has the bridge con
         (sql) => sql`SELECT channel_id FROM coverage WHERE reason = 'auth_failed'`,
       ),
     ).toEqual([{ channel_id: "C-link" }]);
+  });
+}, 15_000);
+
+test("an approval waits while the bridge can't reach Slack, and applies once it connects", async () => {
+  const { toyBox, slack, home, dataFolder, env, propose } = await ownedChannel({ linked: true });
+  const approval = await propose({ action: "allow", userIds: ["U-carol"] });
+  await withDatabase(dataFolder, (database) =>
+    database.write((transaction) => takeClick(transaction, approveClick(approval), Date.now())),
+  );
+  // Slack fails the bridge's first connection, and the bridge asks again a second later.
+  slack.failNext("apps.connections.open", { error: "internal_error" });
+  const bridge = spawnBridge(home, {
+    ...env,
+    TOY_BOX_SLACK_WAKE_TIMINGS: JSON.stringify({ retry: 1_000 }),
+  });
+  await bridge.running();
+
+  await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
+  bridge.child.kill("SIGTERM");
+  expect(await bridge.exit()).toEqual({
+    code: 0,
+    stderr:
+      `toy-box-slack is running for ${dataFolder}\n` +
+      "Can't connect to Slack. Slack refused apps.connections.open with internal_error.\n" +
+      "Connected to Slack.\n" +
+      "toy-box-slack is stopping after SIGTERM\n",
+  });
+  const connectedAt = slack.connections[0]!.openedAt;
+  await withDatabase(dataFolder, async (database) => {
+    const [applied] = await database.read((sql) => sql`SELECT state, applied_at FROM approvals`);
+    expect(applied.state).toBe("applied");
+    expect(applied.applied_at).toBeGreaterThanOrEqual(connectedAt);
+    expect(await database.read((sql) => sql`SELECT user_id FROM allowlist`)).toEqual([
+      { user_id: "U-carol" },
+    ]);
   });
 }, 15_000);
