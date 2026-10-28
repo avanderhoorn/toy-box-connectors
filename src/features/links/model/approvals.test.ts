@@ -24,52 +24,13 @@ import {
   reverses,
   settingsPatch,
   staleApproval,
-  type Approval,
   type ApprovalClick,
+  type ClickInstallation,
   type CurrentFacts,
   type LinkSettings,
   type ProposalFacts,
 } from "./approvals";
-import type { Audience } from "./audience";
-
-const audience: Audience = {
-  channelId: "C-link",
-  kind: "private",
-  external: false,
-  orgShared: false,
-  enterpriseId: null,
-  workspaces: ["T-home"],
-};
-
-/** A pending proposal to allow U-carol on the link, its card posted in C-link at 1000.000100. */
-function approval(changes: Partial<Approval> = {}): Approval {
-  return {
-    id: "approval-1",
-    number: 1,
-    toyboxChannelId: "toybox-link",
-    linkId: "link",
-    action: "allow",
-    patch: [{ field: "allowlist.U-carol", after: { label: null } }],
-    readSet: {
-      ownerUserId: "U-owner",
-      link: { id: "link", status: "active", statusReason: null },
-      monitored: audience,
-      publish: audience,
-      before: { "allowlist.U-carol": null },
-    },
-    card: { channelId: "C-link", ts: "1000.000100" },
-    state: "pending",
-    staleReason: null,
-    appliedAt: null,
-    decidedBy: null,
-    decidedAt: null,
-    reportedAt: null,
-    createdBy: "lead",
-    createdAt: 0,
-    expiresAt: APPROVAL_LIFETIME_MS,
-    ...changes,
-  } as Approval;
-}
+import { pendingApproval, privateAudience } from "./testFixtures";
 
 describe("approval states", () => {
   test("pending waits for the owner and approved waits for apply, and nothing else moves", () => {
@@ -84,10 +45,10 @@ describe("approval states", () => {
   });
 
   test("an open approval can go stale with a reason, and keeps whatever the owner decided", () => {
-    expect(staleApproval(approval(), "reversed")).toEqual(
-      approval({ state: "stale", staleReason: "reversed" }),
+    expect(staleApproval(pendingApproval(), "reversed")).toEqual(
+      pendingApproval({ state: "stale", staleReason: "reversed" }),
     );
-    const approved = approval({ state: "approved", decidedBy: "U-owner", decidedAt: 5 });
+    const approved = pendingApproval({ state: "approved", decidedBy: "U-owner", decidedAt: 5 });
     expect(staleApproval(approved, "audience_changed")).toEqual({
       ...approved,
       state: "stale",
@@ -96,13 +57,13 @@ describe("approval states", () => {
   });
 
   test("only an approved approval applies", () => {
-    const approved = approval({ state: "approved", decidedBy: "U-owner", decidedAt: 5 });
+    const approved = pendingApproval({ state: "approved", decidedBy: "U-owner", decidedAt: 5 });
     expect(applyApproval(approved, 9)).toEqual({ ...approved, state: "applied", appliedAt: 9 });
-    expect(() => applyApproval(approval(), 9)).toThrow(ApprovalStateError);
+    expect(() => applyApproval(pendingApproval(), 9)).toThrow(ApprovalStateError);
   });
 
   test("a closed approval can't change again", () => {
-    const applied = approval({
+    const applied = pendingApproval({
       state: "applied",
       decidedBy: "U-owner",
       decidedAt: 5,
@@ -114,36 +75,41 @@ describe("approval states", () => {
   });
 
   test("the timer expires a pending approval without deciding it", () => {
-    expect(expireApproval(approval(), APPROVAL_LIFETIME_MS)).toEqual(
-      approval({ state: "expired" }),
+    expect(expireApproval(pendingApproval(), APPROVAL_LIFETIME_MS)).toEqual(
+      pendingApproval({ state: "expired" }),
     );
-    expect(() => expireApproval(approval(), APPROVAL_LIFETIME_MS - 1)).toThrow(RangeError);
+    expect(() => expireApproval(pendingApproval(), APPROVAL_LIFETIME_MS - 1)).toThrow(RangeError);
   });
 });
 
 describe("deciding a click", () => {
-  const installation = { appId: "A-app", teamId: "T-home", ownerUserId: "U-owner" };
+  const installation: ClickInstallation = {
+    appId: "A-app",
+    teamId: "T-home",
+    ownerUserId: "U-owner",
+    status: "active",
+  };
   const click: ApprovalClick = {
     appId: "A-app",
     teamId: "T-home",
     userId: "U-owner",
     actions: [{ actionId: APPROVE_ACTION_ID, value: "approval-1" }],
-    container: { channelId: "C-link", messageTs: "1000.000100" },
+    message: { channelId: "C-link", ts: "1000.000100" },
   };
   const at = 60_000;
 
   test("the owner's Approve approves the card, recording who decided and when", () => {
-    expect(decide(click, installation, approval(), at)).toEqual({
+    expect(decide(click, installation, pendingApproval(), at)).toEqual({
       kind: "settled",
-      approval: approval({ state: "approved", decidedBy: "U-owner", decidedAt: at }),
+      approval: pendingApproval({ state: "approved", decidedBy: "U-owner", decidedAt: at }),
     });
   });
 
   test("the owner's Reject rejects it", () => {
     const reject = { ...click, actions: [{ actionId: REJECT_ACTION_ID, value: "approval-1" }] };
-    expect(decide(reject, installation, approval(), at)).toEqual({
+    expect(decide(reject, installation, pendingApproval(), at)).toEqual({
       kind: "settled",
-      approval: approval({ state: "rejected", decidedBy: "U-owner", decidedAt: at }),
+      approval: pendingApproval({ state: "rejected", decidedBy: "U-owner", decidedAt: at }),
     });
   });
 
@@ -157,9 +123,25 @@ describe("deciding a click", () => {
 
   test("a click for another app or team, or for an org-wide install, is ignored", () => {
     for (const other of [{ appId: "A-other" }, { teamId: "T-other" }, { teamId: null }]) {
-      expect(decide({ ...click, ...other }, installation, approval(), at)).toEqual({
+      expect(decide({ ...click, ...other }, installation, pendingApproval(), at)).toEqual({
         kind: "ignored",
         reason: "wrong_app",
+      });
+    }
+  });
+
+  test("with no installation, no click is the app's", () => {
+    expect(decide(click, null, pendingApproval(), at)).toEqual({
+      kind: "ignored",
+      reason: "wrong_app",
+    });
+  });
+
+  test("while Slack rejects the tokens or the app is gone, no click is decided", () => {
+    for (const status of ["auth_failed", "uninstalled"] as const) {
+      expect(decide(click, { ...installation, status }, pendingApproval(), at)).toEqual({
+        kind: "ignored",
+        reason: "not_connected",
       });
     }
   });
@@ -171,7 +153,7 @@ describe("deciding a click", () => {
       [{ actionId: "approval.maybe", value: "approval-1" }],
     ];
     for (const clicked of actions) {
-      expect(decide({ ...click, actions: clicked }, installation, approval(), at)).toEqual({
+      expect(decide({ ...click, actions: clicked }, installation, pendingApproval(), at)).toEqual({
         kind: "ignored",
         reason: "unknown_action",
       });
@@ -180,12 +162,14 @@ describe("deciding a click", () => {
 
   test("a click on anything but the approval's own card is ignored", () => {
     const elsewhere = [
-      { container: { channelId: "C-other", messageTs: "1000.000100" } },
-      { container: { channelId: "C-link", messageTs: "1000.000200" } },
+      { message: { channelId: "C-other", ts: "1000.000100" } },
+      { message: { channelId: "C-link", ts: "1000.000200" } },
+      { message: null },
       { actions: [{ actionId: APPROVE_ACTION_ID, value: "approval-2" }] },
+      { actions: [{ actionId: APPROVE_ACTION_ID, value: null }] },
     ];
     for (const changes of elsewhere) {
-      expect(decide({ ...click, ...changes }, installation, approval(), at)).toEqual({
+      expect(decide({ ...click, ...changes }, installation, pendingApproval(), at)).toEqual({
         kind: "ignored",
         reason: "unknown_card",
       });
@@ -194,7 +178,7 @@ describe("deciding a click", () => {
       kind: "ignored",
       reason: "unknown_card",
     });
-    const unposted = approval({ card: { channelId: "C-link", ts: null } });
+    const unposted = pendingApproval({ card: { channelId: "C-link", ts: null } });
     expect(decide(click, installation, unposted, at)).toEqual({
       kind: "ignored",
       reason: "unknown_card",
@@ -202,7 +186,7 @@ describe("deciding a click", () => {
   });
 
   test("a stranger's click changes nothing, so the card stays pending", () => {
-    expect(decide({ ...click, userId: "U-mallory" }, installation, approval(), at)).toEqual({
+    expect(decide({ ...click, userId: "U-mallory" }, installation, pendingApproval(), at)).toEqual({
       kind: "ignored",
       reason: "not_owner",
     });
@@ -210,47 +194,53 @@ describe("deciding a click", () => {
 
   test("only the owner the card asked can decide it, even after a handoff", () => {
     const handedOff = { ...installation, ownerUserId: "U-next" };
-    expect(decide({ ...click, userId: "U-next" }, handedOff, approval(), at)).toEqual({
+    expect(decide({ ...click, userId: "U-next" }, handedOff, pendingApproval(), at)).toEqual({
       kind: "ignored",
       reason: "not_owner",
     });
-    expect(decide(click, handedOff, approval(), at)).toEqual({
+    expect(decide(click, handedOff, pendingApproval(), at)).toEqual({
       kind: "ignored",
       reason: "not_owner",
     });
-    expect(decide(click, { ...installation, ownerUserId: null }, approval(), at)).toEqual({
+    expect(decide(click, { ...installation, ownerUserId: null }, pendingApproval(), at)).toEqual({
       kind: "ignored",
       reason: "not_owner",
     });
   });
 
-  test("a repeated or redelivered click on a decided card does nothing", () => {
+  test("the owner's repeated or redelivered click on a decided card does nothing", () => {
     for (const state of ["approved", "applied", "rejected", "expired", "stale"] as const) {
-      const decided = approval({ state, decidedBy: "U-owner", decidedAt: 1 });
+      const decided = pendingApproval({ state, decidedBy: "U-owner", decidedAt: 1 });
       expect(decide(click, installation, decided, at)).toEqual({ kind: "unchanged" });
       expect(decide({ ...click, userId: "U-mallory" }, installation, decided, at)).toEqual({
-        kind: "unchanged",
+        kind: "ignored",
+        reason: "not_owner",
       });
     }
   });
 
   test("the owner's click after the hour expires the card, so the lead hears the outcome", () => {
-    expect(decide(click, installation, approval(), APPROVAL_LIFETIME_MS)).toEqual({
+    expect(decide(click, installation, pendingApproval(), APPROVAL_LIFETIME_MS)).toEqual({
       kind: "settled",
-      approval: approval({
+      approval: pendingApproval({
         state: "expired",
         decidedBy: "U-owner",
         decidedAt: APPROVAL_LIFETIME_MS,
       }),
     });
     expect(
-      decide({ ...click, userId: "U-mallory" }, installation, approval(), APPROVAL_LIFETIME_MS),
+      decide(
+        { ...click, userId: "U-mallory" },
+        installation,
+        pendingApproval(),
+        APPROVAL_LIFETIME_MS,
+      ),
     ).toEqual({ kind: "ignored", reason: "not_owner" });
   });
 });
 
 describe("whether a read-set still holds", () => {
-  const readSet = approval().readSet;
+  const readSet = pendingApproval().readSet;
   const current: CurrentFacts = {
     home: { teamId: "T-home" },
     ownerUserId: "U-owner",
@@ -320,10 +310,13 @@ describe("whether a read-set still holds", () => {
 });
 
 describe("whether a change can apply", () => {
-  const allow = approval();
-  const link = approval({ action: "link", linkId: null });
-  const resume = approval({ action: "resume", patch: [{ field: "status", after: "active" }] });
-  const move = approval({
+  const allow = pendingApproval();
+  const link = pendingApproval({ action: "link", linkId: null });
+  const resume = pendingApproval({
+    action: "resume",
+    patch: [{ field: "status", after: "active" }],
+  });
+  const move = pendingApproval({
     action: "set",
     patch: [{ field: "publish_channel_id", after: "C-releases" }],
   });
@@ -336,7 +329,7 @@ describe("whether a change can apply", () => {
     home: { teamId: "T-home", enterpriseId: null },
     monitored: channelFacts(),
     publish: channelFacts(),
-    approved: { monitored: audience, publish: audience },
+    approved: { monitored: privateAudience(), publish: privateAudience() },
     ownerInMonitored: true,
     ownerInPublish: true,
     provider: "copilot",
@@ -456,11 +449,11 @@ describe("whether a change can apply", () => {
 });
 
 describe("narrowing changes", () => {
-  const resume = approval({
+  const resume = pendingApproval({
     action: "resume",
     patch: [{ field: "status", after: "active" }],
   });
-  const widen = approval({
+  const widen = pendingApproval({
     action: "set",
     patch: [
       { field: "request_mode", after: "all" },
@@ -469,14 +462,20 @@ describe("narrowing changes", () => {
   });
 
   test("deny voids allowing that person on that link, and nobody else", () => {
-    expect(reverses({ kind: "deny", linkId: "link", userId: "U-carol" }, approval())).toBe(true);
-    expect(reverses({ kind: "deny", linkId: "link", userId: "U-dave" }, approval())).toBe(false);
-    expect(reverses({ kind: "deny", linkId: "link-2", userId: "U-carol" }, approval())).toBe(false);
+    expect(reverses({ kind: "deny", linkId: "link", userId: "U-carol" }, pendingApproval())).toBe(
+      true,
+    );
+    expect(reverses({ kind: "deny", linkId: "link", userId: "U-dave" }, pendingApproval())).toBe(
+      false,
+    );
+    expect(reverses({ kind: "deny", linkId: "link-2", userId: "U-carol" }, pendingApproval())).toBe(
+      false,
+    );
   });
 
   test("pause voids resume", () => {
     expect(reverses({ kind: "pause", linkId: "link" }, resume)).toBe(true);
-    expect(reverses({ kind: "pause", linkId: "link" }, approval())).toBe(false);
+    expect(reverses({ kind: "pause", linkId: "link" }, pendingApproval())).toBe(false);
   });
 
   test("a narrowing set voids any card that changes one of its fields", () => {
@@ -487,7 +486,7 @@ describe("narrowing changes", () => {
   });
 
   test("unlink voids every card for the link, and a handoff every card at all", () => {
-    for (const card of [approval(), resume, widen]) {
+    for (const card of [pendingApproval(), resume, widen]) {
       expect(reverses({ kind: "unlink", linkId: "link" }, card)).toBe(true);
       expect(reverses({ kind: "unlink", linkId: "link-2" }, card)).toBe(false);
       expect(reverses({ kind: "owner" }, { ...card, linkId: "link-2" })).toBe(true);
@@ -497,11 +496,11 @@ describe("narrowing changes", () => {
   test("an approved card is voided too, but a closed one stays as it is", () => {
     const deny = { kind: "deny", linkId: "link", userId: "U-carol" } as const;
     expect(
-      reverses(deny, approval({ state: "approved", decidedBy: "U-owner", decidedAt: 1 })),
+      reverses(deny, pendingApproval({ state: "approved", decidedBy: "U-owner", decidedAt: 1 })),
     ).toBe(true);
     for (const state of ["applied", "rejected", "expired", "stale"] as const) {
-      expect(reverses(deny, approval({ state }))).toBe(false);
-      expect(reverses({ kind: "owner" }, approval({ state }))).toBe(false);
+      expect(reverses(deny, pendingApproval({ state }))).toBe(false);
+      expect(reverses({ kind: "owner" }, pendingApproval({ state }))).toBe(false);
     }
   });
 });
@@ -558,16 +557,18 @@ describe("proposing a change", () => {
     ],
   };
   const pending = (number: number, patch = draft.patch) =>
-    approval({ id: `approval-${number}`, number, action: "set", patch });
+    pendingApproval({ id: `approval-${number}`, number, action: "set", patch });
 
   test("a new change with room under the limits can be proposed", () => {
     expect(checkProposal(draft, [], 0)).toEqual({ kind: "new" });
-    expect(checkProposal(draft, [approval()], MAX_CREATED_PER_HOUR - 1)).toEqual({ kind: "new" });
+    expect(checkProposal(draft, [pendingApproval()], MAX_CREATED_PER_HOUR - 1)).toEqual({
+      kind: "new",
+    });
   });
 
   test("proposing the same change again returns the open one, whatever the patch order", () => {
     const open = pending(4, draft.patch.toReversed());
-    expect(checkProposal(draft, [approval(), open], 0)).toEqual({
+    expect(checkProposal(draft, [pendingApproval(), open], 0)).toEqual({
       kind: "existing",
       approval: open,
     });
@@ -586,7 +587,7 @@ describe("proposing a change", () => {
 
   test("a fourth pending approval is refused, while approved ones don't count", () => {
     const others = [1, 2, 3].map((number) =>
-      approval({ id: `approval-${number}`, number, patch: [] }),
+      pendingApproval({ id: `approval-${number}`, number, patch: [] }),
     );
     expect(checkProposal(draft, others.slice(0, MAX_PENDING), 0)).toEqual({
       kind: "refused",

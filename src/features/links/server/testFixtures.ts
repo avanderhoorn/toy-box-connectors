@@ -1,4 +1,7 @@
 import type { BridgeDatabase } from "@bridge/server/database";
+import type { Approval } from "@links/model/approvals";
+import { pendingApproval } from "@links/model/testFixtures";
+import { approvalColumns } from "./approvals";
 
 /**
  * Persist an active Link fixture so rows that belong to a Link can be stored. `columns` replace
@@ -29,4 +32,19 @@ export function createStoredLink(
     ...columns,
   };
   return database.write((transaction) => transaction`INSERT INTO links ${transaction(link)}`);
+}
+
+/**
+ * Persist a pending proposal to allow U-carol on `link`, asked of U-owner, whose card is posted in
+ * C-link at 1000.000100. `changes` replace its fields.
+ */
+export async function createStoredApproval(
+  database: BridgeDatabase,
+  changes: Partial<Approval> = {},
+): Promise<Approval> {
+  const approval = pendingApproval(changes);
+  await database.write(
+    (transaction) => transaction`INSERT INTO approvals ${transaction(approvalColumns(approval))}`,
+  );
+  return approval;
 }

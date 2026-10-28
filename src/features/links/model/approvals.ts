@@ -9,6 +9,7 @@
 
 import type { ChannelFacts } from "@slackapi/model/channels";
 import type { Installation } from "@slackapi/model/installation";
+import type { BlockActions } from "@slackapi/model/interactions";
 import type { SlackTs } from "@slackapi/model/ts";
 import type { SlackPerson } from "@slackapi/model/users";
 import type { RoutineState } from "@toybox/model";
@@ -203,28 +204,29 @@ export function touches(approval: Pick<Approval, "patch">, field: PatchField): b
 
 // A click.
 
-/** A click on a card's button, as the receiver reads a block_actions payload. */
-export type ApprovalClick = {
-  appId: string;
-  /** The workspace the app is installed in, which Slack leaves null for an org-wide install. */
-  teamId: string | null;
-  /** Who clicked, mapped to the person their ID is an alias for. */
-  userId: string;
-  actions: readonly { actionId: string; value: string }[];
-  container: { channelId: string; messageTs: SlackTs };
-};
+/** A click on a card's button, with who clicked mapped to the person their ID is an alias for. */
+export type ApprovalClick = BlockActions;
 
 /** The installation a click is checked against, read in the click's transaction. */
-export type ClickInstallation = { appId: string; teamId: string; ownerUserId: string | null };
+export type ClickInstallation = Pick<Installation, "appId" | "teamId" | "ownerUserId" | "status">;
 
-export type IgnoredClick = "wrong_app" | "unknown_action" | "unknown_card" | "not_owner";
+export type IgnoredClick =
+  | "wrong_app"
+  /** Slack rejected the tokens, so nothing is decided until the bridge has rechecked who it is. */
+  | "not_connected"
+  | "unknown_action"
+  | "unknown_card"
+  | "not_owner";
+
+/** What the owner's click makes of a pending approval: their decision, or expired when it came too late. */
+export type ClickedState = "approved" | "rejected" | "expired";
 
 export type ClickDecision =
   | { kind: "ignored"; reason: IgnoredClick }
-  /** The approval was decided already, so a repeated or redelivered click does nothing. */
+  /** The owner's click on an approval decided already, so a repeated or redelivered click does nothing. */
   | { kind: "unchanged" }
-  /** The approval as the click settles it: approved, rejected, or expired when it came too late. */
-  | { kind: "settled"; approval: Approval };
+  /** The approval as the click settles it. */
+  | { kind: "settled"; approval: Approval & { state: ClickedState } };
 
 /** The approval ID a click names, which the receiver looks up before deciding. */
 export function clickedApprovalId(click: ApprovalClick): string | null {
@@ -234,17 +236,20 @@ export function clickedApprovalId(click: ApprovalClick): string | null {
 /**
  * Decides a click from stored facts alone, before Slack is acked. Only the pinned owner, who is
  * also the owner the card asked, can decide, and only a pending card on its own message. A
- * stranger's click changes nothing, so the card stays pending.
+ * stranger's click changes nothing, so the card stays pending, and it's a stranger's click whatever
+ * state the card is in. With no installation, no click is the app's, and while the installation
+ * isn't active, no click is decided.
  */
 export function decide(
   click: ApprovalClick,
-  installation: ClickInstallation,
+  installation: ClickInstallation | null,
   approval: Approval | null,
   now: number,
 ): ClickDecision {
-  if (click.appId !== installation.appId || click.teamId !== installation.teamId) {
+  if (!installation || click.appId !== installation.appId || click.teamId !== installation.teamId) {
     return ignored("wrong_app");
   }
+  if (installation.status !== "active") return ignored("not_connected");
   if (click.actions.length !== 1) return ignored("unknown_action");
   const [action] = click.actions;
   if (action!.actionId !== APPROVE_ACTION_ID && action!.actionId !== REJECT_ACTION_ID) {
@@ -254,12 +259,11 @@ export function decide(
     !approval ||
     approval.id !== action!.value ||
     approval.card.ts === null ||
-    approval.card.channelId !== click.container.channelId ||
-    approval.card.ts !== click.container.messageTs
+    approval.card.channelId !== click.message?.channelId ||
+    approval.card.ts !== click.message.ts
   ) {
     return ignored("unknown_card");
   }
-  if (approval.state !== "pending") return { kind: "unchanged" };
   if (
     installation.ownerUserId === null ||
     click.userId !== installation.ownerUserId ||
@@ -267,6 +271,7 @@ export function decide(
   ) {
     return ignored("not_owner");
   }
+  if (approval.state !== "pending") return { kind: "unchanged" };
   if (now >= approval.expiresAt) {
     return { kind: "settled", approval: expireApproval(approval, now, click.userId) };
   }
@@ -285,7 +290,7 @@ export function expireApproval(
   approval: Approval,
   now: number,
   decidedBy: string | null = null,
-): Approval {
+): Approval & { state: "expired" } {
   if (now < approval.expiresAt) {
     throw new RangeError(`Approval ${approval.id} expires at ${approval.expiresAt}, not ${now}`);
   }
@@ -557,7 +562,11 @@ function samePatch(left: readonly PatchEntry[], right: readonly PatchEntry[]): b
   return Bun.deepEquals(sorted(left), sorted(right), true);
 }
 
-function move(approval: Approval, to: ApprovalState, changes: Partial<Approval>): Approval {
+function move<To extends ApprovalState>(
+  approval: Approval,
+  to: To,
+  changes: Partial<Approval>,
+): Approval & { state: To } {
   if (!canMove(approval.state, to)) throw new ApprovalStateError(approval.state, to);
   return { ...approval, ...changes, state: to };
 }
