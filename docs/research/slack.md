@@ -33,11 +33,12 @@ Socket Mode and message delivery contracts:
 [replies](https://docs.slack.dev/reference/methods/conversations.replies/),
 [posting](https://docs.slack.dev/reference/methods/chat.postMessage/).
 
-## App manifest, ready for a private test app
+## App manifest, adopted v1
 
 This is the recommended first manifest for public and private channel monitoring,
-threaded answers, daily/weekly publications, inbound files, and outbound report
-files. It deliberately omits DMs, agent-container features, impersonation,
+threaded answers, daily/weekly publications, inbound files, and owner-approval
+buttons. The canonical installable file is [`../manifest.yaml`](../manifest.yaml).
+V1 omits outbound uploads, DMs, agent-container features, impersonation,
 workspace administration, automatic channel joining, and Slack-side configuration
 commands. All message monitoring already exposes mentions, so a separate
 `app_mention` subscription is unnecessary.
@@ -68,10 +69,11 @@ oauth_config:
       - chat:write
       - metadata.message:read
       - files:read
-      - files:write
       - reactions:write
 settings:
   socket_mode_enabled: true
+  interactivity:
+    is_enabled: true
   org_deploy_enabled: false
   token_rotation_enabled: false
   event_subscriptions:
@@ -102,7 +104,6 @@ settings:
 | `chat:write` | Post threaded answers and publications, and update/delete the app's own messages. |
 | `metadata.message:read` | Read correlation metadata when reconciling an uncertain outbound post. |
 | `files:read` | Read files shared in authorized monitored channels and process deletion notifications. |
-| `files:write` | Upload explicitly published reports/images through the current external-upload flow. |
 | `reactions:write` | Optional acceptance/completion indicators on requests. Remove if not implemented. |
 
 Create a separate **app-level token** with `connections:write` under Basic
@@ -1335,8 +1336,8 @@ Merge this fragment into `settings`, rather than replacing the other settings
 in the app manifest. Interactive clicks arrive as Socket Mode `type:
 "interactive"` envelopes with a `block_actions` payload. They do not have an
 Events API `event_id`, so must not be sent through a parser that requires one.
-The current top-of-document manifest remains the previously finalized
-non-interactive baseline until the lead adopts this follow-up.
+The lead adopted this follow-up in the revised brief and `docs/manifest.yaml`.
+The top-of-document manifest is now synchronized to that nine-scope v1.
 [Manifest fields](https://docs.slack.dev/reference/app-manifest/#settings),
 [Socket Mode interactive envelopes](https://docs.slack.dev/apis/events-api/using-socket-mode/#button).
 
@@ -1391,3 +1392,122 @@ card and click, crash before/after decision commit, reconnect redelivery,
 ephemeral nondelivery if that presentation is chosen, and rejection of a
 local-RPC approval attempt. Live verification must confirm the new interactivity
 setting in the actual workspace before claiming the owner gate is operational.
+
+## Revised-brief follow-up, 2026-10-28
+
+Review requested in channel message 30. The changes to durable commits,
+confirmation-based answering, request input revisions, sharing flags,
+installation identity, authentication failure, scoped recovery and status
+handling landed substantially as intended. `docs/manifest.yaml` has the correct
+nine bot scopes and fourteen event subscriptions, enables Socket Mode
+interactivity without a request URL, disables the Messages tab, and excludes
+`files:write`, `assistant:write` and `reactions:read`. The research manifest
+above is synchronized to it. Slack's server-side validation and live acceptance
+remain pending.
+
+### F1. Field-level staleness is reasonable, but needs full dependencies
+
+**Targets:** `px-approval`, `fx-click-stale`, `s8`.
+
+I support avoiding a global configuration revision that invalidates unrelated
+proposals. A compare-and-swap on just the changed field values is insufficient,
+however. For example, an owner sees a resume card for a bot-removal suspension;
+before the click, the private channel becomes public. The link still says
+`suspended`, and general revalidation still permits a public channel, so the
+old card can approve a wider audience that it never showed.
+
+**Fix:** keep an immutable, scoped proposal read-set: its exact link identity,
+write-field before values, pinned owner, monitored/publish destinations,
+audience fingerprint, suspension reason, and other validation dependencies.
+At application, compare these, revalidate, and apply **only the displayed
+patch** atomically. An unrelated label change need not stale the proposal.
+An audience/identity/lifecycle change must. Explicit pause/deny/unlink should
+invalidate pending proposals that would reverse that action, even if the
+value happens to equal the card's original before value. This covers the
+false-to-true-to-false, or ABA, case without a global counter.
+
+Reject any action ID except the two exact registered Approve/Reject actions.
+The current pseudocode treats every non-`reject` action as approval. This is
+unnecessary implicit permission and should be a strict typed union with tests.
+[Slack action identity fields](https://docs.slack.dev/reference/interaction-payloads/block_actions-payload/#fields).
+
+Do not perform Slack/Toy Box network validation inside the serial transaction
+before the ack. If fresh validation is needed, durably record the owner's
+decision, ack, asynchronously validate, then atomically compare/apply or mark
+stale. Alternatively apply immediately only with already valid local evidence.
+Neither path should hold the whole database queue behind remote API latency.
+[Interaction acknowledgement budget](https://docs.slack.dev/interactivity/handling-user-interaction/#acknowledgment_response).
+
+### F2. Reset is still a normal-service route around the pinned owner
+
+**Targets:** `px-claim`, `px-cli`, `trust`, `fx-owner-gone`.
+
+`reset --yes` is operator-only, but the brief correctly states that unsetting
+`COPILOT_AGENT_SESSION_ID` becomes the operator. A steered lead can therefore
+use the intact bridge's normal interface to clear the owner and reopen claim,
+after which a different Slack person can claim. This is distinct from the
+acknowledged residual risk of directly modifying bridge files or its process.
+
+**Fix:** do not expose owner-clearing reset through the running bridge's RPC.
+Retain owner transfer through approval by the old owner. Treat recovery without
+that owner as explicit **offline destructive reprovisioning**, with the service
+stopped, the exclusive lock held, a warning about lost configuration and a fresh
+claim. Document that same-UID code can still stop/tamper with the service, which
+remains outside the intact-service authorization guarantee. Test that changing
+caller environment cannot clear the running installation's pinned owner.
+
+### F3. The shared served_rev does not bind an answer to its read
+
+**Targets:** `px-data.requests`, `px-cli`, `px-lifecycle`, `fx-stale-answer`, `s6`.
+
+The revised design records `served_rev` when `inbox` or `thread` shows a
+revision. `thread` is also available to members and the operator. If the lead
+reads revision 1, revision 2 arrives, and a member reads the thread, the shared
+`served_rev` becomes 2. A stale answer composed from revision 1 then passes a
+`served_rev === input_rev` check. Even restricting that marker to the lead
+would not bind concurrent/in-flight reply calls to a particular read.
+
+**Fix:** return an immutable revision or read token to the lead and require it
+on the mutation, for example `reply r14 --revision 2`. The outbox copies that
+exact revision and compares it against current `input_rev` at enqueue and send.
+Keep `served_rev` for attention/presentation if useful, not as the authority for
+which content a particular answer consumed. Add the lead-read/edit/member-read/
+stale-reply interleaving to the integration test.
+
+### F4. Claim runs before the human-message guard
+
+**Targets:** `px-claim`, `px-classify`, `s8`.
+
+Claim is intercepted before normalization, while normalization is where the
+brief establishes human eligibility. Its own contract must explicitly check
+the authenticated installation/app, a real current-workspace human author,
+exact bot mention and claim syntax, and absence of bot/app/self identity.
+Do not claim ownership from an edit, backfill, broadcast copy or bot-generated
+message that merely contains the code. Permit only one live code, consume it
+atomically with the owner pin, and keep the five-attempt limit installation-wide
+for that code.
+
+A claim posted in an ordinary public channel is a bearer code visible to other
+members. Do not rely on Socket Mode arrival order to prove who first supplied
+it. For deterministic bootstrap, have the human provision the expected member
+ID alongside generating the code, or require a final terminal confirmation of
+the candidate Slack identity before pinning. This does not add a Slack scope,
+but the bootstrap UI must be explicit about its local-trust assumption. A code
+alone is proof of code possession, not proof of being the intended local owner.
+[Socket Mode distribution has no promised order](https://docs.slack.dev/apis/events-api/using-socket-mode/#connections),
+[message actor and optional subtype fields](https://docs.slack.dev/reference/events/message/).
+
+### F5. Delivered resolution needs a concrete Slack message
+
+**Targets:** `px-cli`, `outbound`, `s6`.
+
+`resolve --delivered` currently accepts no message identifier. Merely declaring
+delivery cannot satisfy "answered only when Slack confirmed it" and leaves no
+canonical `slack_ts` for retraction or later reconciliation.
+
+**Fix:** require a message permalink or exact channel/`ts`, fetch it, and verify
+its app/bot ownership and intended channel/root. Store that evidence and actor.
+If metadata is absent, distinguish an operator-attested content match from
+cryptographic/correlation proof. Refuse a wrong message or a message the bridge
+cannot verify. `--drop` and explicit duplicate-risk `--resend --yes` remain
+separate actions.

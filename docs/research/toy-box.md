@@ -749,3 +749,115 @@ record and gives a concrete fix. Findings are ordered by severity.
 - Taking a replacement snapshot after Toy Box restarts.
 - Caller resolution by catalog lookup. Refetch the catalog once on an unknown session ID before
   refusing, because members can join after the catalog loads.
+
+## 8. Second review: the revised brief (lead's message 30)
+
+**My findings landed.** All of these are in the revised brief:
+- B1: owner approval in Slack, with the operator role framed as stopping mistakes rather than attacks.
+- B2: `f-wake-clears-waiting`, with the restore hint in inbox and the routines.
+- B3: Copilot only, with `blocked: provider`.
+- B4: `hold`.
+- B5: `f-routine-prompt` and the one-paragraph templates.
+- B6: the `lastInboxAt` guard.
+- B7: the harness unsets `COPILOT_AGENT_SESSION_ID`, and there's an s11 spike.
+- B8: the `slackapi` name, subsystem guides, oxlint, and port 3100.
+
+Here's what's still wrong or missing.
+
+### C1 (medium). The waiting-status restore only covers bridge-initiated runs. `px-wake` trailing comment, `px-routines`
+- **The gap.** `px-wake` says *"Before each run, record the lead's waiting status."* But Toy Box's own
+  scheduler also runs routines, and every routine wake clears waiting (`wakeChannelAgent`). That
+  includes the requests safety net (`0 9 * * 1-5`), the digest, and release notes. The bridge
+  doesn't start those runs, so it records nothing.
+- **The digest and release-notes templates promise something the CLI can't deliver.** They say *"if
+  you were waiting on something before this run"*, yet `activity` and `publications` don't print
+  the hint. Only `inbox` does in `px-inbox`.
+- **Fix:** have the Toy Box client keep the **last waiting status it saw** for each lead from
+  presence (`{state:"waiting", text, wakeAt?}`, `model/presence.ts`). When presence moves from
+  `waiting` to `working`, whatever the cause, freeze that as "waiting before this turn". Every
+  command's banner then carries the restore line until presence leaves `working`. That covers
+  scheduler runs, catch-ups, and approval wakes too.
+- **Wording.** Make it conditional: *"Before this turn you were waiting for X. If that's still true
+  when you finish…"*. A user message may have legitimately resolved the wait in this same turn.
+- **Validation.** `finish_agent_turn` rejects `wakeAfterMinutes` outside 5–120
+  (`server/tools.ts#finishChannelAgentTurnParameters`). Print `ceil((wakeAt − now) / 60s)`
+  clamped to [5, 120]. When the status had no `wakeAt`, which is normal when the lead waits on the
+  user, **omit** `wakeAfterMinutes`. The `px-inbox` example always prints `wakeAfterMinutes 25`.
+  Restoring a timeout when the lead was waiting on the user violates the lead prompt (*"Do not set
+  a timeout while waiting on the user"*).
+
+### C2 (low). `blocked: provider` can never clear. `px-wake`, outcome summary
+- The lead's provider is immutable. `updateChannelFields` throws *"The lead's provider cannot change
+  without losing its session history."* (`channels/server/database.ts:658-661`).
+- "Until the lead is back on Copilot" therefore never happens. Refuse at `link`, which the brief
+  already does. Keep the runtime branch as a defensive check, but word its status as permanent:
+  "this channel's lead isn't on Copilot. Create a Copilot channel and link that instead."
+
+### C3 (low). The inbox `--limit 10` interacts with the steer guard. `px-wake`, `px-cli`
+- **How it happens:** say 12 requests are open and inbox serves 10. The other 2 stay `open` with
+  `changedAt` older than `lastInboxAt`. While the lead works, the guard returns `wait lead_idle`,
+  which is correct. But nothing tells the lead to run inbox again, so they wait until the turn ends.
+- **Fix:** have inbox's footer say "2 more requests waiting. Run inbox again." The skill should
+  mirror `read_channel`'s "Repeat while hasMore is true."
+
+### C4 (medium). The s11 spike needs concrete auth and timing knobs. `s11`, `test-e2e`
+- **Auth (fact, `copilot help environment`).** `COPILOT_HOME` defaults to `$HOME/.copilot`.
+  `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` and `GITHUB_TOKEN`, in that order, *"take precedence over
+  previously stored credentials."* Bun's `os.homedir()` follows `$HOME` (verified:
+  `HOME=/tmp/hx bun -e …` prints `/tmp/hx`). So under a temp `HOME`, Copilot has no stored login.
+  The spike should test two approaches:
+  - (a) the macOS keychain login, which may not depend on `$HOME`. This is unverified.
+  - (b) `COPILOT_GITHUB_TOKEN` passed only through the harness's environment. Never write it to a file.
+
+  Record which one works in `tests/AGENTS.md`. Isolation is a side benefit: the user's real
+  `~/.copilot/session-state` stays untouched.
+- **PATH.** The spawned Toy Box must inherit a `PATH` that includes the `toy-box-slack` under test.
+  The agent's shell `PATH` comes from the server environment (`copilot/client.ts:28`).
+- **Timers.** "Gets a reminder after answering in Toy Box" waits 30 minutes under `dueReminder`.
+  The e2e suite needs the bridge's policy durations injected through config, for example
+  `reminderSeenMs`, the debounce window, and the backoff. Otherwise s11 takes about an hour. Don't
+  rely on Toy Box's routine cron in e2e, because it runs at most hourly with a fixed minute. Drive
+  wakes through `routines/:id/run` only.
+- **Nondeterminism.** A real model may phrase things differently or take an extra turn. Assert
+  durable outcomes in the bridge database and the fake Slack, not text. Poll with a deadline.
+  Cap retries at one rerun per scenario, and log the lead's transcript path on failure.
+- **The waiting-status scenario needs a setup step.** The lead has to be in `waiting` with a
+  `wakeAt` before the Slack wake. The harness can tell it as the owner: "wait for the bridge engineer
+  and check back in 30 minutes". That's model-dependent. Assert on presence after the turn rather
+  than on the lead's words.
+
+### On field-by-field approval staleness (the lead asked for pushback)
+- **I agree with field-by-field.** A global revision would void a pending `allow U` whenever an
+  unrelated `deny V` or `pause` lands, which trains the owner to click through re-proposals.
+- **Two refinements:**
+  1. Every card should carry an *implicit* "before": that the same link is still active and the same
+     owner is pinned. An ownership handoff (`owner <U>`) must void every pending card.
+  2. Invariants that come from outside the config must be re-checked **at apply time**, not
+     compared with the card. That covers the channel audience (private, shared, pending share), the
+     link not being suspended, the Copilot provider, and the requests routine existing. A card that
+     was valid when posted can't widen a link whose channel has since become shared.
+
+## 9. End-to-end isolation spike (lead, 2026-10-28)
+
+Run against the built binary `toy-box/toy-box` (Oct 27) on `127.0.0.1:3199` with `HOME` set to a fresh
+temporary folder. This settles the open auth question in B7 and C4.
+
+- **Agent shells leak `BUN_BE_BUN`, `NITRO_HOST` and `NITRO_PORT`.** With `BUN_BE_BUN` set, the compiled
+  binary behaves as plain Bun: `--help` prints Bun's help and `--host 127.0.0.1` fails with
+  *"File not found"*. The harness must unset all three, as well as `COPILOT_AGENT_SESSION_ID`.
+- **Stored login doesn't carry over.** Under the temporary `HOME`, `GET /api/v1/models` returned an empty
+  list and the server logged *"models.list failed with message: Not authenticated"*. The macOS keychain
+  login didn't help.
+- **`COPILOT_GITHUB_TOKEN` in the server's environment works.** Passing `gh auth token` output only
+  through the environment, never a file, listed every Copilot model.
+- **A lead ran in isolation.** `POST /api/v1/channels` created a channel without starting a turn. The
+  first user message did. With a skill written to the temporary `~/.copilot/skills` before the channel
+  existed, a `claude-sonnet-5` lead answered with the skill's secret word and its shell's
+  `COPILOT_AGENT_SESSION_ID`, which equaled the channel ID.
+- **A small model wasn't reliable.** A `claude-haiku-4.5` lead ran twice and both times called a channel
+  tool without its `content`, so it never posted. End-to-end tests should pin a stronger model.
+- **`GET /api/v1/channels/:id/messages` needs `?before=`.** Without it the server answers
+  *"Invalid Channel request."*
+- **A lead's shell has no terminal.** In this channel's own Copilot lead, `test -t 0` and `test -t 1`
+  both fail, so a command that insists on an interactive terminal can't be run by the lead by mistake.
+  A process that wants one can still fake it, for example with `script`.
