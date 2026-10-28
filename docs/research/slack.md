@@ -1032,3 +1032,362 @@ an implementation already handles them.
 5. Bridge-owned cursor, outbox, wake, cancellation and authorization tests
    integrated with Toy Box's actual contracts. Those seams are being studied in
    the separate Toy Box research document.
+
+## Architecture review, 2026-10-28
+
+Review of the architecture brief shared in channel message 20. The brief itself
+was not edited. These findings use its section/record IDs so the lead can fold
+in the changes. The local bridge, no transcript mirroring, explicit receiver
+adapter, method cooldowns, no-container channel status, and separate digest and
+request state are sound. The following contracts need correction before they
+become implementation requirements.
+
+### R1. Acknowledged input is not power-loss durable under NORMAL
+
+**Targets:** `px-data`, `startup`, `s2`, `fx-storage`.
+
+**Addressed:** the lead incorporated FULL, lock-before-open ordering, and pragma
+readback criteria in channel message 22. Retained here as review rationale.
+
+The database specifies WAL with `synchronous=NORMAL`. SQLite explicitly says
+this omits the per-commit WAL sync and can roll back committed transactions after
+power loss or hard reboot. If Slack already received the ack, both a request and
+the only durable record that a post was `sending` can disappear.
+
+**Fix:** use WAL plus `synchronous=FULL` for the bridge database, verify the
+effective pragmas, and distinguish an ordinary process crash from power-loss
+testing. Take the bridge lock before migrations or any other database writes,
+not afterward as the startup list currently orders it. Add a check that a second
+process cannot run a migration or change the file.
+[SQLite's exact durability tradeoff](https://www.sqlite.org/wal.html#performance_considerations).
+
+### R2. Edits can leave an obsolete answer queued for delivery
+
+**Targets:** `px-classify`, `px-lifecycle`, `px-data`, `outbound`,
+`fx-edited-request`, `s3`, `s6`.
+
+An edit marks a seen/in-progress request `updated`, but queued output has no
+source revision and the send check only rejects cancellation. An answer to the
+old request can still leave the outbox after the requester changed it. Grouping
+more messages into an existing request has the same race. A language-detection
+metadata event can also wake the lead despite no substantive change.
+
+**Fix:** give every request a monotonic input revision based on substantive
+content changes. `inbox` returns the revision the lead consumed, and reply intent
+records it. Refuse or invalidate a queued final answer whose revision is stale,
+surface `updated`, and require a new read before recomposition. Persist a
+content fingerprint so bookkeeping/language-only changes do not advance that
+revision. Deletion or removal of the request's required mention must invalidate
+uncommitted output even if the lead already saw it. This need not pretend it can
+undo work already performed.
+[Edit payload and language-only events](https://docs.slack.dev/reference/events/message/message_changed/).
+
+### R3. Queued is not answered, and a text hash is not an action key
+
+**Targets:** `px-lifecycle`, `fx-lead-repeats`, `px-data`, `slack-feedback`,
+`comp-scheduler`, `s6`.
+
+The lifecycle calls a request `answered` as soon as the outbox accepts its final
+reply. The feedback list then adds a checkmark although the post might remain
+rate-limited, fail, or become `delivery_unknown`. A hash-only duplicate check
+also permits the same logical final answer twice if a restarted lead changes
+one word. A sent publication becomes eligible again if it is retracted because
+the partial unique index excludes `retracted`.
+
+**Fix:** introduce pending-response/delivery state, or derive it from the outbox,
+and suppress redundant lead wakes while it is queued/sending/unknown. Move
+`answered` and its completion reaction only after a successful response or a
+positive metadata reconciliation. Unresolved delivery is visibly pending,
+never a request for the lead to draft another answer.
+
+Give each logical response a stable key such as `(request, consumed revision,
+phase)`, with a database uniqueness constraint. A follow-up after the final
+answer needs an explicit new action or new input revision, not the same command
+silently creating another final reply. Preserve a publication-occurrence
+tombstone across retraction. Only an explicit operator resend may cross the
+normal no-resend boundary, and it must warn that duplication is possible.
+These are local idempotency guarantees, not a Slack exactly-once contract.
+[Non-idempotent posting contract](https://docs.slack.dev/reference/methods/chat.postMessage/).
+
+### R4. HTTP 200 can still mean uncertain partial success
+
+**Targets:** `outbound`, `fx-delivery-unknown`, `comp-outbox`, `s6`.
+
+Unknown outcomes currently name timeout/network/HTTP-5xx only. Slack often
+returns HTTP 200 with `ok:false`. For `chat.postMessage`, the `internal_error`
+and `fatal_error` descriptions explicitly allow partial success. These must
+not become an ordinary failed item that a fresh draft or automatic retry can
+replace.
+
+**Fix:** classify by method and Slack error code as well as HTTP/transport
+status. Route documented partial-success errors into `delivery_unknown`.
+Reconciliation must paginate the entire known target thread or bounded root-post
+range and match the actual bot/app identity, channel, root, outbox ID, and
+metadata payload hash. Check warnings because invalid metadata can be ignored.
+Preserve the original intended payload hash rather than requiring exact equality
+with Slack-normalized returned text.
+
+Three read attempts over two minutes are a local best-effort policy, not a
+delivery guarantee. They must obey persisted method cooldowns and cannot require
+three full thread scans inside that time on a restricted 1/min installation.
+No match, access loss, missing metadata, or a later deletion must leave the
+outcome unknown. A failed cleanup of a stray root post likewise needs its own
+visible state, not "failed and deleted" success.
+[Partial-success errors](https://docs.slack.dev/reference/methods/chat.postMessage/#errors),
+[metadata warnings](https://docs.slack.dev/messaging/message-metadata/#defining),
+[pagination](https://docs.slack.dev/apis/web-api/pagination/).
+
+### R5. ID changes and pending sharing cannot preserve an active link
+
+**Targets:** `fx-id-change`, `fx-shared`, `channel_info` in `px-data`,
+`outbound`, `s8`.
+
+`fx-id-change` says to keep the link working under its new ID. Slack currently
+documents this event specifically for a private channel being shared externally,
+which v1 prohibits. The cached `is_shared` field also omits
+`is_pending_ext_shared`, for which Slack explicitly recommends shared-channel
+treatment. A private-to-public conversion broadens the audience without any
+external-share flag.
+
+**Fix:** on a Slack-authenticated ID migration, record/migrate aliases
+transactionally but immediately pause publication and invalidate metadata.
+Re-read the new conversation before any send. Persist explicit
+`is_ext_shared`, `is_pending_ext_shared`, `is_org_shared`, channel kind and
+privacy flags. Reject DMs/MPIMs and pending/external sharing during link and
+resume, and handle conversion notices as lifecycle signals. Require owner
+reapproval before sensitive output after a private channel becomes public.
+
+A ten-minute cache is a bounded-staleness tradeoff, not proof the destination
+remains internal. Invalidate it on every relevant signal, refresh on reconnect,
+and use fresh channel checks for sensitive posts. A Slack-side audience change
+can still race a send, so do not claim atomic destination authorization.
+[ID-change circumstances](https://docs.slack.dev/reference/events/channel_id_changed/),
+[sharing flags and pending warning](https://docs.slack.dev/reference/objects/conversation-object/#booleans),
+[public conversion](https://docs.slack.dev/reference/events/message/channel_convert_to_public/).
+
+### R6. Repair cannot justify the brief's no-loss guarantee
+
+**Targets:** `outcome`, `comp-repair`, `coverage` in `px-data`,
+`px-inbox`, `fx-untracked-thread`, `fx-deleted-request`, `acceptance`, `s4`.
+
+Tracked-thread-only recovery is an acceptable explicit v1 limitation, but the
+opening promises "nothing is lost" and restart acceptance promises every
+request. They contradict `fx-untracked-thread`. A missed edit/delete of a
+previously stored root can also be older than the channel gap range. History
+does not replay the hidden deletion event. That leaves a queued request looking
+live even after its source was deleted during the outage.
+
+**Fix:** retain the v1 limitation but make coverage authoritative and visible:
+channel-root range, tracked-thread range, last repair, and known/unknown
+outage gaps. Replace the unqualified `caught up` banner and no-loss acceptance
+with an explicit selected coverage guarantee. Add fixed range bounds,
+cursor continuation through empty/short pages, `invalid_cursor` restart, and
+live-before-repair merge rules to s4's completion tests.
+
+Before resuming pending requests after an outage, refresh their authoritative
+source messages/threads. Reclassify changed versions and block side effects
+when the source can no longer be established. Do not equate inaccessible,
+retention-hidden, or partially scanned data with a confirmed human deletion.
+Either implement complete in-scope current-state reconciliation for stored
+old content or disclose that missed edits/deletes remain a limitation too.
+Exact intermediate event replay remains impossible.
+[Hidden event limitations](https://docs.slack.dev/reference/events/message/#hidden_subtypes),
+[history](https://docs.slack.dev/reference/methods/conversations.history/),
+[replies](https://docs.slack.dev/reference/methods/conversations.replies/),
+[cursor completion/expiry](https://docs.slack.dev/apis/web-api/pagination/).
+
+### R7. Classification needs normalized human-request eligibility
+
+**Targets:** `px-classify`, `comp-ledger`, `fx-duplicate`, `s3`.
+
+The pseudocode rejects `botId` and self, but not `app_id`, other bot-user
+identities, lifecycle notices or parent bookkeeping. An allowlisted actor's
+join/topic/conversion event can contain bot mentions without being a request.
+`message_replied` can carry root text again. A root can also have
+`thread_ts === ts`, so testing merely whether `threadTs` exists is incorrect
+for `--requests all` and follow-up classification.
+
+**Fix:** normalization produces `rootTs`, `isReply = threadTs !== ts`,
+provenance and `humanRequestEligible`. Only actual human message content and
+explicitly supported message subtypes enter classification. Fold edits into
+that canonical message, dedupe broadcasts by message identity, and exclude all
+app/bot/self and lifecycle/bookkeeping content from executable requests. Use
+the outer installation/team as delivery context, not as proof of the human's
+home organization. Do not reject ordinary messages simply because the optional
+inner `message.team` field is absent.
+[Message event/subtype catalog](https://docs.slack.dev/reference/events/message/),
+[thread identity](https://docs.slack.dev/messaging/retrieving-messages/#finding_threads),
+[broadcast reference](https://docs.slack.dev/reference/events/message/thread_broadcast/).
+
+### R8. Credential errors must not erase the data store
+
+**Targets:** `fx-uninstall`, `trust`, `startup`, `s8`.
+
+The brief purges everything on `invalid_auth` from any call or any
+`tokens_revoked` event. A mistyped/replaced local token, access-policy failure,
+or an unrelated user-token revocation is not proof the bot installation was
+removed.
+
+**Fix:** suspend collection/publication and surface an authentication repair
+state on credential failure without immediately destroying data. For revocation
+events, match the wrapper app/workspace and the bot-user IDs in `tokens.bot`
+against this installation. Apply the deliberate revocation/uninstall deletion
+policy only to the affected installation. Make duplicate/reordered uninstall
+and revocation handling idempotent.
+[Revoked values are user IDs, not tokens](https://docs.slack.dev/reference/events/tokens_revoked/),
+[invalid_auth can also include access-policy failure](https://docs.slack.dev/reference/methods/auth.test/#errors).
+
+### R9. Startup cannot get app identity from auth.test alone
+
+**Targets:** `startup`, `fx-identity-mismatch`, `installation` in `px-data`.
+
+The documented bot-token `auth.test` response supplies `team_id`, `user_id`
+and `bot_id`, not `app_id`. It also does not validate that the separately supplied
+Socket Mode token belongs to that same app.
+
+**Fix:** use `auth.test` for bot/team identity, `bots.info(bot_id).bot.app_id`
+for the bot's app, and verify Socket Mode `hello.connection_info.app_id` against
+it before processing events or sending. The existing `users:read` scope supports
+`bots.info`, so this needs no additional scope. Fail closed on mixed xapp/xoxb
+credentials and test that exact combination.
+[auth.test response](https://docs.slack.dev/reference/methods/auth.test/#response),
+[bots.info identity and scope](https://docs.slack.dev/reference/methods/bots.info/),
+[hello app identity](https://docs.slack.dev/apis/events-api/using-socket-mode/#connect).
+
+### R10. Status needs a full lifecycle, not permanent disable on any refusal
+
+**Targets:** `slack-feedback`, `outbound`, `s6`, `test-live`.
+
+The no-container `assistant.threads.setStatus` choice is correct with
+`chat:write`. Setting it only once at `inbox` means a long job looks inactive
+after two minutes, while disabling it for any error makes one 429 permanently
+remove the feature. Status is scoped to the app/thread, not to an individual
+request, so one request finishing can incorrectly clear another's status.
+
+**Fix:** keep best-effort thread-level state with conservative refresh while
+known work is active, and explicit clear on completion, failure, cancellation
+and expiration. Handle 429/network errors as transient, and disable only after
+a durable capability/permission refusal with a visible warning. Recompute
+thread status if multiple requests share the same root. Do not let optional
+status/reaction failure block final delivery. Rate-limit `reactions.remove`
+separately: it is Tier 2 (20+/minute), not `reactions.add`'s Tier 3.
+[Status contract](https://docs.slack.dev/reference/methods/assistant.threads.setStatus/),
+[remove-reaction limit](https://docs.slack.dev/reference/methods/reactions.remove/).
+
+### R11. Align acceptance and manifest with the chosen v1
+
+**Targets:** `outcome`, `slack-feedback`, `operator-docs`, `acceptance`,
+`fx-file-hostile`, `s12`, `s13`.
+
+Removing `files:write` is appropriate when uploads are excluded. The remaining
+scopes cover replies, retraction, progress edits, files, metadata and reactions.
+Keep the disabled Messages tab and do not add `assistant:write`.
+
+The twelve-item research live checklist includes output uploads/images and
+explicitly authorized Slack Connect tests that are not v1 requirements.
+Acceptance should use its applicable subset and record deferred items rather
+than requiring contradictory unsupported behavior. The opening also excludes
+all editing while feedback requires editing progress. Say "final-answer editing
+is excluded, progress-message updates are supported."
+
+Finally, add a file deletion/retention test: `file_deleted` has no channel,
+must purge only an indexed file, and is not emitted for retention expiry.
+Keep the independent seven-day TTL and purge attachment caches on message
+deletion/unlink, not only on file events.
+[File-deletion shape/exception](https://docs.slack.dev/reference/events/file_deleted/),
+[own-message edit contract](https://docs.slack.dev/reference/methods/chat.update/).
+
+## Owner confirmation follow-up, 2026-10-28
+
+The Toy Box analyst found that a shell-capable agent can manufacture a recent
+"owner message" through Toy Box's unauthenticated HTTP endpoint, or unset its
+session environment variable and become the CLI's apparent operator. The
+thirty-minute owner-message gate is therefore a context signal, not independent
+human authorization.
+
+**Recommendation: explicit Approve/Reject buttons on a durable, bot-authored
+control message in the linked Slack channel.** Authorize the click by the
+already pinned owner's Slack user ID. Prefer this over a checkmark reaction:
+buttons communicate exactly which change is being approved and require no new
+OAuth scope. Prefer a normal control message over an ephemeral-only prompt:
+Slack explicitly does not guarantee ephemeral delivery, requires an active
+channel member, and removes ephemeral messages across sessions/reloads. If
+configuration details should not appear in the channel, use an ephemeral
+presentation with a durable local pending proposal and an explicit redisplay
+path, not an assumption the owner saw it.
+[Button action payload](https://docs.slack.dev/reference/interaction-payloads/block_actions-payload/),
+[ephemeral delivery caveats and chat:write scope](https://docs.slack.dev/reference/methods/chat.postEphemeral/).
+
+### Manifest delta
+
+Buttons use the existing `chat:write` and Socket Mode connection. Enable
+interactivity; no HTTP request URL, tunnel, signing-secret handler, DM scopes,
+agent container, `reaction_added` subscription, or additional bot scope is needed:
+
+```yaml
+settings:
+  socket_mode_enabled: true
+  interactivity:
+    is_enabled: true
+```
+
+Merge this fragment into `settings`, rather than replacing the other settings
+in the app manifest. Interactive clicks arrive as Socket Mode `type:
+"interactive"` envelopes with a `block_actions` payload. They do not have an
+Events API `event_id`, so must not be sent through a parser that requires one.
+The current top-of-document manifest remains the previously finalized
+non-interactive baseline until the lead adopts this follow-up.
+[Manifest fields](https://docs.slack.dev/reference/app-manifest/#settings),
+[Socket Mode interactive envelopes](https://docs.slack.dev/apis/events-api/using-socket-mode/#button).
+
+The reaction alternative requires **both** `reactions:read` and the
+`reaction_added` bot event. Existing `reactions:write` only covers adding/removing
+the app's own reactions. Its human actor is `event.user`, not `item_user`.
+It also needs a durable bot-authored proposal message, exact item timestamp,
+expiration, one-use application and replay protection, so it does not save much
+state machinery.
+[Reaction subscription scope and actor](https://docs.slack.dev/reference/events/reaction_added/).
+
+### Proposal and application contract
+
+1. A CLI setup call proposes a fully validated change. Persist its opaque ID,
+   exact immutable proposed configuration/hash, previous configuration revision,
+   pinned owner/team, channel, expiry, creation source and pending state.
+   Do not apply a widening change while waiting.
+2. The bridge composes a narrow control card showing the before/after effect,
+   actual user/channel identities, and Approve/Reject buttons. Button values
+   contain only an opaque proposal reference, never executable configuration.
+   This is a deliberate bridge-owned control-message exception to the
+   "bridge only reacts and sets status" product rule.
+3. Accept decisions only on the real Slack receiver path. Check `api_app_id`,
+   installation/team, `user.id`, proposal ID, action kind, originating
+   channel/message, expiry and expected configuration revision. The approval
+   owner comes from existing pinned configuration, not from the untrusted new
+   proposal's `--owner`. No CLI/RPC "approve" bypass should exist.
+4. Commit the decision and configuration change atomically, recording the
+   verified Slack actor. A repeated click or envelope is idempotent. Ack every
+   envelope promptly after the durable decision. Do not fetch profiles or ask an
+   agent in this path.
+5. Update the control card asynchronously to applied/rejected/expired/stale.
+   If a card send/update has an unknown outcome, the durable proposal remains
+   authoritative. Expired, superseded and stale-revision approvals never apply.
+   Throttle proposal creation so injection cannot flood the owner with prompts.
+
+Initial owner pinning must happen through explicit human provisioning outside
+the agent's untrusted configuration proposal. Changing that owner requires
+approval from the **old** pinned owner, not self-approval by the proposed new
+identity. A defined recovery procedure is needed if the old owner is unavailable.
+
+**Boundary qualification:** this proves a genuine Slack-user decision to an
+intact bridge. It does not sandbox an arbitrary same-OS-user shell that can
+modify the bridge's SQLite database, process, credential file or source. Strong
+independence still requires an agent-inaccessible bridge identity/data directory
+or another real isolation boundary. Do not upgrade the trust claim merely
+because a button was added.
+
+Proof additions: owner versus non-owner click, stale hash/revision, expired and
+replayed click, mismatched app/workspace/channel/message, config changed between
+card and click, crash before/after decision commit, reconnect redelivery,
+ephemeral nondelivery if that presentation is chosen, and rejection of a
+local-RPC approval attempt. Live verification must confirm the new interactivity
+setting in the actual workspace before claiming the owner gate is operational.

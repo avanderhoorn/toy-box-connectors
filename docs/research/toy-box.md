@@ -600,3 +600,152 @@ My recommendations:
   `src/shared/server/sse.ts`
 - Data root: `src/server/database.ts`, `src/features/sessions/server/bundledSkills.ts`
 - Provider configuration: `src/features/providers/server/{copilot/provider.ts, claude/connection.ts, codex/provider.ts}`
+
+## 7. Review of the architecture brief (lead's message 20)
+
+I reviewed `toy-box-slack-architecture.brief` against §1–6. Each finding names the brief section or
+record and gives a concrete fix. Findings are ordered by severity.
+
+### B1 (high). The owner gate and the operator role don't stop a steered lead. `cli`, `trust`, `fx-injected-setup`, `fx-wrong-caller`
+- **Owner presence can be forged (fact).** The bridge counts an SSE `message` with
+  `sender.type === "user"` as the owner speaking. But any local process, including a lead with an
+  unrestricted shell, can `curl -X POST /api/v1/channels/<id>/messages` and produce exactly that
+  event. `postChannelMessage` hard-codes `sender: { type: "user" }` (`channels/server/index.ts:221`).
+  So can any session's `post_channel_message` tool (`postChannelMessageFromSession`). The
+  transcript can't distinguish the forgery from the owner either.
+- **The operator role is just an empty env var (fact).** The `cli` exhibit says *"With no session
+  in env the caller is the operator."* Any agent can run `env -u COPILOT_AGENT_SESSION_ID
+  toy-box-slack …` and become the operator.
+- **So the gate is a speed bump, not a boundary.** The brief's `trust` section already concedes
+  "while the owner is active". In fact, the lead can manufacture that activity itself. The
+  forgery leaves a visible fake user message, but nobody is watching for one.
+- **Fix:** widening changes (`link`, `allow`, `resume`, `--requests all`, `--observe channel`,
+  `--publish-channel`) become *pending* until the **owner's Slack identity** confirms them. The
+  agent can't write to that channel. Options for @slack-expert to choose between:
+  - an ephemeral Block Kit button to the owner, using interactivity over Socket Mode
+  - an ✅ reaction by the owner on a bridge confirmation message in the linked channel (needs
+    `reactions:read` and `reaction_added`)
+
+  Keep the 30-minute Toy Box check as a cheap first filter. Narrowing changes (`pause`, `deny`,
+  `unlink`) stay immediate. Also reword `trust` so it doesn't imply the operator role is
+  privileged.
+- **Resolved (Slack Expert, message 26):** use Approve/Reject buttons on a durable bot-authored
+  control post. They arrive over Socket Mode interactivity, add no new scope, and need
+  `settings.interactivity.is_enabled: true`. Only the pinned owner can approve, and there's no CLI
+  approve bypass. The owner is pinned at first setup by human provisioning. **The residual limit is
+  agreed:** this proves Slack-user intent to an *intact* bridge. A same-UID agent shell can still
+  edit `bridge.db` or the bridge process. Only OS-level isolation would close that gap, for example
+  running the bridge as a separate user. That's out of scope for v1, and `trust` should say so
+  plainly.
+
+### B2 (high). Every bridge wake erases the lead's waiting status and cancels its follow-up. `px-wake`, `px-routines`
+- **Facts:** `wakeChannelAgent` calls `clearAgentStatus(agentId, "waiting")` after every delivery,
+  including routine runs (`index.ts:592-599`). A follow-up's `wakeAt` lives *inside* that waiting
+  status, and `claimDueWakes` only fires follow-ups from it (`database.ts:536+`).
+- **Consequence:** suppose the lead finished with `waitingFor: "Bridge Engineer's s3",
+  wakeAfterMinutes: 30` and a Slack request arrives. The bridge's wake clears that status, and
+  **the 30-minute check-back never fires**. The overview also stops showing the wait. The brief's
+  `f-wake-routine` ("acknowledges no request") is true, but it misses this side effect.
+- **Fix:** add one sentence to the requests routine template and the skill: *"When you finish, if
+  you were waiting on someone before this wake, call finish_agent_turn again with that waitingFor
+  and wakeAfterMinutes."* The lead's private transcript holds its last `finish_agent_turn` call,
+  so it can recover the values. Add an e2e assertion that a lead's waiting status survives a Slack
+  wake. A Toy Box change that preserves waiting on routine wakes would be cleaner, but it's out of
+  our scope.
+
+### B3 (high). Claude and Codex leads can never reply. `choices` row 1, `cli` "Who's calling", `f-caller-env`
+- **The problem:** the `choices` table claims "one CLI works for Copilot, Claude and Codex". But
+  under the brief's own caller rules, a shell without `COPILOT_AGENT_SESSION_ID` is the operator,
+  and the operator "may … never reply or publish".
+- **Claude (inference):** Toy Box passes its session ID as Claude's native `sessionId`
+  (`claude/connection.ts:42,51`). If Claude Code exposes that ID to Bash, it would equal the Toy
+  Box ID. That's unverified.
+- **Codex (fact):** the thread ID is minted by Codex (`codex/provider.ts:103-147`), so it never
+  equals the Toy Box ID, and the public API can't map it back.
+- **This machine:** neither `claude` nor `codex` is on `PATH`. The user's leads run on Copilot today.
+- **Fix:** scope v1 explicitly to **Copilot-provider leads**. `link` should read
+  `channels[].model.provider` from the catalog and refuse other providers with a clear message.
+  Move R3 (Claude and Codex identity) to v2.
+
+### B4 (medium). Reminders nag a lead that's legitimately waiting on the owner. `px-wake` `dueReminder`, `px-lifecycle`
+- The routine prompt tells the lead to ask the owner in Toy Box before doing consequential work for
+  a non-owner. While it waits, the request sits in `seen` or `in_progress`, and a reminder fires
+  after 30 minutes or 2 hours. Each reminder also re-clears the waiting status (B2).
+- **Fix:** add a `hold <r> --reason` verb, or a request attention `awaiting_owner`, that suppresses
+  reminders. Release it automatically when the next user message arrives on the Toy Box stream,
+  which is the same event that clears `channel.requestSequence` (`reducer.ts:100`). Then expire as
+  usual. The skill should say to flag the question with `send_channel_message` and
+  `request: true`, then `hold`.
+
+### B5 (medium). Routine prompt wording. `px-routines`
+- **Quoting.** Toy Box injects the prompt as `JSON.stringify(prompt)`
+  (`systemMessages.ts#systemMessagePrompt`), so newlines arrive as literal `\n`. Write each template
+  as one paragraph with no line breaks.
+- **Accuracy.** The safety-net cron fires even when nothing is pending, so "Slack requests from #x
+  are waiting" is sometimes false. Say "Check for Slack requests from #x." Toy Box already appends
+  *"If nothing needs the channel's attention, finish quietly,"* which then reads correctly.
+- **Wording in the requests template:**
+  - Change "Post in Toy Box only when the owner must decide" to "…decide something, flag it with
+    send_channel_message and request: true." Without the flag the sidebar won't show it (lead
+    prompt §Communicate).
+  - Add "Reply yourself even if a member did the work. Members can't reply." The CLI enforces that
+    members are read-only.
+  - Add "Slack questions don't need channel tasks. Add a task only for substantial work the owner
+    asked for." The lead prompt says routine runs add tasks "only for concrete work the run
+    uncovers", which could otherwise turn every question into a task.
+  - Add the waiting-status sentence from B2.
+- **Digest template.** "Never use @ mentions" also bans the lead's legitimate Toy Box mentions of
+  members. Narrow it to "Never write a Slack person's name after @". The CLI already renders them as
+  `{Name}`.
+
+### B6 (medium). The steer-after-2-minutes rule is sound. A guard is missing. `fx-lead-busy`
+- **This part is correct:** presence `working` means the session is running
+  (`model/presence.ts#channelAgentPresence`). A routine run then steers into the active turn, and
+  identical queued routine prompts coalesce (`channel_routine:${prompt}`).
+- **Missing:** the 2-minute fallback steers even when the running turn *is* the bridge's own wake
+  that's already serving inbox. Add "and no inbox call since the oldest pending request changed" to
+  the steer condition. Otherwise the bridge nudges a lead that's mid-inbox.
+
+### B7 (medium). End-to-end harness details. `test-e2e`, plan step for e2e
+- **The harness leaks its own identity.** A test run launched from an agent shell inherits *that
+  agent's* `COPILOT_AGENT_SESSION_ID`. I observed it set in this shell. Operator calls from the
+  harness then resolve as an unknown session and get refused. The harness must `env -u
+  COPILOT_AGENT_SESSION_ID` for operator calls and for the spawned Toy Box server.
+- **Provider auth under a temp `HOME` is unverified.** Copilot's user config and skills live in
+  `~/.copilot`. Spike `HOME=$(mktemp -d)` with the built binary
+  `toy-box/toy-box --port 3199 --host 127.0.0.1 --no-open` before s-e2e depends on it. That binary
+  exists, built Oct 27. Also install the skill into the temp `HOME`'s `~/.copilot/skills`.
+- **Skill freshness is unverified.** Copilot discovers skills when a session is created or resumed
+  (`copilot/provider.ts:65-78`). A lead whose session predates `install-skill` may not see the
+  skill until its next execution, or until a server restart. That's one more reason the routine
+  prompts must stand alone (they do).
+
+### B8 (low). Conventions. `conventions`, `repo`
+- **An alias trap.** Toy Box gives each feature a tsconfig alias (`@channels/*`). An `@slack/*`
+  alias for `src/features/slack` would **shadow `@slack/web-api` and `@slack/socket-mode`**. Name
+  the feature differently (for example `slackapi`), or give it no alias.
+- **Check script and hook.** Toy Box uses `"check": "bun fmt --check && bun lint && bun check"` and
+  a pre-commit hook of `bun lint --staged --fix && bun fmt --staged`, not a full check. However,
+  `bun lint` isn't recognized by either local Bun 1.4.4 binary ("Script not found"), so Toy Box's
+  own script may depend on newer Bun. Use `oxlint` from `node_modules` and keep the same shape.
+- **Fewer guides.** "Every feature has its own AGENTS.md" is more than Toy Box does. It writes
+  guides per *subsystem* ("A guide's location marks the subsystem's semantic core"). Write guides
+  for `requests`/`wakes` (the lead loop), `activity` (the ledger and repair), `outbox`, and
+  `toybox`. Fold `links` and `commands` into the closest one.
+- **Defaults.** `TOY_BOX_URL` defaults to `127.0.0.1:3000` (the CLI default), but this user runs
+  Toy Box on **3100** via `vite dev`. `127.0.0.1:3100` answers even though it's bound to `::`
+  (observed). The setup guide should say so, and `doctor` should probe `NITRO_PORT` when it's
+  present.
+- **Cron.** `cron-parser` ^5.10.2 matches `src/shared/cron.ts`. Schedules run in the Toy Box
+  server's local time zone, so the bridge must use the same time zone when it derives publication
+  periods.
+
+### What I confirmed is right
+- The routine-run seam: 204 means delivered (started or queued), 404 means the routine is gone,
+  and 5xx means delivery threw (`api.ts#runChannelRoutineResponse`).
+- Never posting into Toy Box.
+- Debouncing and the budget.
+- Detecting a deleted routine through `routine_deleted` and snapshots.
+- Taking a replacement snapshot after Toy Box restarts.
+- Caller resolution by catalog lookup. Refetch the catalog once on an unknown session ID before
+  refusing, because members can join after the catalog loads.
