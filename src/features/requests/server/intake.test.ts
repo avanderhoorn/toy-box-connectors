@@ -71,7 +71,9 @@ test("the requester's later messages join their request and flag it once the lea
   await advance(database, "seen");
   expect(await take(database, editMessage(more, "1700000300.000100", "the seed step"))).toBe(true);
   expect(await requestOf(database, more)).toMatchObject({ state: "seen", attention: "updated" });
+  await advance(database, "seen");
   expect(await takeDeleteOf(database, more)).toBe(true);
+  expect(await requestOf(database, ask)).toMatchObject({ state: "seen", attention: "updated" });
   const allowed = replyMessage(ask, "1700000400.000100", { userId: "U-allowed" });
   expect(await take(database, allowed)).toBe(false);
 });
