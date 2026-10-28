@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import { localCommand, runCli, socketCommands } from "@commands/client/cli";
+import { installBundledSkill } from "@commands/client/skill";
 
 import { version } from "../package.json";
 
@@ -19,11 +20,17 @@ const serve = localCommand({
   },
 });
 
+const installSkill = localCommand({
+  description: "Install the toy-box-slack skill where Copilot leads find it",
+  input: z.object({}).strict(),
+  run: () => installBundledSkill(),
+});
+
 await runCli(
   {
     version,
     description: "Let a Toy Box channel's lead watch and answer a Slack channel",
-    commands: { ...socketCommands(), serve },
+    commands: { ...socketCommands(), serve, "install-skill": installSkill },
   },
   process.argv.slice(2),
 );

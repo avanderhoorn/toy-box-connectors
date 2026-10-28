@@ -12,6 +12,7 @@ import { startLinkedBridge } from "./linkedBridge";
 import { waitFor } from "./waitFor";
 
 const CLI = join(import.meta.dir, "..", "..", "cli", "index.ts");
+const SKILL = join(import.meta.dir, "..", "..", "skills", "toy-box-slack", "SKILL.md");
 
 /**
  * Runs `toy-box-slack <args>` with `env` and `PATH` as its whole environment, and a home folder
@@ -222,6 +223,14 @@ test.each([
     "`serve` takes no arguments, but also got extra. Run `toy-box-slack serve --help`.",
   ],
   [
+    ["install-skill", "--json"],
+    "`install-skill` has no option --json. Run `toy-box-slack install-skill --help`.",
+  ],
+  [
+    ["install-skill", "extra"],
+    "`install-skill` takes no arguments, but also got extra. Run `toy-box-slack install-skill --help`.",
+  ],
+  [
     ["dismiss", "14", "--revision", "2", "--reason", " "],
     "<request>: Write it as inbox shows it, such as r14. --reason: Can't be blank. Run `toy-box-slack dismiss --help`.",
   ],
@@ -248,12 +257,13 @@ test.each([
 Usage: toy-box-slack <command> [options]
 
 Commands:
-  status    Show Slack's connection and the health of each link
-  inbox     Read new and changed Slack requests, and how the owner decided your proposals
-  hold      Stop reminders about a request while you wait for the owner to decide
-  dismiss   Close a request that needs no answer, without replying in Slack
-  routines  Show the routines to register in Toy Box, with their prompts
-  serve     Run the bridge in the foreground until SIGTERM or SIGINT
+  status         Show Slack's connection and the health of each link
+  inbox          Read new and changed Slack requests, and how the owner decided your proposals
+  hold           Stop reminders about a request while you wait for the owner to decide
+  dismiss        Close a request that needs no answer, without replying in Slack
+  routines       Show the routines to register in Toy Box, with their prompts
+  serve          Run the bridge in the foreground until SIGTERM or SIGINT
+  install-skill  Install the toy-box-slack skill where Copilot leads find it
 
 Run \`toy-box-slack <command> --help\` to see a command's options.
 `,
@@ -331,7 +341,61 @@ Options:
 Usage: toy-box-slack serve
 `,
   ],
+  [
+    ["install-skill", "--help"],
+    `Install the toy-box-slack skill where Copilot leads find it
+
+Usage: toy-box-slack install-skill
+`,
+  ],
   [["--version"], `${version}\n`],
 ])("answers `toy-box-slack %j` on stdout without a bridge", async (args, stdout) => {
   expect(await runToyBoxSlack(args)).toEqual({ exitCode: 0, stdout, stderr: "" });
+});
+
+test("installs the skill it ships into ~/.copilot/skills, and says when leads see it", async () => {
+  const home = createTestFolder();
+  const path = join(home, ".copilot", "skills", "toy-box-slack", "SKILL.md");
+
+  expect(await runToyBoxSlack(["install-skill"], { HOME: home })).toEqual({
+    exitCode: 0,
+    stdout: `Installed the toy-box-slack skill at ${path}.
+
+Copilot reads skills when a lead's session starts or resumes, so a lead that's already running may not see it until later. Until then, its routines carry what each run needs.
+`,
+    stderr: "",
+  });
+  expect(await Bun.file(path).text()).toBe(await Bun.file(SKILL).text());
+});
+
+test("installs the skill into COPILOT_HOME when it's set, and says leads find it only there", async () => {
+  const home = createTestFolder();
+  const copilotHome = createTestFolder();
+  const path = join(copilotHome, "skills", "toy-box-slack", "SKILL.md");
+
+  expect(
+    await runToyBoxSlack(["install-skill"], { HOME: home, COPILOT_HOME: copilotHome }),
+  ).toEqual({
+    exitCode: 0,
+    stdout: `Installed the toy-box-slack skill at ${path}.
+
+Copilot reads skills when a lead's session starts or resumes, so a lead that's already running may not see it until later. Until then, its routines carry what each run needs.
+
+It went there because COPILOT_HOME is set, so leads find it only if Toy Box runs with the same COPILOT_HOME.
+`,
+    stderr: "",
+  });
+  expect(await Bun.file(path).text()).toBe(await Bun.file(SKILL).text());
+  expect(existsSync(join(home, ".copilot"))).toBe(false);
+});
+
+test("refuses a relative COPILOT_HOME on stderr with exit 1, installing nothing", async () => {
+  const home = createTestFolder();
+
+  expect(await runToyBoxSlack(["install-skill"], { HOME: home, COPILOT_HOME: "copilot" })).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr: `COPILOT_HOME must be an absolute path, but it's "copilot".\n`,
+  });
+  expect(existsSync(join(home, ".copilot"))).toBe(false);
 });
