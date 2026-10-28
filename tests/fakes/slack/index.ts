@@ -34,7 +34,12 @@ export type FakeSlackAck = {
   body: { envelope_id: string; payload?: unknown };
 };
 
-export type FakeSlackFailure = { error: string } | { retryAfter: number };
+export type FakeSlackFailure =
+  | { error: string; afterWrite?: boolean }
+  | { retryAfter: number }
+  | { status: number }
+  | { lostResponse: true }
+  | { dropMetadata: true };
 
 export type FakeSlackConnection = {
   id: number;
@@ -121,6 +126,7 @@ export function startFakeSlack(
   const sockets = new Map<number, ServerWebSocket<SocketData>>();
   const ackWaiters = new Set<{ envelopeId: string; finish(ack: FakeSlackAck | null): void }>();
   let nextHelloAppId: string | undefined;
+  let connectionSequence = 0;
   let responsive = true;
   let stopped = false;
   const server = Bun.serve<SocketData>({
@@ -129,6 +135,7 @@ export function startFakeSlack(
     idleTimeout: 0,
     fetch: route,
     websocket: {
+      sendPings: false,
       open(socket) {
         sockets.set(socket.data.id, socket);
         connections.push({ id: socket.data.id, openedAt: now(), closedAt: null });
@@ -194,6 +201,9 @@ export function startFakeSlack(
     now,
     scopes: options.scopes,
     pageSize: options.pageSize,
+    emitEvent(event) {
+      if (sockets.size) sendEvent(event);
+    },
     connectionUrl() {
       const ticket = crypto.randomUUID();
       tickets.add(ticket);
@@ -212,7 +222,7 @@ export function startFakeSlack(
       const ticket = target.searchParams.get("ticket");
       if (!ticket || !tickets.delete(ticket))
         return new Response("Invalid ticket", { status: 403 });
-      if (server.upgrade(request, { data: { id: connections.length + 1 } })) return;
+      if (server.upgrade(request, { data: { id: ++connectionSequence } })) return;
       return new Response("WebSocket upgrade required", { status: 400 });
     }
     if (!target.pathname.startsWith("/api/")) {
@@ -234,6 +244,43 @@ export function startFakeSlack(
     return delivery;
   }
 
+  function sendEvent(
+    event: Record<string, unknown>,
+    settings: FakeEventOptions = {},
+  ): FakeSlackDelivery {
+    const payload: Record<string, unknown> = {
+      ...settings.context,
+      type: "event_callback",
+      api_app_id: settings.appId ?? identity.appId,
+      team_id: settings.teamId ?? identity.teamId,
+      event_id: settings.eventId ?? `Ev${crypto.randomUUID()}`,
+      event_time: Math.floor(now() / 1000),
+      event: structuredClone(event),
+    };
+    if (Object.hasOwn(settings, "authorizations")) {
+      if (settings.authorizations !== undefined)
+        payload.authorizations = structuredClone(settings.authorizations);
+    } else {
+      payload.authorizations = [
+        {
+          enterprise_id: identity.enterpriseId,
+          team_id: identity.teamId,
+          user_id: identity.botUserId,
+          is_bot: true,
+          is_enterprise_install: false,
+        },
+      ];
+    }
+    return sendFrame({
+      type: "events_api",
+      envelope_id: settings.envelopeId ?? crypto.randomUUID(),
+      accepts_response_payload: false,
+      retry_attempt: settings.retryAttempt ?? 0,
+      ...(settings.retryReason === undefined ? {} : { retry_reason: settings.retryReason }),
+      payload,
+    });
+  }
+
   return {
     ...api.controls,
     url,
@@ -248,39 +295,7 @@ export function startFakeSlack(
       return sockets.size;
     },
     sendFrame,
-    sendEvent(event, settings = {}) {
-      const payload: Record<string, unknown> = {
-        ...settings.context,
-        type: "event_callback",
-        api_app_id: settings.appId ?? identity.appId,
-        team_id: settings.teamId ?? identity.teamId,
-        event_id: settings.eventId ?? `Ev${crypto.randomUUID()}`,
-        event_time: Math.floor(now() / 1000),
-        event: structuredClone(event),
-      };
-      if (Object.hasOwn(settings, "authorizations")) {
-        if (settings.authorizations !== undefined)
-          payload.authorizations = structuredClone(settings.authorizations);
-      } else {
-        payload.authorizations = [
-          {
-            enterprise_id: identity.enterpriseId,
-            team_id: identity.teamId,
-            user_id: identity.botUserId,
-            is_bot: true,
-            is_enterprise_install: false,
-          },
-        ];
-      }
-      return sendFrame({
-        type: "events_api",
-        envelope_id: settings.envelopeId ?? crypto.randomUUID(),
-        accepts_response_payload: false,
-        retry_attempt: settings.retryAttempt ?? 0,
-        ...(settings.retryReason === undefined ? {} : { retry_reason: settings.retryReason }),
-        payload,
-      });
-    },
+    sendEvent,
     sendInteraction(payload, envelopeId = crypto.randomUUID()) {
       return sendFrame({
         type: "interactive",
@@ -342,6 +357,7 @@ export function startFakeSlack(
       stopped = true;
       clearInterval(heartbeat);
       for (const waiter of ackWaiters) waiter.finish(null);
+      api.finishPending();
       for (const socket of sockets.values()) socket.terminate();
       await server.stop(true);
       const allProblems = [...problems, ...api.problems];

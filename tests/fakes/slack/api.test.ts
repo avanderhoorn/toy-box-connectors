@@ -9,13 +9,13 @@ const messagePage = z.object({
   response_metadata: z.object({ next_cursor: z.string() }),
 });
 
-function setup(options?: Parameters<typeof startFakeSlack>[0]) {
+function setup(options?: Parameters<typeof startFakeSlack>[0], timeout = 1000, retries = 0) {
   const fake = startFakeSlack(options);
   onTestFinished(() => fake.stop());
   const client = new WebClient(fake.botToken, {
     slackApiUrl: fake.url,
-    timeout: 1000,
-    retryConfig: { retries: 0 },
+    timeout,
+    retryConfig: { retries, minTimeout: 1, maxTimeout: 1, randomize: false },
     rejectRateLimitedCalls: true,
     logLevel: LogLevel.ERROR,
   });
@@ -27,6 +27,7 @@ test("auth.test and bots.info agree with the installed identity and expose the s
     identity: { teamId: "T1", enterpriseId: "E1", botUserId: "W1", botId: "B1", appId: "A1" },
     scopes: ["chat:write", "users:read"],
   });
+
   const auth = await client.auth.test();
   expect(auth).toMatchObject({
     team_id: "T1",
@@ -52,6 +53,21 @@ test("auth.test and bots.info agree with the installed identity and expose the s
   });
 });
 
+test("the default scopes header matches the canonical Slack manifest", async () => {
+  const { client } = setup();
+  const manifest = z
+    .object({ oauth_config: z.object({ scopes: z.object({ bot: z.array(z.string()) }) }) })
+    .parse(
+      Bun.YAML.parse(
+        await Bun.file(new URL("../../../docs/manifest.yaml", import.meta.url)).text(),
+      ),
+    );
+  const result = await client.auth.test();
+  expect(result.response_metadata?.scopes?.toSorted()).toEqual(
+    manifest.oauth_config.scopes.bot.toSorted(),
+  );
+});
+
 test("users.info preserves Enterprise aliases, guest flags and absent deleted without repairing them", async () => {
   const { fake, client } = setup({ identity: { enterpriseId: "E1" } });
   const person = {
@@ -67,6 +83,7 @@ test("users.info preserves Enterprise aliases, guest flags and absent deleted wi
     expect((await client.users.info({ user })).user).toEqual(person);
   fake.setUser({ ...person, deleted: true });
   expect((await client.users.info({ user: "WGLOBAL" })).user?.deleted).toBe(true);
+  expect((await client.users.info({ user: "UOLD" })).user?.deleted).toBe(true);
   fake.setUser({ id: "UFOREIGN", enterprise_user: { id: "WFOREIGN", enterprise_id: "EOTHER" } });
   expect((await client.users.info({ user: "WFOREIGN" })).user?.enterprise_user?.enterprise_id).toBe(
     "EOTHER",
@@ -268,4 +285,229 @@ test("unexpected read arguments fail even when a platform failure was queued", a
     client.apiCall("conversations.history", { channel: "C1", oldset: "1.000001" }),
   ).rejects.toMatchObject({ data: { error: "invalid_arguments" } });
   await expect(fake.stop()).rejects.toThrow("oldset");
+});
+
+test("posting parses SDK JSON fields and preserves bot identity, thread and reconciliation metadata", async () => {
+  const { fake, client } = setup({ now: () => 1_700_000_000_000 });
+  const channel = fake.addChannel();
+  fake.setMessage(channel, { ts: "1.000001", user: "U1", text: "Question" });
+  const metadata = {
+    event_type: "toy_box_outbox",
+    event_payload: { id: "outbox", payload_hash: "hash" },
+  };
+  const blocks = [{ type: "section", text: { type: "mrkdwn", text: "*Answer*" } }];
+  const post = await client.chat.postMessage({
+    channel,
+    thread_ts: "1.000001",
+    text: "Answer",
+    blocks,
+    metadata,
+    unfurl_links: false,
+    unfurl_media: false,
+    parse: "none",
+  });
+  expect(post.message).toMatchObject({
+    ts: "1700000000.000000",
+    text: "Answer",
+    thread_ts: "1.000001",
+    blocks,
+    metadata,
+    user: fake.identity.botUserId,
+    bot_id: fake.identity.botId,
+    app_id: fake.identity.appId,
+  });
+  expect((await client.conversations.history({ channel })).messages).toHaveLength(1);
+  const replies = await client.conversations.replies({
+    channel,
+    ts: "1.000001",
+    include_all_metadata: true,
+  });
+  expect(replies.messages?.[1].metadata).toEqual(metadata);
+  const minimal = await client.conversations.replies({ channel, ts: "1.000001" });
+  expect(minimal.messages?.[1].metadata).toEqual({ event_type: "toy_box_outbox" });
+});
+
+test("updates retain blocks and metadata when omitted, remove blocks with text, and honor explicit empty fields", async () => {
+  const { fake, client } = setup();
+  const channel = fake.addChannel();
+  const blocks = [{ type: "section", text: { type: "plain_text", text: "Card" } }];
+  const metadata = { event_type: "toy_box_outbox", event_payload: { id: "a1" } };
+  const post = await client.chat.postMessage({ channel, text: "Card", blocks, metadata });
+  // Slack documents metadata-only updates and {} deletion; the SDK's method types reject both.
+  await client.apiCall("chat.update", {
+    channel,
+    ts: post.ts!,
+    metadata: { ...metadata, event_payload: { id: "a2" } },
+  });
+
+  expect(fake.getMessages(channel)[0]).toMatchObject({
+    blocks,
+    metadata: { event_payload: { id: "a2" } },
+  });
+  await client.chat.update({ channel, ts: post.ts!, text: "Changed" });
+  expect(fake.getMessages(channel)[0].blocks).toBeUndefined();
+  expect(fake.getMessages(channel)[0].metadata).toBeDefined();
+  await client.apiCall("chat.update", { channel, ts: post.ts!, blocks, metadata: {} });
+  expect(fake.getMessages(channel)[0].metadata).toBeUndefined();
+  await client.chat.update({ channel, ts: post.ts!, blocks: [] });
+  expect(fake.getMessages(channel)[0].blocks).toBeUndefined();
+});
+
+test("posts remain unique with a frozen clock and a seeded message at the current microsecond", async () => {
+  const { fake, client } = setup({ now: () => 1000 });
+  const channel = fake.addChannel();
+  fake.setMessage(channel, { ts: "1.000000", user: "U1", text: "Existing" });
+  expect((await client.chat.postMessage({ channel, text: "First" })).ts).toBe("1.000001");
+  expect((await client.chat.postMessage({ channel, text: "Second" })).ts).toBe("1.000002");
+  expect(fake.getMessages(channel).map(({ text }) => text)).toEqual([
+    "Existing",
+    "First",
+    "Second",
+  ]);
+});
+
+test("delete removes only the named bot post and foreign messages cannot be edited or deleted", async () => {
+  const { fake, client } = setup();
+  const channel = fake.addChannel();
+  fake.setMessage(channel, { ts: "1.000001", user: "UOTHER", text: "Not ours" });
+  await expect(
+    client.chat.update({ channel, ts: "1.000001", text: "Changed" }),
+  ).rejects.toMatchObject({ data: { error: "cant_update_message" } });
+  await expect(client.chat.delete({ channel, ts: "1.000001" })).rejects.toMatchObject({
+    data: { error: "cant_delete_message" },
+  });
+  const post = await client.chat.postMessage({ channel, text: "Ours" });
+  await client.chat.delete({ channel, ts: post.ts! });
+  expect(fake.getMessages(channel).map(({ ts }) => ts)).toEqual(["1.000001"]);
+  await expect(client.chat.delete({ channel, ts: post.ts! })).rejects.toMatchObject({
+    data: { error: "message_not_found" },
+  });
+});
+
+test("reactions preserve other users and duplicate adds/removes return Slack errors", async () => {
+  const { fake, client } = setup();
+  const channel = fake.addChannel();
+  fake.setMessage(channel, {
+    ts: "1.000001",
+    reactions: [{ name: "eyes", users: ["UOTHER"], count: 1 }],
+  });
+  const args = { channel, timestamp: "1.000001", name: "eyes" };
+  await client.reactions.add(args);
+  expect(fake.getMessages(channel)[0].reactions).toEqual([
+    { name: "eyes", users: ["UOTHER", fake.identity.botUserId], count: 2 },
+  ]);
+  await expect(client.reactions.add(args)).rejects.toMatchObject({
+    data: { error: "already_reacted" },
+  });
+  await client.reactions.remove(args);
+  expect(fake.getMessages(channel)[0].reactions).toEqual([
+    { name: "eyes", users: ["UOTHER"], count: 1 },
+  ]);
+  await expect(client.reactions.remove(args)).rejects.toMatchObject({
+    data: { error: "no_reaction" },
+  });
+});
+
+test("a post can land while its response is lost, without an implicit fake retry", async () => {
+  const { fake, client } = setup(undefined, 40);
+  const channel = fake.addChannel();
+  fake.failNext("chat.postMessage", { lostResponse: true });
+  await expect(
+    client.chat.postMessage({
+      channel,
+      text: "Accepted",
+      metadata: { event_type: "toy_box_outbox", event_payload: { id: "lost" } },
+    }),
+  ).rejects.toMatchObject({ code: ErrorCode.RequestError });
+  expect(fake.calls.filter(({ method }) => method === "chat.postMessage")).toHaveLength(1);
+  expect(fake.getMessages(channel)).toHaveLength(1);
+  expect(
+    (await client.conversations.history({ channel, include_all_metadata: true })).messages?.[0]
+      .metadata,
+  ).toEqual({
+    event_type: "toy_box_outbox",
+    event_payload: { id: "lost" },
+  });
+});
+
+test("turning SDK retries on can duplicate a post after its first response is lost", async () => {
+  const { fake, client } = setup(undefined, 40, 1);
+  const channel = fake.addChannel();
+  fake.failNext("chat.postMessage", { lostResponse: true });
+  expect((await client.chat.postMessage({ channel, text: "One intended post" })).ok).toBe(true);
+  expect(fake.getMessages(channel)).toHaveLength(2);
+  expect(fake.calls).toHaveLength(2);
+});
+
+test("partial success, a metadata warning, 5xx and rate limits have distinct wire outcomes", async () => {
+  const { fake, client } = setup();
+  const channel = fake.addChannel();
+  fake.failNext("chat.postMessage", { error: "internal_error", afterWrite: true });
+  await expect(client.chat.postMessage({ channel, text: "Maybe sent" })).rejects.toMatchObject({
+    code: ErrorCode.PlatformError,
+    data: { error: "internal_error" },
+  });
+  expect(fake.getMessages(channel)).toHaveLength(1);
+  fake.failNext("chat.postMessage", { dropMetadata: true });
+  const warning = await client.chat.postMessage({
+    channel,
+    text: "Sent without metadata",
+    metadata: { event_type: "toy_box_outbox", event_payload: { id: "missing" } },
+  });
+  expect(warning).toMatchObject({ ok: true, warning: "invalid_metadata_schema" });
+  expect(fake.getMessages(channel)[1].metadata).toBeUndefined();
+  fake.failNext("chat.postMessage", { status: 503 });
+  await expect(client.chat.postMessage({ channel, text: "Not sent" })).rejects.toMatchObject({
+    code: ErrorCode.HTTPError,
+    statusCode: 503,
+  });
+  fake.failNext("chat.postMessage", { retryAfter: 2 });
+  expect((await client.conversations.history({ channel })).ok).toBe(true);
+  await expect(client.chat.postMessage({ channel, text: "Limited" })).rejects.toMatchObject({
+    code: ErrorCode.RateLimitedError,
+    retryAfter: 2,
+  });
+  expect(fake.getMessages(channel)).toHaveLength(2);
+});
+
+test("channel/thread refusals remain Slack platform errors, and status expires or clears", async () => {
+  let now = 1000;
+  const { fake, client } = setup({ now: () => now });
+  const channel = fake.addChannel();
+  fake.setMessage(channel, { ts: "1.000001" });
+  const args = { channel_id: channel, thread_ts: "1.000001" };
+  await client.assistant.threads.setStatus({
+    ...args,
+    status: "Thinking",
+    loading_messages: ["Reading"],
+  });
+  expect(fake.getThreadStatus(channel, "1.000001")).toBe("Thinking");
+  now += 120_000;
+  expect(fake.getThreadStatus(channel, "1.000001")).toBeNull();
+  await client.assistant.threads.setStatus({ ...args, status: "Working" });
+  await client.assistant.threads.setStatus({ ...args, status: "" });
+  expect(fake.getThreadStatus(channel, "1.000001")).toBeNull();
+  await client.assistant.threads.setStatus({ ...args, status: "Replying" });
+  await client.chat.postMessage({ channel, thread_ts: "1.000001", text: "Done" });
+  expect(fake.getThreadStatus(channel, "1.000001")).toBeNull();
+  await expect(
+    client.chat.postMessage({ channel, thread_ts: "9.000001", text: "No root" }),
+  ).rejects.toMatchObject({ data: { error: "thread_not_found" } });
+  fake.setChannel({ id: channel, is_member: false });
+  await expect(client.chat.postMessage({ channel, text: "No membership" })).rejects.toMatchObject({
+    data: { error: "not_in_channel" },
+  });
+  fake.setChannel({ id: channel, is_member: true, is_archived: true });
+  await expect(client.chat.postMessage({ channel, text: "Archived" })).rejects.toMatchObject({
+    data: { error: "is_archived" },
+  });
+});
+
+test("bad structured arguments fail loudly rather than accepting a JSON-shaped string", async () => {
+  const { fake, client } = setup();
+  const channel = fake.addChannel();
+  await expect(
+    client.apiCall("chat.postMessage", { channel, text: "Bad", blocks: "not JSON" }),
+  ).rejects.toMatchObject({ data: { error: "invalid_arguments" } });
+  await expect(fake.stop()).rejects.toThrow("Invalid JSON argument");
 });

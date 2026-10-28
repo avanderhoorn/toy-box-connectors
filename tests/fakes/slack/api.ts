@@ -10,6 +10,16 @@
 // Platform errors use HTTP 200; rate limits use HTTP 429 and Retry-After:
 // https://docs.slack.dev/apis/web-api/#basics
 // https://docs.slack.dev/apis/web-api/rate-limits/
+// Writes, ownership, block retention and metadata:
+// https://docs.slack.dev/reference/methods/chat.postMessage/
+// https://docs.slack.dev/reference/methods/chat.update/
+// https://docs.slack.dev/reference/methods/chat.delete/
+// https://docs.slack.dev/messaging/message-metadata/#receiving_metadata
+// https://docs.slack.dev/reference/methods/reactions.add/
+// https://docs.slack.dev/reference/methods/reactions.remove/
+// https://docs.slack.dev/reference/methods/assistant.threads.setStatus/
+// Edit versions and nested message identity:
+// https://docs.slack.dev/reference/events/message/message_changed/
 
 import { z } from "zod";
 import type { FakeSlackCall, FakeSlackFailure, FakeSlackIdentity } from "./index";
@@ -44,6 +54,7 @@ export type FakeSlackReads = {
   setAuthResponse(changes: Record<string, unknown>): void;
   setBotResponse(changes: Record<string, unknown>): void;
   emptyNextPage(method: PageMethod): void;
+  getThreadStatus(channelId: string, threadTs: string): string | null;
 };
 
 const BOT_SCOPES = [
@@ -73,6 +84,28 @@ const range = {
   inclusive: bool.optional(),
   include_all_metadata: bool.optional(),
 };
+const json = z.string().transform((text, context): unknown => {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    context.addIssue({ code: "custom", message: "Invalid JSON argument." });
+    return z.NEVER;
+  }
+});
+const object = z.record(z.string(), z.unknown());
+const blocks = z.union([json, z.array(object)]).pipe(z.array(object));
+const metadata = z.union([json, object]).pipe(object);
+const postFields = {
+  channel: z.string().min(1),
+  text: z.string().optional(),
+  blocks: blocks.optional(),
+  attachments: blocks.optional(),
+  metadata: metadata.optional(),
+  parse: z.enum(["none", "full"]).optional(),
+  reply_broadcast: bool.optional(),
+  link_names: bool.optional(),
+};
 const schemas = {
   "apps.connections.open": z.object({}).strict(),
   "auth.test": z.object({}).strict(),
@@ -99,6 +132,34 @@ const schemas = {
   "users.list": z
     .object({ ...page, include_locale: bool.optional(), team_id: z.string().optional() })
     .strict(),
+  "chat.postMessage": z
+    .object({
+      ...postFields,
+      thread_ts: ts.optional(),
+      unfurl_links: bool.optional(),
+      unfurl_media: bool.optional(),
+      mrkdwn: bool.optional(),
+    })
+    .strict(),
+  "chat.update": z.object({ ...postFields, ts, as_user: bool.optional() }).strict(),
+  "chat.delete": z.object({ channel: z.string().min(1), ts, as_user: bool.optional() }).strict(),
+  "reactions.add": z
+    .object({ channel: z.string().min(1), timestamp: ts, name: z.string().min(1) })
+    .strict(),
+  "reactions.remove": z
+    .object({ channel: z.string().min(1), timestamp: ts, name: z.string().min(1) })
+    .strict(),
+  "assistant.threads.setStatus": z
+    .object({
+      channel_id: z.string().min(1),
+      thread_ts: ts,
+      status: z.string(),
+      loading_messages: z
+        .union([json, z.array(z.string())])
+        .pipe(z.array(z.string()).min(1).max(10))
+        .optional(),
+    })
+    .strict(),
 };
 
 export function createFakeSlackApi(options: {
@@ -109,6 +170,7 @@ export function createFakeSlackApi(options: {
   connectionUrl: () => string;
   scopes?: readonly string[];
   pageSize?: number;
+  emitEvent: (event: Record<string, unknown>) => void;
 }) {
   const { identity, now } = options;
   const calls: FakeSlackCall[] = [];
@@ -122,6 +184,9 @@ export function createFakeSlackApi(options: {
   const cursors = new Map<string, { method: string; query: string; offset: number }>();
   const authChanges: Record<string, unknown> = {};
   const botChanges: Record<string, unknown> = {};
+  const statuses = new Map<string, { text: string; at: number }>();
+  const pending = new Set<() => void>();
+  let timestampMicros = 0n;
   const maxPageSize = options.pageSize ?? 100;
   if (!Number.isInteger(maxPageSize) || maxPageSize < 1)
     throw new Error("Fake Slack pageSize must be a positive integer.");
@@ -159,6 +224,10 @@ export function createFakeSlackApi(options: {
       if (!messages.has(channel.id)) messages.set(channel.id, new Map());
       if (!members.has(channel.id))
         members.set(channel.id, channel.is_member === false ? [] : [identity.botUserId]);
+      else if (typeof channel.is_member === "boolean") {
+        const ids = members.get(channel.id)!.filter((id) => id !== identity.botUserId);
+        members.set(channel.id, channel.is_member ? [...ids, identity.botUserId] : ids);
+      }
     },
     setMembers(channelId, ids) {
       const channel = requireChannel(channelId);
@@ -166,6 +235,9 @@ export function createFakeSlackApi(options: {
       channel.is_member = ids.includes(identity.botUserId);
     },
     setUser(user, aliases = []) {
+      for (const [id, existing] of users) {
+        if (existing.id === user.id) users.set(id, structuredClone(user));
+      }
       for (const id of [user.id, user.enterprise_user?.id, ...aliases]) {
         if (id) users.set(id, structuredClone(user));
       }
@@ -195,6 +267,10 @@ export function createFakeSlackApi(options: {
     emptyNextPage(method) {
       emptyPages.set(method, (emptyPages.get(method) ?? 0) + 1);
     },
+    getThreadStatus(channelId, threadTs) {
+      const state = statuses.get(`${channelId}/${threadTs}`);
+      return state && state.text && now() - state.at < 120_000 ? state.text : null;
+    },
   };
   controls.setUser({
     id: identity.botUserId,
@@ -221,6 +297,156 @@ export function createFakeSlackApi(options: {
 
   function failure(error: string): Response {
     return Response.json({ ok: false, error });
+  }
+
+  function timestamp(): string {
+    const wall = BigInt(Math.floor(now() * 1000));
+    timestampMicros = wall > timestampMicros ? wall : timestampMicros + 1n;
+    return `${timestampMicros / 1_000_000n}.${String(timestampMicros % 1_000_000n).padStart(6, "0")}`;
+  }
+
+  function writeProblem(channelId: string): string | null {
+    const channel = channels.get(channelId);
+    if (!channel) return "channel_not_found";
+    if (channel.is_member === false) return "not_in_channel";
+    if (channel.is_archived) return "is_archived";
+    return null;
+  }
+
+  function post(
+    input: z.output<(typeof schemas)["chat.postMessage"]>,
+    injected?: FakeSlackFailure,
+  ): Response {
+    const problem = writeProblem(input.channel);
+    if (problem) return failure(problem);
+    if (!input.text && !input.blocks?.length && !input.attachments?.length)
+      return failure("no_text");
+    const store = messages.get(input.channel)!;
+    const parent = input.thread_ts === undefined ? undefined : store.get(input.thread_ts);
+    if (input.thread_ts && (!parent || (parent.thread_ts && parent.thread_ts !== parent.ts)))
+      return failure("thread_not_found");
+    let messageTs = timestamp();
+    while (store.has(messageTs)) messageTs = timestamp();
+    const message: FakeSlackMessage = {
+      type: "message",
+      subtype: input.reply_broadcast ? "thread_broadcast" : "bot_message",
+      user: identity.botUserId,
+      bot_id: identity.botId,
+      app_id: identity.appId,
+      text: input.text ?? "",
+      ts: messageTs,
+      ...(input.thread_ts ? { thread_ts: input.thread_ts } : {}),
+      ...(input.blocks ? { blocks: input.blocks } : {}),
+      ...(input.attachments ? { attachments: input.attachments } : {}),
+    };
+    const invalidMetadata =
+      input.metadata !== undefined &&
+      (typeof input.metadata.event_type !== "string" ||
+        !/^[A-Za-z0-9_-]+$/.test(input.metadata.event_type) ||
+        !object.safeParse(input.metadata.event_payload).success);
+    const dropMetadata = invalidMetadata || (injected !== undefined && "dropMetadata" in injected);
+    if (input.metadata && !dropMetadata) message.metadata = structuredClone(input.metadata);
+    store.set(message.ts, message);
+    if (input.thread_ts) statuses.delete(`${input.channel}/${input.thread_ts}`);
+    options.emitEvent({ ...structuredClone(message), channel: input.channel });
+    return Response.json({
+      ok: true,
+      channel: input.channel,
+      ts: message.ts,
+      message,
+      ...(dropMetadata
+        ? {
+            warning: "invalid_metadata_schema",
+            response_metadata: { warnings: ["invalid_metadata_schema"] },
+          }
+        : {}),
+    });
+  }
+
+  function update(input: z.output<(typeof schemas)["chat.update"]>): Response {
+    const problem = writeProblem(input.channel);
+    if (problem) return failure(problem);
+    const message = messages.get(input.channel)!.get(input.ts);
+    if (!message) return failure("message_not_found");
+    if (message.user !== identity.botUserId) return failure("cant_update_message");
+    const previous = structuredClone(message);
+    const editedAt = timestamp();
+    message.edited = { user: identity.botUserId, ts: editedAt };
+    if (input.text !== undefined) message.text = input.text;
+    if (input.blocks !== undefined) {
+      if (input.blocks.length) message.blocks = structuredClone(input.blocks);
+      else delete message.blocks;
+    } else if (input.text !== undefined) delete message.blocks;
+    if (input.attachments !== undefined) {
+      if (input.attachments.length) message.attachments = structuredClone(input.attachments);
+      else delete message.attachments;
+    }
+    if (input.metadata !== undefined) {
+      if (Object.keys(input.metadata).length) message.metadata = structuredClone(input.metadata);
+      else delete message.metadata;
+    }
+    options.emitEvent({
+      type: "message",
+      subtype: "message_changed",
+      channel: input.channel,
+      hidden: true,
+      message: structuredClone(message),
+      previous_message: previous,
+      ts: editedAt,
+      event_ts: editedAt,
+    });
+    return Response.json({
+      ok: true,
+      channel: input.channel,
+      ts: input.ts,
+      text: message.text,
+      message,
+    });
+  }
+
+  function remove(input: z.output<(typeof schemas)["chat.delete"]>): Response {
+    const problem = writeProblem(input.channel);
+    if (problem) return failure(problem);
+    const store = messages.get(input.channel)!;
+    const message = store.get(input.ts);
+    if (!message) return failure("message_not_found");
+    if (message.user !== identity.botUserId) return failure("cant_delete_message");
+    store.delete(input.ts);
+    options.emitEvent({
+      type: "message",
+      subtype: "message_deleted",
+      channel: input.channel,
+      hidden: true,
+      deleted_ts: input.ts,
+      previous_message: structuredClone(message),
+      event_ts: timestamp(),
+    });
+    return Response.json({ ok: true, channel: input.channel, ts: input.ts });
+  }
+
+  function reaction(input: z.output<(typeof schemas)["reactions.add"]>, adding: boolean): Response {
+    const problem = writeProblem(input.channel);
+    if (problem) return failure(problem);
+    const message = messages.get(input.channel)!.get(input.timestamp);
+    if (!message) return failure("message_not_found");
+    const list = z
+      .array(z.object({ name: z.string(), count: z.number(), users: z.array(z.string()) }))
+      .parse(message.reactions ?? []);
+    const current = list.find((entry) => entry.name === input.name);
+    const has = current?.users.includes(identity.botUserId);
+    if (adding && has) return failure("already_reacted");
+    if (!adding && !has) return failure("no_reaction");
+    if (adding) {
+      if (current) {
+        current.users.push(identity.botUserId);
+        current.count += 1;
+      } else list.push({ name: input.name, count: 1, users: [identity.botUserId] });
+    } else if (current) {
+      current.users = current.users.filter((user) => user !== identity.botUserId);
+      current.count -= 1;
+    }
+    message.reactions = list.filter((entry) => entry.count > 0);
+    return Response.json({ ok: true });
   }
 
   function paged(
@@ -332,7 +558,10 @@ export function createFakeSlackApi(options: {
     if (!record.success) return unexpected(`${method} body is not an object.`);
     const token = request.headers.get("authorization")?.replace(/^Bearer /, "") ?? null;
     calls.push({ method, args: structuredClone(record.data), token, at: now() });
-    function run<T extends z.ZodType>(schema: T, work: (input: z.output<T>) => Response): Response {
+    function run<T extends z.ZodType>(
+      schema: T,
+      work: (input: z.output<T>, injected?: FakeSlackFailure) => Response,
+    ): Response | Promise<Response> {
       const input = schema.safeParse(args);
       if (!input.success) return unexpected(`${method}: ${input.error.message}`);
       if (token !== (method === "apps.connections.open" ? options.appToken : options.botToken))
@@ -344,9 +573,29 @@ export function createFakeSlackApi(options: {
             { ok: false, error: "ratelimited" },
             { status: 429, headers: { "Retry-After": String(injected.retryAfter) } },
           );
-        return failure(injected.error);
+        if ("status" in injected)
+          return Response.json(
+            { ok: false, error: "service_unavailable" },
+            { status: injected.status },
+          );
+        if ("error" in injected && !injected.afterWrite) return failure(injected.error);
       }
-      return work(input.data);
+      const response = work(input.data, injected);
+      if (injected && "error" in injected) return failure(injected.error);
+      if (injected && "lostResponse" in injected) {
+        // Keep the accepted operation, but give the caller no response until its own timeout.
+        return new Promise<Response>((resolve) => {
+          const finish = () => {
+            pending.delete(finish);
+            request.signal.removeEventListener("abort", finish);
+            resolve(Response.error());
+          };
+          pending.add(finish);
+          if (request.signal.aborted) finish();
+          else request.signal.addEventListener("abort", finish, { once: true });
+        });
+      }
+      return response;
     }
     switch (method) {
       case "apps.connections.open":
@@ -434,6 +683,24 @@ export function createFakeSlackApi(options: {
             "members",
           ),
         );
+      case "chat.postMessage":
+        return run(schemas[method], post);
+      case "chat.update":
+        return run(schemas[method], update);
+      case "chat.delete":
+        return run(schemas[method], remove);
+      case "reactions.add":
+      case "reactions.remove":
+        return run(schemas[method], (input) => reaction(input, method === "reactions.add"));
+      case "assistant.threads.setStatus":
+        return run(schemas[method], (input) => {
+          const problem = writeProblem(input.channel_id);
+          if (problem) return failure(problem);
+          if (!messages.get(input.channel_id)!.has(input.thread_ts))
+            return failure("thread_not_found");
+          statuses.set(`${input.channel_id}/${input.thread_ts}`, { text: input.status, at: now() });
+          return Response.json({ ok: true });
+        });
       default:
         return unexpected(`Unknown fake Slack method: ${method}`);
     }
@@ -444,6 +711,9 @@ export function createFakeSlackApi(options: {
     calls,
     problems,
     handle,
+    finishPending() {
+      for (const finish of pending) finish();
+    },
     failNext(method: string, injected: FakeSlackFailure) {
       if (!Object.hasOwn(schemas, method))
         throw new Error(`Cannot inject an unknown Slack method ${method}.`);
@@ -452,6 +722,13 @@ export function createFakeSlackApi(options: {
         (!Number.isFinite(injected.retryAfter) || injected.retryAfter < 0)
       )
         throw new Error("Retry-After must be nonnegative and finite.");
+      if (
+        "status" in injected &&
+        (!Number.isInteger(injected.status) || injected.status < 400 || injected.status > 599)
+      )
+        throw new Error("HTTP failure status must be between 400 and 599.");
+      if ("dropMetadata" in injected && method !== "chat.postMessage")
+        throw new Error("Metadata dropping is only supported for chat.postMessage.");
       const queue = failures.get(method) ?? [];
       queue.push(structuredClone(injected));
       failures.set(method, queue);

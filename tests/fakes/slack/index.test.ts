@@ -170,12 +170,17 @@ test("refresh_requested makes the SDK acquire another socket and hello can name 
   const fake = fakeSlack();
   const client = await socketClient(fake);
   const connected = nextConnection(client);
+  const frames: unknown[] = [];
+  client.on("ws_message", (data: string) => frames.push(JSON.parse(data)));
   fake.setNextHelloAppId("AOTHER");
   fake.disconnect("refresh_requested");
   await connected;
   await until(() => fake.connections.length === 2);
   expect(fake.calls.filter(({ method }) => method === "apps.connections.open")).toHaveLength(2);
   expect(fake.connections[0].closedAt).not.toBeNull();
+  expect(frames).toContainEqual(
+    expect.objectContaining({ type: "hello", connection_info: { app_id: "AOTHER" } }),
+  );
 });
 
 test("an abrupt drop is observable and the SDK reconnects", async () => {
@@ -185,6 +190,23 @@ test("an abrupt drop is observable and the SDK reconnects", async () => {
   fake.dropConnections();
   await connected;
   expect(fake.connections).toHaveLength(2);
+});
+
+test("a silent peer with no pongs triggers the SDK heartbeat before the socket is dropped", async () => {
+  const fake = fakeSlack({ pingIntervalMs: 10 });
+  const client = await socketClient(fake);
+  fake.setSocketResponsive(false);
+  try {
+    await until(() => client.websocket?.readyState === WebSocket.CLOSING);
+    expect(fake.connections).toHaveLength(1);
+    const connected = nextConnection(client);
+    // Let the already-started close handshake finish instead of waiting for its 30-second limit.
+    fake.setSocketResponsive(true);
+    await connected;
+    expect(fake.connections).toHaveLength(2);
+  } finally {
+    fake.setSocketResponsive(true);
+  }
 });
 
 test("unknown methods and unexpected arguments fail the SDK call and fake cleanup", async () => {
@@ -234,4 +256,40 @@ test("a bare ack is recorded and a second or unknown ack fails cleanup", async (
   socket.send(JSON.stringify({ envelope_id: "never-sent" }));
   await Bun.sleep(5);
   await expect(fake.stop()).rejects.toThrow("unknown or already acked");
+});
+
+test("real Web API writes produce Socket Mode message, edit and delete events", async () => {
+  const fake = fakeSlack();
+  const client = await socketClient(fake);
+  const channel = fake.addChannel();
+  const web = webClient(fake);
+  let incoming = nextDelivery(client);
+  const post = await web.chat.postMessage({ channel, text: "First" });
+  let event = await incoming;
+  expect(event.body.event).toMatchObject({
+    channel,
+    text: "First",
+    ts: post.ts,
+    bot_id: fake.identity.botId,
+  });
+  await event.ack();
+  incoming = nextDelivery(client);
+  await web.chat.update({ channel, ts: post.ts!, text: "Edited" });
+  event = await incoming;
+  expect(event.body.event).toMatchObject({
+    subtype: "message_changed",
+    message: {
+      ts: post.ts,
+      text: "Edited",
+      edited: { user: fake.identity.botUserId, ts: expect.any(String) },
+    },
+    previous_message: { text: "First" },
+  });
+  await event.ack();
+  incoming = nextDelivery(client);
+  await web.chat.delete({ channel, ts: post.ts! });
+  event = await incoming;
+  expect(event.body.event).toMatchObject({ subtype: "message_deleted", deleted_ts: post.ts });
+  await event.ack();
+  await until(() => fake.acks.length === 3);
 });

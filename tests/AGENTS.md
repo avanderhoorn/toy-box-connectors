@@ -10,4 +10,8 @@ An end-to-end run starts Toy Box under a temp `HOME`, so its database, sessions,
 
 The live checklist runs by hand in the real test workspace with the test app's tokens, and its results go to the Toy Box channel.
 
+`startFakeSlack()` in `fakes/slack` binds only to an ephemeral loopback port and exposes its `/api/` URL and fake bot and app tokens. Seed channels, people, membership and messages through its controls. Seeding changes stored state only, so drive incoming Socket Mode events and interactions explicitly. Web API posts, edits and deletes do emit events when a socket is connected. Acks, calls, connections and deliveries remain available for assertions, and cleanup fails on unknown methods, arguments or acks. Contract tests exercise both real Slack SDK clients.
+
+Drive Socket Mode redelivery explicitly with `redeliver`, since Slack documents no fixed retry schedule. `failNext` queues a fault for one method: a platform error, HTTP status, `Retry-After`, accepted write followed by an error, a successful post without metadata, or an accepted operation whose response is lost. Disable SDK retries when asserting a single attempt. Use `emptyNextPage` for a cursor-bearing empty page and the injected clock for timestamps and status expiry. The fake models the bridge's supported API subset, not Slack's automatic rate-limit schedule or all message rendering. Time bounds are explicit, with no implicit current-time cutoff.
+
 Unix socket paths must stay under 104 bytes, and macOS temp folders are long, so tests that bind a socket create their folders under `/tmp` with short names. Give every test its own data folder and close every database it opens.
