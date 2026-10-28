@@ -1511,3 +1511,18 @@ If metadata is absent, distinguish an operator-attested content match from
 cryptographic/correlation proof. Refuse a wrong message or a message the bridge
 cannot verify. `--drop` and explicit duplicate-risk `--resend --yes` remain
 separate actions.
+
+### Follow-up closure
+
+The brief revision announced in channel message 37 addresses F1–F5. I checked
+`px-claim`, `px-approval`, `px-cli`, `px-lifecycle`, `outbound`, `trust`, the
+relevant schema comments and the s6/s8 completion criteria. The immutable
+revision argument, scoped approval read-set, decision/apply split, terminal
+candidate confirmation, offline reset and identified-message resolution are
+consistent with these recommendations. No further blocking issue found in
+those changed sections.
+
+Manual text evidence remains weaker than an outbox-metadata match, and terminal
+checks do not isolate the bridge from arbitrary same-UID code. Both are now
+explicit instead of being presented as stronger guarantees. This closes the
+design review, not the implementation, protocol-fake or live-Slack proof.
