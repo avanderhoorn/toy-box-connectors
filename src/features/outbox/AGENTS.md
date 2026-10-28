@@ -16,7 +16,10 @@ A rate limit pauses only the method Slack limited, until the time Slack named.
 
 `model/rendering.ts` owns Markdown conversion. It uses the pinned Markdown lexer, supplies
 mrkdwn section blocks and an escaped plain fallback, disables automatic parsing and unfurls,
-and neutralizes mentions. A section is at most 3,000 UTF-16 code units. An oversized block
+and neutralizes mentions. Only HTTP(S) becomes a link. Email addresses, mailto links,
+git remotes, and other autolinked schemes stay plain text. An explicit Markdown link to
+another scheme is refused. Whole blocks pack greedily into a section with a blank line
+between them, up to 3,000 UTF-16 code units. An oversized block
 breaks only between lines, closing and reopening formatting, never inside a link, entity, or
 surrogate pair. A line that cannot fit is refused. The rendered sections and the fallback
 must each fit 12,000 code units, and a message has at most 50 blocks.

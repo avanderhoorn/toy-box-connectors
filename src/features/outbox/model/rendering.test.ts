@@ -16,9 +16,8 @@ test("Markdown becomes mrkdwn sections with a plain, accessible fallback", () =>
     "# Release\n\nShipped **bold**, *italic*, ~~old~~ and `code`.\n\n[Read more](https://example.com/a?q=a&b=c)",
   );
   expect(message.blocks.map((block) => block.text.text)).toEqual([
-    "*Release*",
-    "Shipped *bold*, _italic_, ~old~ and `code`.",
-    "<https://example.com/a?q=a&amp;b=c|Read more>",
+    "*Release*\n\nShipped *bold*, _italic_, ~old~ and `code`.\n\n" +
+      "<https://example.com/a?q=a&amp;b=c|Read more>",
   ]);
   expect(message.text).toBe(
     "Release\n\nShipped bold, italic, old and code.\n\nRead more (https://example.com/a?q=a&amp;b=c)",
@@ -52,9 +51,7 @@ test("raw Slack controls, HTML and named broadcasts cannot mention anyone", () =
 
 test("inline and block HTML are escaped, and raw ampersands are escaped exactly once", () => {
   expect(sections("a & b\n\nbefore <c> after\n\n<!here> <@U1>")).toEqual([
-    "a &amp; b",
-    "before &lt;c&gt; after",
-    "&lt;!here&gt; &lt;@U1&gt;",
+    "a &amp; b\n\nbefore &lt;c&gt; after\n\n&lt;!here&gt; &lt;@U1&gt;",
   ]);
 });
 
@@ -70,12 +67,14 @@ test("lists, task lists, quotes, images, tables and rules retain their content",
     ].join("\n\n"),
   );
   expect(message.blocks.map((block) => block.text.text)).toEqual([
-    "3. First\n4. Second",
-    "- [x] Done\n- [ ] Next",
-    "> Quoted\n> \n> Again",
-    "<https://example.com/diagram.png|Diagram>",
-    "*Name* | *State*\nBridge | Ready",
-    "---",
+    [
+      "3. First\n4. Second",
+      "- [x] Done\n- [ ] Next",
+      "> Quoted\n> \n> Again",
+      "<https://example.com/diagram.png|Diagram>",
+      "*Name* | *State*\nBridge | Ready",
+      "---",
+    ].join("\n\n"),
   ]);
   expect(message.text).toContain("Diagram (https://example.com/diagram.png)");
 });
@@ -93,18 +92,33 @@ test("reference links and bare public URLs use the same validated link path", ()
     sections(
       '[Docs][ref]\n\nhttps://example.com/b\n\n[ref]: https://example.com/a "Documentation"',
     ),
-  ).toEqual(["<https://example.com/a|Docs>", "<https://example.com/b|https://example.com/b>"]);
+  ).toEqual(["<https://example.com/a|Docs>\n\n<https://example.com/b|https://example.com/b>"]);
 });
 
 test.each([
   "[bad](javascript:alert(1))",
   "[bad](java&#115;cript:alert(1))",
   "![bad](file:///Users/owner/work)",
-  "[bad](mailto:owner@example.com)",
+  "[bad](ftp://example.com/file)",
   "[bad](/relative)",
   "[bad][ref]\n\n[ref]: ftp://example.com",
 ])("unsafe Markdown destinations are refused: %s", (source) => {
   expect(renderMarkdown(source)).toEqual({ kind: "refused", problem: "unsafe_link" });
+});
+
+test("email addresses, git remotes and non-HTTP autolinks stay plain text", () => {
+  for (const source of [
+    "support@github.com",
+    "git@github.com:github/toy-box.git",
+    "ftp://example.com/file",
+  ]) {
+    expect(sections(source)).toEqual([source]);
+  }
+  expect(sections("<a@b.c>")).toEqual(["a@b.c"]);
+  expect(sections("[Email us](mailto:support@example.com)")).toEqual([
+    "Email us (support@example.com)",
+  ]);
+  expect(sections("<javascript:alert(1)>")).toEqual(["javascript:alert(1)"]);
 });
 
 test("a link label cannot inject Slack controls or a new destination", () => {
@@ -161,6 +175,20 @@ test("a section accepts exactly 3000 characters and refuses an indivisible 3001-
     actual: 3_001,
   });
   expect(sections("a".repeat(3_000) + "\nb")).toEqual(["a".repeat(3_000), "b"]);
+});
+
+test("lines totaling exactly 3000 stay together, while 3001 breaks between lines", () => {
+  const first = "a".repeat(1_499);
+  expect(sections(first + "\n" + "b".repeat(1_500))).toEqual([first + "\n" + "b".repeat(1_500)]);
+  expect(sections(first + "\n" + "b".repeat(1_501))).toEqual([first, "b".repeat(1_501)]);
+});
+
+test("whole blocks pack greedily up to 3000 characters, with a blank line between them", () => {
+  const first = "a".repeat(1_499);
+  expect(sections(first + "\n\n" + "b".repeat(1_499))).toEqual([
+    first + "\n\n" + "b".repeat(1_499),
+  ]);
+  expect(sections(first + "\n\n" + "b".repeat(1_500))).toEqual([first, "b".repeat(1_500)]);
 });
 
 test("entities remain whole when escaping expands a section past its boundary", () => {
@@ -254,11 +282,20 @@ test("the plain fallback has the same 12000-character limit", () => {
   });
 });
 
-test("a message accepts 50 blocks and refuses 51 without merging away paragraphs", () => {
-  expect(rendered(Array.from({ length: 50 }, () => "paragraph").join("\n\n")).blocks).toHaveLength(
-    50,
+test("a release with many short paragraphs does not hit a spurious block limit", () => {
+  expect(rendered(Array.from({ length: 60 }, () => "paragraph").join("\n\n")).blocks).toHaveLength(
+    1,
   );
-  expect(renderMarkdown(Array.from({ length: 51 }, () => "paragraph").join("\n\n"))).toEqual({
+});
+
+test("the defensive block cap allows 50 before applying the smaller character limit", () => {
+  const block = "a".repeat(1_501);
+  expect(renderMarkdown(Array.from({ length: 50 }, () => block).join("\n\n"))).toMatchObject({
+    kind: "refused",
+    problem: "message_too_long",
+    limit: 12_000,
+  });
+  expect(renderMarkdown(Array.from({ length: 51 }, () => block).join("\n\n"))).toEqual({
     kind: "refused",
     problem: "too_many_blocks",
     limit: 50,

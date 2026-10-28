@@ -78,7 +78,14 @@ export function renderMarkdown(source: string): RenderResult {
     const sections: string[] = [];
     let firstLine = 1;
     for (const runs of groups) {
-      sections.push(...chunkRuns(runs, firstLine));
+      for (const chunk of chunkRuns(runs, firstLine)) {
+        const previous = sections.at(-1);
+        if (previous !== undefined && previous.length + 2 + chunk.length <= sectionLimit) {
+          sections[sections.length - 1] = previous + "\n\n" + chunk;
+        } else {
+          sections.push(chunk);
+        }
+      }
       firstLine += plainRuns(runs).split("\n").length + 1;
     }
     if (sections.length > blockLimit) {
@@ -216,13 +223,20 @@ function tokenRuns(token: Token, context: Context): Run[] {
     }
     case "link":
     case "image": {
-      const problem = linkProblem(token.href);
-      if (problem) throw new RenderingRefused({ kind: "refused", problem });
       const label =
         inline(token.tokens)
           .map(plainRun)
           .join("")
           .replace(/\s*\n\s*/g, " ") || token.href;
+      const protocol = URL.canParse(token.href) ? new URL(token.href).protocol : null;
+      const explicit = token.raw.startsWith("[") || token.raw.startsWith("![");
+      if (protocol === "mailto:") {
+        const address = token.href.slice("mailto:".length);
+        return [run(label === address || label === token.href ? address : `${label} (${address})`)];
+      }
+      if (!explicit && protocol !== "http:" && protocol !== "https:") return [run(label)];
+      const problem = linkProblem(token.href);
+      if (problem) throw new RenderingRefused({ kind: "refused", problem });
       return [{ ...run(label), href: new URL(token.href).href }];
     }
     case "table": {
