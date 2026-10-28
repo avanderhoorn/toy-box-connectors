@@ -495,11 +495,10 @@ describe("narrowing changes", () => {
     );
   });
 
-  test("unlink voids every card for the link, and a handoff every card at all", () => {
+  test("unlink voids every card for the link", () => {
     for (const card of [pendingApproval(), resume, widen]) {
       expect(reverses({ kind: "unlink", linkId: "link" }, card)).toBe(true);
       expect(reverses({ kind: "unlink", linkId: "link-2" }, card)).toBe(false);
-      expect(reverses({ kind: "owner" }, { ...card, linkId: "link-2" })).toBe(true);
     }
   });
 
@@ -510,7 +509,7 @@ describe("narrowing changes", () => {
     ).toBe(true);
     for (const state of ["applied", "rejected", "expired", "stale"] as const) {
       expect(reverses(deny, pendingApproval({ state }))).toBe(false);
-      expect(reverses({ kind: "owner" }, pendingApproval({ state }))).toBe(false);
+      expect(reverses({ kind: "unlink", linkId: "link" }, pendingApproval({ state }))).toBe(false);
     }
   });
 });

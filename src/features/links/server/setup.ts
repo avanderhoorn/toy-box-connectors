@@ -204,11 +204,8 @@ async function propose(
       ownerSpokeAt: stream.ownerSpokeAt,
     };
   }
-  const [elsewhere] = await transaction`
-    SELECT id FROM links
-    WHERE slack_channel_id = ${draft.needed.monitored} AND toybox_channel_id <> ${caller.channelId}
-  `;
-  const context = { open, createdInLastHour, linkedElsewhere: elsewhere !== undefined };
+  const elsewhere = await linkedElsewhere(transaction, draft.needed.monitored, caller.channelId);
+  const context = { open, createdInLastHour, linkedElsewhere: elsewhere };
   const plan = planProposal(state, draft, fresh.facts, context, at);
   switch (plan.kind) {
     case "existing":
@@ -233,6 +230,19 @@ async function propose(
       return proposed(approval, false, fresh.facts.monitored?.name ?? null);
     }
   }
+}
+
+/** Whether another Toy Box channel's link watches `slackChannelId`. */
+export async function linkedElsewhere(
+  sql: Bun.SQL,
+  slackChannelId: string,
+  toyboxChannelId: string,
+): Promise<boolean> {
+  const [link] = await sql`
+    SELECT id FROM links
+    WHERE slack_channel_id = ${slackChannelId} AND toybox_channel_id <> ${toyboxChannelId}
+  `;
+  return link !== undefined;
 }
 
 async function readSetupLink(sql: Bun.SQL, row: SetupLinkRow): Promise<SetupLink> {

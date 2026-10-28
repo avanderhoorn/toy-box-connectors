@@ -260,7 +260,7 @@ async function saveClaim(transaction: Bun.SQL, claim: StoredClaim): Promise<void
   await transaction`UPDATE claims SET ${transaction(claimColumns(rest))} WHERE id = ${id}`;
 }
 
-/** A uniformly random code value, by rejecting the few values that would favour low codes. */
+/** A uniformly random code value, by rejecting the few values that would favor low codes. */
 function randomCodeValue(): number {
   const limit = Math.floor(2 ** 32 / CLAIM_CODE_SPACE) * CLAIM_CODE_SPACE;
   const values = new Uint32Array(1);

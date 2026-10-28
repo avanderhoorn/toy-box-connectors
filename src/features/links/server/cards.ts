@@ -13,8 +13,8 @@ export type ApprovalCard = {
 
 /**
  * The card for `approvalId` as the approval is now, which the outbox reads each time it posts or
- * updates it, naming people by what the bridge stored about them. Null once the approval is gone,
- * such as purged by unlink or uninstall, so the outbox drops the item.
+ * updates it, naming people by what the bridge stored about them. Null once uninstall or reset has
+ * purged the approval, so the outbox drops the item.
  */
 export async function readApprovalCard(
   sql: Bun.SQL,

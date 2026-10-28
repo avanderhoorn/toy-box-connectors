@@ -9,9 +9,7 @@ import {
 } from "@links/model/approvals";
 import type { SetupRequest } from "@links/model/setup";
 import { privateAudience } from "@links/model/testFixtures";
-import type { ChannelFacts } from "@slackapi/model/channels";
 import { channelFacts, slackPerson } from "@slackapi/model/testFixtures";
-import type { SlackPerson } from "@slackapi/model/users";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { readSlackPersonName, writeSlackPerson } from "@slackapi/server/users";
 import { UNREAD_TOYBOX_STREAM, type ToyBoxChannelView } from "@toybox/model/stream";
@@ -19,29 +17,16 @@ import { writeToyBoxStream } from "@toybox/server/database";
 import { readApproval } from "./approvals";
 import type { FactsReader, Unverified } from "./facts";
 import { changeSetup, readSetupState, type SetupCaller, type SetupOutcome } from "./setup";
-import { createStoredApproval, createStoredLink } from "./testFixtures";
+import {
+  createStoredApproval,
+  createStoredLink,
+  fakeFactsReader,
+  requestsRoutine,
+  type FactsWorld,
+} from "./testFixtures";
 
 const HOUR_MS = 60 * 60_000;
 const NOW = 50 * HOUR_MS;
-
-/** What Slack and Toy Box say. A test changes it to change what the next read finds. */
-type World = {
-  toyBox: ToyBoxChannelView | null | Unverified;
-  /** Set when Slack can't be read. */
-  slack: Unverified | null;
-  channels: Record<string, ChannelFacts>;
-  members: Record<string, readonly string[]>;
-  people: Record<string, SlackPerson>;
-};
-
-function requestsRoutine(id: string) {
-  return {
-    id,
-    title: "Slack requests",
-    schedule: "*/5 * * * *",
-    prompt: "Run toy-box-slack inbox.",
-  };
-}
 
 /**
  * A Copilot lead's channel whose owner posted a minute ago, with the routines createStoredLink's
@@ -61,7 +46,7 @@ function toyBoxView(changes: Partial<ToyBoxChannelView> = {}): ToyBoxChannelView
  * (#release-eng) with the owner and the bot in them. U-carol is a full member of T-home.
  * `changes` replace its parts.
  */
-function world(changes: Partial<World> = {}): World {
+function world(changes: Partial<FactsWorld> = {}): FactsWorld {
   return {
     toyBox: toyBoxView(),
     slack: null,
@@ -73,41 +58,6 @@ function world(changes: Partial<World> = {}): World {
     people: { "U-carol": slackPerson() },
     ...changes,
   };
-}
-
-/**
- * A reader that answers from `world` as it is when asked, and lists what it was asked.
- * `whileSlackReads` runs while Slack is asked, as anything else that writes to the bridge could.
- */
-function fakeReader(world: World, whileSlackReads?: (read: number) => Promise<unknown>) {
-  const reads: string[] = [];
-  let slackReads = 0;
-  const reader: FactsReader = {
-    async readToyBox(toyboxChannelId) {
-      reads.push(`toybox ${toyboxChannelId}`);
-      const { toyBox } = world;
-      return toyBox && "kind" in toyBox ? toyBox : { kind: "read", facts: toyBox };
-    },
-    async readSlack(needed, ownerIds) {
-      const { monitored, publish, owner, people } = needed;
-      reads.push(`slack ${monitored} ${publish} ${owner} [${people.join(" ")}]`);
-      await whileSlackReads?.(++slackReads);
-      if (world.slack) return world.slack;
-      const ownerIn = (channelId: string) =>
-        ownerIds.some((id) => world.members[channelId]?.includes(id));
-      return {
-        kind: "read",
-        facts: {
-          monitored: world.channels[monitored] ?? null,
-          publish: world.channels[publish] ?? null,
-          ownerInMonitored: ownerIn(monitored),
-          ownerInPublish: ownerIn(publish),
-          people: people.map((userId) => ({ userId, person: world.people[userId] ?? null })),
-        },
-      };
-    },
-  };
-  return { reader, reads };
 }
 
 /** The installation, with toybox-link's link to C-link. `columns` replace the link's. */
@@ -201,7 +151,7 @@ describe("proposing a setup change", () => {
   test("a link only stores a proposal, with its card queued in the channel it would watch", async () => {
     const database = await openTestDatabase();
     await createStoredInstallation(database);
-    const { reader, reads } = fakeReader(world());
+    const { reader, reads } = fakeFactsReader(world());
 
     const outcome = await change(database, reader, linkNew, newChannel);
 
@@ -271,12 +221,21 @@ describe("proposing a setup change", () => {
   });
 
   test("allowing someone is checked against the link as it stands, and the operator's proposal is theirs", async () => {
-    const database = await linked();
-    const { reader, reads } = fakeReader(world());
+    const database = await linked({
+      publish_channel_id: "C-pub",
+      approved_audience: { monitored: privateAudience(), publish: privateAudience("C-pub") },
+    });
+    const facts = world();
+    facts.channels["C-pub"] = channelFacts({ id: "C-pub", name: "announce" });
+    facts.members["C-pub"] = ["U-owner"];
+    const { reader, reads } = fakeFactsReader(facts);
     const operator: SetupCaller = { role: "operator", channelId: "toybox-link" };
 
-    const approval = proposal(await change(database, reader, allowCarol, operator));
+    const outcome = await change(database, reader, allowCarol, operator);
 
+    const approval = proposal(outcome);
+    // The card asks in the channel the link watches, and the outcome names that one.
+    expect(outcome).toMatchObject({ existing: false, channelName: "toy-box-private" });
     expect(approval).toMatchObject({
       linkId: "link",
       action: "allow",
@@ -285,7 +244,7 @@ describe("proposing a setup change", () => {
         ownerUserId: "U-owner",
         link: { id: "link", status: "active", statusReason: null },
         monitored: privateAudience(),
-        publish: privateAudience(),
+        publish: privateAudience("C-pub"),
         before: { "allowlist.U-carol": null },
       },
       card: { channelId: "C-link", ts: null },
@@ -301,12 +260,12 @@ describe("proposing a setup change", () => {
         subject: "allow",
       },
     ]);
-    expect(reads).toEqual(["toybox toybox-link", "slack C-link C-link U-owner [U-carol]"]);
+    expect(reads).toEqual(["toybox toybox-link", "slack C-link C-pub U-owner [U-carol]"]);
   });
 
   test("the same change proposed again returns the card that waits, without reading or posting", async () => {
     const database = await linked();
-    const { reader, reads } = fakeReader(world());
+    const { reader, reads } = fakeFactsReader(world());
     const first = proposal(await change(database, reader, allowCarol));
 
     expect(await change(database, reader, allowCarol)).toEqual({
@@ -325,7 +284,7 @@ describe("proposing a setup change", () => {
       createdAt: NOW - APPROVAL_LIFETIME_MS,
       expiresAt: NOW,
     });
-    const { reader } = fakeReader(world());
+    const { reader } = fakeFactsReader(world());
 
     const outcome = await change(database, reader, allowCarol);
 
@@ -348,7 +307,7 @@ describe("proposing a setup change", () => {
   test("while the owner is away, widening is refused before Slack is asked", async () => {
     for (const ownerSpokeAt of [null, NOW - OWNER_PRESENCE_MS - 1]) {
       const database = await linked();
-      const { reader, reads } = fakeReader(world({ toyBox: toyBoxView({ ownerSpokeAt }) }));
+      const { reader, reads } = fakeFactsReader(world({ toyBox: toyBoxView({ ownerSpokeAt }) }));
 
       expect(await change(database, reader, allowCarol)).toEqual({
         kind: "refused",
@@ -370,7 +329,7 @@ describe("proposing a setup change", () => {
     for (const { snapshot, stream } of cases) {
       const database = await linked();
       await setOwnerSpokeAt(database, "toybox-link", stream);
-      const { reader } = fakeReader(world({ toyBox: toyBoxView({ ownerSpokeAt: snapshot }) }));
+      const { reader } = fakeFactsReader(world({ toyBox: toyBoxView({ ownerSpokeAt: snapshot }) }));
 
       expect(await change(database, reader, allowCarol)).toMatchObject({ kind: "proposed" });
     }
@@ -379,7 +338,7 @@ describe("proposing a setup change", () => {
   test("a Toy Box channel may have three cards pending, whatever other channels have", async () => {
     const database = await linked();
     for (const number of [1, 2, 3]) await storeCard(database, number);
-    const { reader, reads } = fakeReader(world());
+    const { reader, reads } = fakeFactsReader(world());
 
     expect(await change(database, reader, allowCarol)).toEqual({
       kind: "refused",
@@ -396,7 +355,7 @@ describe("proposing a setup change", () => {
       for (let number = 1; number <= 10; number++) {
         await storeCard(database, number, { ...decided, createdAt });
       }
-      const { reader, reads } = fakeReader(world());
+      const { reader, reads } = fakeFactsReader(world());
 
       const outcome = await change(database, reader, allowCarol);
 
@@ -415,7 +374,7 @@ describe("proposing a setup change", () => {
   test("one card allows at most twenty people, and more are refused before anything is read", async () => {
     const database = await linked();
     const userIds = Array.from({ length: 21 }, (_, index) => `U-${index}`);
-    const { reader, reads } = fakeReader(world());
+    const { reader, reads } = fakeFactsReader(world());
 
     expect(await change(database, reader, { action: "allow", userIds })).toEqual({
       kind: "refused",
@@ -433,7 +392,7 @@ describe("proposing a setup change", () => {
       action: "link",
       patch: [{ field: "slack_channel_id", after: "C-new" }],
     });
-    const { reader, reads } = fakeReader(world());
+    const { reader, reads } = fakeFactsReader(world());
 
     expect(await change(database, reader, linkNew, newChannel)).toEqual({
       kind: "refused",
@@ -446,7 +405,7 @@ describe("proposing a setup change", () => {
   test("a Slack channel another link watches can't be linked", async () => {
     const database = await linked();
     await createStoredLink(database, "other", { slack_channel_id: "C-new" });
-    const { reader } = fakeReader(world());
+    const { reader } = fakeFactsReader(world());
 
     expect(await change(database, reader, linkNew, newChannel)).toEqual({
       kind: "refused",
@@ -457,7 +416,7 @@ describe("proposing a setup change", () => {
 
   test("a lead that doesn't run on Copilot can't propose", async () => {
     const database = await linked();
-    const { reader } = fakeReader(world({ toyBox: toyBoxView({ provider: "claude" }) }));
+    const { reader } = fakeFactsReader(world({ toyBox: toyBoxView({ provider: "claude" }) }));
 
     expect(await change(database, reader, allowCarol)).toEqual({
       kind: "refused",
@@ -475,7 +434,7 @@ describe("proposing a setup change", () => {
     ] as const;
     for (const { carol, reason } of people) {
       const database = await linked();
-      const { reader } = fakeReader(world({ people: carol ? { "U-carol": carol } : {} }));
+      const { reader } = fakeFactsReader(world({ people: carol ? { "U-carol": carol } : {} }));
 
       expect(await change(database, reader, allowCarol)).toEqual({ kind: "refused", reason });
       expect(await readCounts(database)).toMatchObject({ approvals: 0, outbox: 0 });
@@ -485,7 +444,7 @@ describe("proposing a setup change", () => {
 
   test("the owner counts in a channel under any ID the bridge knows them by", async () => {
     const database = await linked();
-    const { reader } = fakeReader(world({ members: { "C-link": ["W-owner"] } }));
+    const { reader } = fakeFactsReader(world({ members: { "C-link": ["W-owner"] } }));
 
     expect(await change(database, reader, allowCarol)).toEqual({
       kind: "refused",
@@ -510,7 +469,7 @@ describe("proposing a setup change", () => {
       [{ slack: slackDown }, ["toybox toybox-link", "slack C-link C-link U-owner [U-carol]"]],
     ] as const) {
       const database = await linked();
-      const { reader, reads } = fakeReader(world(down));
+      const { reader, reads } = fakeFactsReader(world(down));
 
       expect(await change(database, reader, allowCarol)).toEqual(
         "toyBox" in down ? toyBoxDown : slackDown,
@@ -522,7 +481,7 @@ describe("proposing a setup change", () => {
 
   test("a Toy Box channel that's gone is refused before Slack is asked", async () => {
     const database = await linked();
-    const { reader, reads } = fakeReader(world({ toyBox: null }));
+    const { reader, reads } = fakeFactsReader(world({ toyBox: null }));
 
     expect(await change(database, reader, allowCarol)).toEqual({
       kind: "refused",
@@ -540,8 +499,8 @@ describe("proposing a setup change", () => {
     facts.channels["C-pub"] = channelFacts({ id: "C-pub", name: "announce" });
     facts.members["C-pub"] = ["U-owner"];
     const back: SetupRequest = { action: "set", change: { publishChannelId: "C-link" } };
-    const { reader, reads } = fakeReader(facts, async (read) => {
-      if (read === 1) await change(database, fakeReader(facts).reader, back);
+    const { reader, reads } = fakeFactsReader(facts, async (read) => {
+      if (read === 1) await change(database, fakeFactsReader(facts).reader, back);
     });
 
     const approval = proposal(await change(database, reader, allowCarol));
@@ -561,7 +520,7 @@ describe("proposing a setup change", () => {
   test("a change whose needs keep moving is refused rather than judged on facts read for others", async () => {
     const database = await linked();
     const owners = ["U-erin", "U-owner"];
-    const { reader, reads } = fakeReader(world(), (read) =>
+    const { reader, reads } = fakeFactsReader(world(), (read) =>
       database.write(
         (transaction) =>
           transaction`UPDATE installation SET owner_user_id = ${owners[(read - 1) % 2]!}`,
@@ -581,7 +540,7 @@ describe("proposing a setup change", () => {
 
   test("the same change proposed while this one was read returns that card", async () => {
     const database = await linked();
-    const { reader } = fakeReader(world(), () =>
+    const { reader } = fakeFactsReader(world(), () =>
       createStoredApproval(database, { createdAt: NOW, expiresAt: NOW + APPROVAL_LIFETIME_MS }),
     );
 
@@ -606,7 +565,7 @@ describe("proposing a setup change", () => {
       patch: [{ field: "publish_channel_id", after: "C-other" }],
     });
     await storeCard(database, 2);
-    const { reader, reads } = fakeReader(world());
+    const { reader, reads } = fakeFactsReader(world());
     const narrow: SetupRequest = {
       action: "set",
       change: { requestMode: "mention", publishChannelId: "C-link" },
@@ -674,7 +633,7 @@ describe("proposing a setup change", () => {
 
   test("a change that changes nothing stores and reads nothing", async () => {
     const database = await linked();
-    const { reader, reads } = fakeReader(world());
+    const { reader, reads } = fakeFactsReader(world());
 
     expect(await change(database, reader, { action: "allow", userIds: ["U-owner"] })).toEqual({
       kind: "unchanged",
@@ -686,7 +645,7 @@ describe("proposing a setup change", () => {
 
   test("before the bridge is installed, nothing can be set up", async () => {
     const database = await openTestDatabase();
-    const { reader, reads } = fakeReader(world());
+    const { reader, reads } = fakeFactsReader(world());
 
     expect(await change(database, reader, linkNew, newChannel)).toEqual({
       kind: "refused",

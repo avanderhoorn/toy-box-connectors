@@ -7,8 +7,8 @@ import {
   type ProposalCaller,
 } from "@links/model/approvals";
 import type { ApprovedAudience } from "@links/model/audience";
-import { readAllOpenApprovals, readOpenApprovals, staleApprovals } from "./approvals";
-import { audit } from "./audit";
+import { readOpenApprovals, staleApprovals } from "./approvals";
+import { auditPatch } from "./audit";
 
 // Narrowing.
 //
@@ -46,14 +46,7 @@ export async function narrowSettings(
   await transaction`
     UPDATE links SET ${transaction({ ...columns, updated_at: now })} WHERE id = ${linkId}
   `;
-  for (const entry of patch) {
-    const value = typeof entry.after === "string" ? entry.after : JSON.stringify(entry.after);
-    await audit(
-      transaction,
-      { actor, action: "set", linkId, subject: `${entry.field}=${value}` },
-      now,
-    );
-  }
+  await auditPatch(transaction, { actor, action: "set", linkId }, patch, now);
   const fields = patch.map((entry) => entry.field as LinkField);
   return voidReversed(transaction, { kind: "set", linkId, fields }, now);
 }
@@ -64,10 +57,7 @@ export async function voidReversed(
   narrowing: Narrowing,
   now: number,
 ): Promise<Approval[]> {
-  const open =
-    narrowing.kind === "owner"
-      ? await readAllOpenApprovals(transaction)
-      : await readOpenApprovals(transaction, narrowing.linkId);
+  const open = await readOpenApprovals(transaction, narrowing.linkId);
   const reversed = open.filter((approval) => reverses(narrowing, approval));
   return staleApprovals(transaction, reversed, "reversed", now);
 }

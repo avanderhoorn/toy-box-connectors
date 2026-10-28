@@ -81,7 +81,7 @@ export type ReadSet = {
 export type StaleReason =
   | ChangedReason
   | InvalidReason
-  /** A narrowing change reversed it: deny, pause, unlink, a set or an owner handoff. */
+  /** A narrowing change reversed it: deny, pause, unlink or a set. */
   | "reversed"
   /** Apply couldn't fetch fresh facts in time. */
   | "not_verified";
@@ -399,8 +399,8 @@ export function reapproves(draft: Pick<Approval, "action" | "patch">): {
  * other organization. A channel whose audience the change doesn't approve anew must be no wider
  * than the owner last approved, so no change can carry a widening through. The owner must be in
  * both channels, the Toy Box channel must still be there with its lead on Copilot, the requests
- * routine must exist, no other link may hold either channel, and anyone the change admits must
- * pass the admission check under the ID Slack gives them.
+ * routine must exist, no other link may watch the channel it watches, and anyone the change admits
+ * must pass the admission check under the ID Slack gives them.
  */
 export function invalid(
   draft: Pick<Approval, "action" | "patch">,
@@ -443,18 +443,15 @@ export type Narrowing =
   | { kind: "deny"; linkId: string; userId: string }
   | { kind: "pause"; linkId: string }
   | { kind: "unlink"; linkId: string }
-  | { kind: "set"; linkId: string; fields: readonly LinkField[] }
-  /** The owner changed, which voids every card the old owner was asked. */
-  | { kind: "owner" };
+  | { kind: "set"; linkId: string; fields: readonly LinkField[] };
 
 /**
  * Whether `narrowing` reverses an open approval: deny U voids allowing U, pause voids resume,
- * unlink voids every card for the link, a narrowing set voids any card that changes one of its
- * fields, and an owner handoff voids every card.
+ * unlink voids every card for the link, and a narrowing set voids any card that changes one of
+ * its fields.
  */
 export function reverses(narrowing: Narrowing, approval: Approval): boolean {
   if (!isOpen(approval.state)) return false;
-  if (narrowing.kind === "owner") return true;
   if (approval.linkId !== narrowing.linkId) return false;
   switch (narrowing.kind) {
     case "unlink":

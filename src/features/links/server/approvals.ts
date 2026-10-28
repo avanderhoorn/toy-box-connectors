@@ -1,5 +1,6 @@
 import {
   APPROVAL_LIFETIME_MS,
+  applyApproval,
   approvalStates,
   clickedApprovalId,
   decide,
@@ -22,7 +23,7 @@ import { readInteraction } from "@slackapi/model/interactions";
 import type { SlackTs } from "@slackapi/model/ts";
 import { readInstallation } from "@slackapi/server/installation";
 import { canonicalUserId } from "@slackapi/server/users";
-import { audit } from "./audit";
+import { audit, auditPatch } from "./audit";
 
 // Stored approvals.
 //
@@ -30,7 +31,8 @@ import { audit } from "./audit";
 // receiver hands over every interactive payload in its delivery's transaction, before the ack,
 // and a click is decided there from what's stored: the installation, the approval and the aliases
 // of people the bridge has read. Nothing here calls Slack, so the decision commits before Slack is
-// acked and a redelivered click finds it made. An approved approval applies after the ack.
+// acked and a redelivered click finds it made. An approved approval applies after the ack, in
+// apply.ts, and is recorded here.
 
 type ApprovalRow = {
   id: string;
@@ -220,6 +222,29 @@ export async function staleApprovals(
     staled.push(stale);
   }
   return staled;
+}
+
+/**
+ * Marks an approved approval applied once its patch is in, queues the update that shows it on its
+ * card, and audits each field it changed on the owner's authority, under `linkId`, the link it
+ * changed or made. Returns it as it's stored now.
+ */
+export async function recordApplied(
+  transaction: Bun.SQL,
+  approval: Approval,
+  linkId: string,
+  now: number,
+): Promise<Approval> {
+  const applied = applyApproval(approval, now);
+  await saveApproval(transaction, applied);
+  await queueUpdate(transaction, applied, now);
+  await auditPatch(
+    transaction,
+    { actor: "owner", action: "apply", linkId, approvalId: applied.id },
+    applied.patch,
+    now,
+  );
+  return applied;
 }
 
 /** Stores a changed approval. */
