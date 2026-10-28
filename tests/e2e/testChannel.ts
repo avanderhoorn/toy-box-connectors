@@ -11,6 +11,7 @@ import { LEAD_MODEL, waitUntil, type IsolatedToyBox } from "./isolatedToyBox";
 import {
   callToyBox,
   readChannelFrames,
+  readLatestMessages,
   routineChangeSchema,
   type Frame,
   type Message,
@@ -38,6 +39,8 @@ export type TestChannel = {
   turn(wake: () => Promise<void>): Promise<void>;
   /** Runs the lead's routine titled `title`, and resolves once the turn it starts settles. */
   run(title: string): Promise<void>;
+  /** Counts the lead's messages in Toy Box's store, which holds a turn's posts once it settles. */
+  leadPosts(): Promise<number>;
 };
 
 const createdChannelSchema = z.object({
@@ -175,6 +178,13 @@ function followChannel(toyBox: IsolatedToyBox, channelId: string) {
       await turn(async () => {
         await callToyBox(toyBox.origin, path, { method: "POST", expected: 204 });
       });
+    },
+
+    // The stream can deliver a message after the presence that ends its turn, so this reads the
+    // store.
+    async leadPosts() {
+      const messages = await readLatestMessages(toyBox.origin, channelId);
+      return messages.filter(({ sender }) => sender.type === "agent").length;
     },
 
     /**

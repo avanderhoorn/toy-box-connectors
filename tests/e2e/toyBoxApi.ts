@@ -1,9 +1,10 @@
 // Toy Box's HTTP API as end-to-end tests call it.
 //
 // The schemas mirror ChannelObservationEvent and the routine system messages in the toy-box repo's
-// src/features/channels/model/index.ts, and ChannelAgentPresence in presence.ts, keeping only what
-// a test reads. Only the event stream parser is the bridge's, so a bug in how the bridge calls Toy
-// Box can't hide in the harness that checks it.
+// src/features/channels/model/index.ts, ChannelAgentPresence in presence.ts, and the history page
+// in src/features/channels/server/api.ts, keeping only what a test reads. Only the event stream
+// parser is the bridge's, so a bug in how the bridge calls Toy Box can't hide in the harness that
+// checks it.
 
 import { readServerSentEvents } from "@toybox/server/sse";
 import { z } from "zod";
@@ -52,6 +53,8 @@ export type Frame = z.output<typeof frameSchema>;
 
 const catalogSchema = z.object({ channels: z.array(z.object({ id: z.string() })) });
 
+const historySchema = z.object({ messages: z.array(messageSchema) });
+
 /** Calls `path` under /api/v1, and resolves with Toy Box's answer once it has `expected` status. */
 export async function callToyBox(
   origin: URL,
@@ -77,6 +80,12 @@ export async function callToyBox(
 /** The channels Toy Box has. */
 export async function readCatalog(origin: URL) {
   return catalogSchema.parse(await (await callToyBox(origin, "channels")).json());
+}
+
+/** Channel `channelId`'s latest 100 messages, oldest first, as Toy Box stored them. */
+export async function readLatestMessages(origin: URL, channelId: string) {
+  const path = `channels/${channelId}/messages?before=${Number.MAX_SAFE_INTEGER}`;
+  return historySchema.parse(await (await callToyBox(origin, path)).json()).messages;
 }
 
 /** Channel `channelId`'s event stream, from a snapshot on, until `signal` aborts. */

@@ -19,7 +19,14 @@ const RELEASE_NOTES_ROUTINE = {
   prompt:
     "Publish release notes in Slack for tonight's release: pipe a few lines on dark mode and faster search to `toy-box-slack publish --series release-notes`, which posts them once for this run.",
 };
-const PURPOSE = `Answer the release team's questions from Slack, and publish release notes there. Tonight's release ships dark mode and faster search. In your kickoff turn, add ${adding(REQUESTS_ROUTINE)} Then add ${adding(RELEASE_NOTES_ROUTINE)} Run toy-box-slack only when a routine asks you to.`;
+/** The skill's digest routine, on a schedule no run reaches, so only a scenario runs it. */
+const DIGEST_ROUTINE = {
+  title: "Slack digest",
+  schedule: REQUESTS_ROUTINE.schedule,
+  prompt:
+    "Digest Slack: run `toy-box-slack activity` and post one message here only if it holds something worth the team's attention, such as ideas, decisions, problems, repeated questions or feedback, grouped by topic with permalinks and with no Slack name after @. Then run the `toy-box-slack mark-read` command activity ends with, even if you posted nothing, and repeat while activity says more remain. When you finish, if this run cleared a waiting status that still holds, call finish_agent_turn with it again.",
+};
+const PURPOSE = `Answer the release team's questions from Slack, publish release notes there, and digest what they say here. Tonight's release ships dark mode and faster search. In your kickoff turn, add ${adding(REQUESTS_ROUTINE)} Then add ${adding(RELEASE_NOTES_ROUTINE)} Then add ${adding(DIGEST_ROUTINE)} Run toy-box-slack only when a routine asks you to.`;
 
 describeEndToEnd("a channel linked to Slack", (suite) => {
   let channel: TestChannel;
@@ -89,6 +96,31 @@ describeEndToEnd("a channel linked to Slack", (suite) => {
   );
 
   suite.scenario(
+    "a digest posts once in the Toy Box channel when its routine runs twice",
+    async () => {
+      const [ts] = timestamps(1);
+      const problem =
+        "QA found the search box unreadable in dark mode on Safari, so tonight's release waits on a fix.";
+      await link.post(said(ALICE, ts, problem));
+      const [{ seq }] = link.query<{ seq: number }>(
+        "SELECT updated_seq AS seq FROM messages WHERE ts = ?",
+        ts,
+      );
+      const posts = await channel.leadPosts();
+
+      // Alice's message is the link's latest change, so a digest that read it reads through it.
+      await channel.run(DIGEST_ROUTINE.title);
+      expect(digestCursor(link)).toEqual([{ read: seq, shown: seq }]);
+      expect(await channel.leadPosts()).toBe(posts + 1);
+
+      await channel.run(DIGEST_ROUTINE.title);
+      expect(digestCursor(link)).toEqual([{ read: seq, shown: seq }]);
+      expect(await channel.leadPosts()).toBe(posts + 1);
+    },
+    { turns: 2 },
+  );
+
+  suite.scenario(
     "the run leaves the owner's Toy Box and Copilot untouched",
     async () => {
       const catalog = await readCatalog(suite.toyBox.origin);
@@ -125,6 +157,13 @@ function seenInSlack(slack: FakeSlack, ts: string) {
 function publications(link: SlackLink) {
   return link.query<{ series: string; state: string; slack_ts: string | null }>(
     "SELECT series, state, slack_ts FROM outbox WHERE kind = 'publication' ORDER BY number",
+  );
+}
+
+/** How far the lead has marked the link's activity read, and how far activity has shown it. */
+function digestCursor(link: SlackLink) {
+  return link.query<{ read: number; shown: number }>(
+    "SELECT through_seq AS read, served_through_seq AS shown FROM cursors",
   );
 }
 
