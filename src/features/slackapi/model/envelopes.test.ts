@@ -38,7 +38,7 @@ describe("reading Socket Mode frames", () => {
         accepts_response_payload: false,
         retry_attempt: 1,
         retry_reason: "timeout",
-        payload: { ...callback, authorizations: [{ team_id: "THOME" }] },
+        payload: callback,
       }),
     );
     expect(read).toEqual({
@@ -47,11 +47,64 @@ describe("reading Socket Mode frames", () => {
       callback: {
         teamId: "THOME",
         appId: "AAPP",
+        authorizations: null,
         eventId: "Ev1",
         eventTime: 1700000000,
         event: callback.event,
       },
     });
+  });
+
+  test("authorizations describe installations, and an empty list isn't a missing one", () => {
+    const authorizationsOf = (authorizations: unknown) => {
+      const read = readFrame(
+        frame({
+          type: "events_api",
+          envelope_id: "env-1",
+          payload: { ...callback, authorizations },
+        }),
+      );
+      return read.kind === "event" ? read.callback.authorizations : read.kind;
+    };
+    expect(authorizationsOf(undefined)).toBeNull();
+    expect(authorizationsOf(null)).toBeNull();
+    expect(authorizationsOf([])).toEqual([]);
+    expect(
+      authorizationsOf([
+        {
+          enterprise_id: "EORG",
+          team_id: "THOME",
+          user_id: "UBOT",
+          is_bot: true,
+          is_enterprise_install: false,
+          is_new_field: "kept out",
+        },
+        { team_id: null, enterprise_id: "EORG", is_enterprise_install: true },
+        { team_id: "THOME" },
+      ]),
+    ).toEqual([
+      {
+        enterpriseId: "EORG",
+        teamId: "THOME",
+        userId: "UBOT",
+        isBot: true,
+        isEnterpriseInstall: false,
+      },
+      {
+        enterpriseId: "EORG",
+        teamId: null,
+        userId: null,
+        isBot: false,
+        isEnterpriseInstall: true,
+      },
+      {
+        enterpriseId: null,
+        teamId: "THOME",
+        userId: null,
+        isBot: false,
+        isEnterpriseInstall: false,
+      },
+    ]);
   });
 
   test("app_rate_limited is read whether Slack wraps it in an envelope or not", () => {
@@ -144,6 +197,27 @@ describe("malformed frames", () => {
     expect(readFrame(frame({ type: "interactive" }))).toMatchObject({
       kind: "malformed",
       envelopeId: null,
+    });
+  });
+
+  test("authorizations that can't be read make the event malformed, never missing", () => {
+    const read = (authorizations: unknown) =>
+      readFrame(
+        frame({
+          type: "events_api",
+          envelope_id: "env-10",
+          payload: { ...callback, authorizations },
+        }),
+      );
+    expect(read({ team_id: "THOME" })).toEqual({
+      kind: "malformed",
+      envelopeId: "env-10",
+      hint: { channelId: "C1", eventTime: 1700000000 },
+      issues: ["invalid_type at payload.authorizations"],
+    });
+    expect(read([{ team_id: "THOME", is_bot: "true" }])).toMatchObject({
+      kind: "malformed",
+      issues: ["invalid_type at payload.authorizations.0.is_bot"],
     });
   });
 

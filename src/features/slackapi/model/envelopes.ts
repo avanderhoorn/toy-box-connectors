@@ -43,11 +43,36 @@ const rateLimitedSchema = z
   })
   .describe("Slack stopped delivering events for a minute");
 
+const authorizationSchema = z
+  .object({
+    enterprise_id: slackIdSchema.nullish().describe("The installation's Enterprise org, if any"),
+    team_id: slackIdSchema
+      .nullish()
+      .describe("The installation's workspace, null for an org-wide installation"),
+    user_id: slackIdSchema
+      .nullish()
+      .describe("The installation's user, the bot user for a bot installation"),
+    is_bot: z.boolean().nullish().describe("Whether the installation is a bot's"),
+    is_enterprise_install: z
+      .boolean()
+      .nullish()
+      .describe("Whether the app is installed across a whole Enterprise org"),
+  })
+  .describe("An installation of the app that can see the event, never who acted");
+
 const eventCallbackSchema = z
   .object({
     type: z.literal("event_callback"),
-    team_id: slackIdSchema.describe("The installation's team, even in a shared channel"),
+    team_id: slackIdSchema.describe(
+      "The workspace the event happened in, which can be a sibling of the installation's",
+    ),
     api_app_id: slackIdSchema.describe("The app the event is for"),
+    authorizations: z
+      .array(authorizationSchema)
+      .nullish()
+      .describe(
+        "One installation that can see the event. A few events such as tokens_revoked omit it",
+      ),
     event_id: slackIdSchema.describe("The event's ID, the same on every redelivery"),
     event_time: z
       .number()
@@ -72,10 +97,27 @@ const envelopeSchema = z
   })
   .describe("A delivery Slack wants acked");
 
+/** An installation of the app that can see an event. It never says who acted. */
+export type Authorization = {
+  enterpriseId: string | null;
+  /** Null for an installation across a whole Enterprise org. */
+  teamId: string | null;
+  /** The bot user for a bot installation. */
+  userId: string | null;
+  isBot: boolean;
+  isEnterpriseInstall: boolean;
+};
+
 /** An event that arrived in an events_api envelope. Its handler parses `event` by its type. */
 export type EventCallback = {
+  /** The workspace the event happened in, which needn't be the installation's. */
   teamId: string;
   appId: string;
+  /**
+   * The installations that can see the event, or null when Slack left the list out, as it does
+   * for tokens_revoked. Slack truncates the list to one, and an empty list isn't a missing one.
+   */
+  authorizations: Authorization[] | null;
   eventId: string;
   /** Epoch seconds. */
   eventTime: number;
@@ -151,6 +193,7 @@ export function readFrame(raw: string): SocketFrame {
         callback: {
           teamId: callback.team_id,
           appId: callback.api_app_id,
+          authorizations: callback.authorizations?.map(fromAuthorization) ?? null,
           eventId: callback.event_id,
           eventTime: callback.event_time,
           event: callback.event,
@@ -177,6 +220,16 @@ export function issuesOf(error: z.ZodError, prefix: PropertyKey[] = []): string[
     const path = [...prefix, ...issue.path].map(String).join(".");
     return path ? `${issue.code} at ${path}` : issue.code;
   });
+}
+
+function fromAuthorization(entry: z.output<typeof authorizationSchema>): Authorization {
+  return {
+    enterpriseId: entry.enterprise_id ?? null,
+    teamId: entry.team_id ?? null,
+    userId: entry.user_id ?? null,
+    isBot: entry.is_bot ?? false,
+    isEnterpriseInstall: entry.is_enterprise_install ?? false,
+  };
 }
 
 function rateLimited(
