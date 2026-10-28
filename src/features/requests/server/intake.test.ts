@@ -430,22 +430,65 @@ test("Slack withdrawing a request's source holds its replies and revises it, in 
     await queueReplies(database);
 
     expect(await takeWithdrawalOf(database, ask)).toBe(true);
+    // A final reply to an older revision can't answer, so an answering request goes back to the lead.
+    const answering = state === "answering";
     expect(await readUnverified(database)).toEqual([
       {
         id: 1,
-        state,
+        state: answering ? "in_progress" : state,
         input_rev: 3,
         attention: state === "open" ? null : "updated",
         source_unverified_at: now,
       },
     ]);
-    // Unlike a delete, nobody took the question back, so its replies wait rather than end.
+    // Unlike a delete, nobody took the question back, so its other replies wait rather than end.
     expect(await readItems(database)).toEqual([
-      { number: 1, state: "queued" },
+      { number: 1, state: answering ? "superseded" : "queued" },
       { number: 2, state: "sending" },
     ]);
   }
 });
+
+test.each([
+  [
+    "an edit of its source",
+    (database: BridgeDatabase) =>
+      take(database, editMessage(ask, "1700000150.000100", "<@U-bot> can you look at staging?")),
+  ],
+  [
+    "a message that joins it",
+    (database: BridgeDatabase) =>
+      take(database, replyMessage(ask, "1700000300.000100", { text: "and the rollback too" })),
+  ],
+  ["deleting another of its messages", (database: BridgeDatabase) => takeDeleteOf(database, more)],
+  [
+    "Slack withdrawing another of its messages",
+    (database: BridgeDatabase) => takeWithdrawalOf(database, more),
+  ],
+  ["Slack withdrawing its source", (database: BridgeDatabase) => takeWithdrawalOf(database, ask)],
+] as const)(
+  "%s supersedes an answering request's final reply and gives the request back to the lead",
+  async (_, revise) => {
+    const database = await openIntake();
+    await take(database, ask);
+    await take(database, more);
+    await change(database, 1, (request) => beginAnswer(serveRequest(request, now), now));
+    await createStoredOutboxItem(database, 1, { request_rev: 2 });
+
+    await revise(database);
+    expect(await readRequests(database)).toEqual([
+      {
+        id: 1,
+        source_ts: ask.ts,
+        reason: "mention",
+        state: "in_progress",
+        input_rev: 3,
+        attention: "updated",
+      },
+    ]);
+    expect(await readItems(database)).toEqual([{ number: 1, state: "superseded" }]);
+  },
+);
 
 test("a source withdrawn again stays held without being revised again", async () => {
   const database = await openIntake();

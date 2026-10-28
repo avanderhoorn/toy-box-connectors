@@ -1,3 +1,4 @@
+import { settleRequestAnswer } from "@outbox/server/answers";
 import { cancelQueuedRequestItems } from "@outbox/server/database";
 import {
   cancelRequest,
@@ -20,11 +21,12 @@ import {
 // The request lifecycle on stored requests.
 //
 // Each change applies a lifecycle function to what's stored and saves the result, along with
-// anything else the change owes, in the caller's transaction.
+// anything else the change owes, in the caller's transaction. A revision then settles the
+// request's answer, after its last save, since settling reads the request as stored.
 
 /**
- * Revises an active request from its messages as the ledger holds them now. Returns whether its
- * input changed.
+ * Revises an active request from its messages as the ledger holds them now, so a final reply to an
+ * older revision no longer answers it. Returns whether its input changed.
  */
 export async function reviseStoredRequest(
   transaction: Bun.SQL,
@@ -34,6 +36,7 @@ export async function reviseStoredRequest(
   const revised = reviseRequest(request, await readInputHash(transaction, request.id), now);
   if (revised === request) return false;
   await saveRequest(transaction, revised);
+  await settleRequestAnswer(transaction, request.id, now);
   return true;
 }
 
@@ -50,6 +53,7 @@ export async function withdrawStoredSource(
   const revised = reviseRequest(held, await readInputHash(transaction, request.id), now);
   if (revised === request) return false;
   await saveRequest(transaction, revised);
+  await settleRequestAnswer(transaction, request.id, now);
   return true;
 }
 

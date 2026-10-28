@@ -26,8 +26,8 @@ owner-approved audiences. This pure gate asks for a refresh or hold rather than 
 
 `server/answers.ts` settles one request inside the transaction that proves a delivery or
 changes its source. Proof alone cannot answer a request while its source is unverified.
-Repair calls the same function after verification, revision or cancellation, so either order
-settles the same way without polling. A current confirmed final answers only verified input,
+Intake calls the same function after every revision, and repair after verification, revision or
+cancellation, so either order settles the same way without polling. A current confirmed final answers only verified input,
 an older final returns the request as updated, and a failed or dropped final returns it as
 reply failed unless a replacement still waits. The answered transition queues both reactions
 in that transaction. Retraction preserves a valid delivery's proof, while withdrawing a
