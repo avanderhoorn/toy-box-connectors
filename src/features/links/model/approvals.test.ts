@@ -25,6 +25,7 @@ import {
   type ApprovalClick,
   type ClickInstallation,
   type CurrentFacts,
+  type LinkField,
   type LinkSettings,
   type ProposalFacts,
 } from "./approvals";
@@ -488,46 +489,72 @@ describe("narrowing changes", () => {
       { field: "observe", after: "channel" },
     ],
   });
+  const newLink = pendingApproval({
+    action: "link",
+    linkId: null,
+    patch: [{ field: "slack_channel_id", after: "C-new" }],
+  });
+  /** A card from another Toy Box channel handing ownership to U-carol. */
+  const handoff = pendingApproval({
+    action: "owner",
+    toyboxChannelId: "toybox-other",
+    linkId: "other",
+    patch: [{ field: "owner_user_id", after: "U-carol" }],
+  });
+  const deny = (...userIds: string[]) =>
+    ({ kind: "deny", toyboxChannelId: "toybox-link", userIds }) as const;
 
-  test("deny voids allowing that person on that link, and nobody else", () => {
-    expect(reverses({ kind: "deny", linkId: "link", userId: "U-carol" }, pendingApproval())).toBe(
-      true,
-    );
-    expect(reverses({ kind: "deny", linkId: "link", userId: "U-dave" }, pendingApproval())).toBe(
-      false,
-    );
-    expect(reverses({ kind: "deny", linkId: "link-2", userId: "U-carol" }, pendingApproval())).toBe(
-      false,
-    );
+  test("deny voids allowing that person in that Toy Box channel, and nobody else", () => {
+    expect(reverses(deny("U-carol"), pendingApproval())).toBe(true);
+    expect(reverses(deny("U-dave"), pendingApproval())).toBe(false);
+    expect(
+      reverses({ ...deny("U-carol"), toyboxChannelId: "toybox-other" }, pendingApproval()),
+    ).toBe(false);
+  });
+
+  test("deny voids allowing the person under any of the IDs they're known by", () => {
+    expect(reverses(deny("U-dave", "U-carol"), pendingApproval())).toBe(true);
+  });
+
+  test("deny voids handing them ownership, whichever Toy Box channel asked, since the owner can make every lead act", () => {
+    expect(reverses(deny("U-carol"), handoff)).toBe(true);
+    expect(reverses(deny("U-dave", "U-carol"), handoff)).toBe(true);
+    expect(reverses(deny("U-dave"), handoff)).toBe(false);
+    expect(reverses({ kind: "unlink", toyboxChannelId: "toybox-link" }, handoff)).toBe(false);
   });
 
   test("pause voids resume", () => {
-    expect(reverses({ kind: "pause", linkId: "link" }, resume)).toBe(true);
-    expect(reverses({ kind: "pause", linkId: "link" }, pendingApproval())).toBe(false);
+    expect(reverses({ kind: "pause", toyboxChannelId: "toybox-link" }, resume)).toBe(true);
+    expect(reverses({ kind: "pause", toyboxChannelId: "toybox-link" }, pendingApproval())).toBe(
+      false,
+    );
+    expect(reverses({ kind: "pause", toyboxChannelId: "toybox-other" }, resume)).toBe(false);
   });
 
   test("a narrowing set voids any card that changes one of its fields", () => {
-    expect(reverses({ kind: "set", linkId: "link", fields: ["observe"] }, widen)).toBe(true);
-    expect(reverses({ kind: "set", linkId: "link", fields: ["publish_channel_id"] }, widen)).toBe(
-      false,
-    );
+    const set = (fields: LinkField[]) =>
+      ({ kind: "set", toyboxChannelId: "toybox-link", fields }) as const;
+    expect(reverses(set(["observe"]), widen)).toBe(true);
+    expect(reverses(set(["publish_channel_id"]), widen)).toBe(false);
+    expect(reverses({ ...set(["observe"]), toyboxChannelId: "toybox-other" }, widen)).toBe(false);
   });
 
-  test("unlink voids every card for the link", () => {
-    for (const card of [pendingApproval(), resume, widen]) {
-      expect(reverses({ kind: "unlink", linkId: "link" }, card)).toBe(true);
-      expect(reverses({ kind: "unlink", linkId: "link-2" }, card)).toBe(false);
+  test("unlink voids every card of the Toy Box channel, a new link's included", () => {
+    for (const card of [pendingApproval(), resume, widen, newLink]) {
+      expect(reverses({ kind: "unlink", toyboxChannelId: "toybox-link" }, card)).toBe(true);
+      expect(reverses({ kind: "unlink", toyboxChannelId: "toybox-other" }, card)).toBe(false);
     }
   });
 
   test("an approved card is voided too, but a closed one stays as it is", () => {
-    const deny = { kind: "deny", linkId: "link", userId: "U-carol" } as const;
-    expect(
-      reverses(deny, pendingApproval({ state: "approved", decidedBy: "U-owner", decidedAt: 1 })),
-    ).toBe(true);
+    const unlink = { kind: "unlink", toyboxChannelId: "toybox-link" } as const;
+    const approved = { state: "approved", decidedBy: "U-owner", decidedAt: 1 } as const;
+    expect(reverses(deny("U-carol"), pendingApproval(approved))).toBe(true);
+    expect(reverses(deny("U-carol"), { ...handoff, ...approved })).toBe(true);
     for (const state of ["applied", "rejected", "expired", "stale"] as const) {
-      expect(reverses(deny, pendingApproval({ state }))).toBe(false);
-      expect(reverses({ kind: "unlink", linkId: "link" }, pendingApproval({ state }))).toBe(false);
+      expect(reverses(deny("U-carol"), pendingApproval({ state }))).toBe(false);
+      expect(reverses(deny("U-carol"), { ...handoff, state })).toBe(false);
+      expect(reverses(unlink, pendingApproval({ state }))).toBe(false);
     }
   });
 });

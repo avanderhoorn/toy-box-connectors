@@ -4,8 +4,8 @@ import { audit } from "./audit";
 
 // A link's status.
 //
-// The owner pauses a link, and the bridge suspends one when Slack or Toy Box makes continuing
-// unsafe. Either way the link keeps its settings and data until someone resumes or unlinks it.
+// A lead or the operator pauses a link, and the bridge suspends one when Slack or Toy Box makes
+// continuing unsafe. Either way the link keeps its settings and data until someone resumes or unlinks it.
 // Every card for the link was decided against its status and reason, so a suspension stales them,
 // and the owner approves resume afresh against what's true then.
 

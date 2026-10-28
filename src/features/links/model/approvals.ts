@@ -441,31 +441,46 @@ export function invalid(
 
 // Narrowing.
 
-/** A change that applied at once and voids whatever approvals it reverses. */
+/**
+ * A change for a Toy Box channel that applied at once and voids whatever approvals it reverses.
+ * Deny names each ID the person is known by.
+ */
 export type Narrowing =
-  | { kind: "deny"; linkId: string; userId: string }
-  | { kind: "pause"; linkId: string }
-  | { kind: "unlink"; linkId: string }
-  | { kind: "set"; linkId: string; fields: readonly LinkField[] };
+  | { kind: "deny"; toyboxChannelId: string; userIds: readonly string[] }
+  | { kind: "pause"; toyboxChannelId: string }
+  | { kind: "unlink"; toyboxChannelId: string }
+  | { kind: "set"; toyboxChannelId: string; fields: readonly LinkField[] };
 
 /**
- * Whether `narrowing` reverses an open approval: deny U voids allowing U, pause voids resume,
- * unlink voids every card for the link, and a narrowing set voids any card that changes one of
- * its fields.
+ * Whether `narrowing` reverses an open approval of its Toy Box channel: deny U voids allowing U,
+ * pause voids resume, unlink voids every card, a new link's included, and a narrowing set voids
+ * any card that changes one of its fields. Deny also voids handing ownership to U, whichever Toy
+ * Box channel asked, since the owner can make every link's lead act.
  */
 export function reverses(narrowing: Narrowing, approval: Approval): boolean {
   if (!isOpen(approval.state)) return false;
-  if (approval.linkId !== narrowing.linkId) return false;
+  if (narrowing.kind === "deny" && approval.patch.some((entry) => handsTo(entry, narrowing))) {
+    return true;
+  }
+  if (approval.toyboxChannelId !== narrowing.toyboxChannelId) return false;
   switch (narrowing.kind) {
     case "unlink":
       return true;
     case "pause":
       return touches(approval, "status");
     case "deny":
-      return touches(approval, allowlistField(narrowing.userId));
+      return narrowing.userIds.some((userId) => touches(approval, allowlistField(userId)));
     case "set":
       return narrowing.fields.some((field) => touches(approval, field));
   }
+}
+
+function handsTo(entry: PatchEntry, deny: Extract<Narrowing, { kind: "deny" }>): boolean {
+  return (
+    entry.field === "owner_user_id" &&
+    typeof entry.after === "string" &&
+    deny.userIds.includes(entry.after)
+  );
 }
 
 // Settings.

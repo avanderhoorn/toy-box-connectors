@@ -182,7 +182,7 @@ async function takeStep(
     case "unchanged":
       return draft;
     case "narrowing": {
-      const voided = await narrowSettings(transaction, caller.role, draft.linkId, draft.patch, at);
+      const voided = await narrowSettings(transaction, caller, draft.linkId, draft.patch, at);
       return { kind: "narrowed", patch: draft.patch, voided };
     }
     case "proposal":

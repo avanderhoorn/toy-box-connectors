@@ -1,12 +1,13 @@
 import { describe, expect, onTestFinished, test } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
-import { openTestDatabase } from "@bridge/server/testFixtures";
+import { createTestFolder, openTestDatabase } from "@bridge/server/testFixtures";
 import { APPLY_VERIFY_MS, APPROVE_ACTION_ID, type Approval } from "@links/model/approvals";
 import type { SetupRequest } from "@links/model/setup";
-import { startApplier, type ApplierTimings } from "@links/server/apply";
+import { startApplier, verifyAndApply, type ApplierTimings } from "@links/server/apply";
 import { readApproval, recordCardPosted, takeClick } from "@links/server/approvals";
 import { createFactsReader, type FactsReader } from "@links/server/facts";
-import { changeSetup } from "@links/server/setup";
+import { denyPerson, pauseLink, unlinkChannel } from "@links/server/narrowing";
+import { changeSetup, type SetupCaller } from "@links/server/setup";
 import { createStoredApproval, createStoredLink } from "@links/server/testFixtures";
 import { createBotClient } from "@slackapi/server/botClient";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
@@ -80,6 +81,7 @@ async function linkFakeChannel() {
   slack.setUser(member("U-dave"));
   const bot = createBotClient(database, slack.botToken, { slackApiUrl: slack.url, now });
   const reader = createFactsReader(bot, new URL(toyBox.url));
+  const lead: SetupCaller = { role: "lead", channelId };
   const changes: number[] = [];
   const errors: unknown[] = [];
   let cards = 0;
@@ -95,8 +97,7 @@ async function linkFakeChannel() {
       clickedAt = proposedAt,
     }: { proposedAt?: number; clickedAt?: number } = {},
   ): Promise<Approval> {
-    const caller = { role: "lead", channelId } as const;
-    const outcome = await changeSetup(database, reader, caller, request, true, proposedAt);
+    const outcome = await changeSetup(database, reader, lead, request, true, proposedAt);
     if (outcome.kind !== "proposed") throw new Error(`Setup was ${outcome.kind}, not a proposal.`);
     const cardTs = `1000.${String(++cards).padStart(6, "0")}`;
     return database.write(async (transaction) => {
@@ -140,7 +141,38 @@ async function linkFakeChannel() {
     return { applier, attempts };
   }
 
-  return { slack, toyBox, database, now, changes, errors, approve, startApplying };
+  /**
+   * Verifies and applies `approval` as the applier does, with `meanwhile` changing the bridge
+   * while Toy Box is read for it.
+   */
+  function verifyWhile(approval: Approval, meanwhile: () => Promise<unknown>) {
+    const racing: FactsReader = {
+      ...reader,
+      readToyBox: async (toyboxChannelId, signal) => {
+        await meanwhile();
+        return reader.readToyBox(toyboxChannelId, signal);
+      },
+    };
+    return verifyAndApply(database, racing, approval.id, {
+      slackUsable: () => true,
+      now,
+      signal: new AbortController().signal,
+    });
+  }
+
+  return {
+    slack,
+    toyBox,
+    database,
+    now,
+    lead,
+    routineId: routine.id,
+    changes,
+    errors,
+    approve,
+    startApplying,
+    verifyWhile,
+  };
 }
 
 /** The owner's click on Approve on `approval`'s card, posted at `cardTs`, as Slack sends it. */
@@ -194,6 +226,11 @@ async function readCardItems(database: BridgeDatabase, approval: Approval) {
   ];
 }
 
+/** The status of each link. */
+async function readLinks(database: BridgeDatabase) {
+  return [...(await database.read((sql) => sql`SELECT id, status FROM links ORDER BY id`))];
+}
+
 async function readInstallationStatus(database: BridgeDatabase) {
   const [installation] = await database.read(
     (sql) => sql<{ status: string }[]>`SELECT status FROM installation`,
@@ -212,6 +249,7 @@ function storePending(database: BridgeDatabase, number: number, expiresAt: numbe
 }
 
 const applied = { state: "applied", staleReason: null } as const;
+const reversed = { state: "stale", staleReason: "reversed" } as const;
 
 describe("applying what the owner approved", () => {
   test("a change approved before a crash applies when the applier starts, and its card is updated", async () => {
@@ -290,6 +328,56 @@ describe("applying what the owner approved", () => {
       phase: "update",
       state: "queued",
     });
+  });
+});
+
+describe("a narrowing change made while an approved change is read", () => {
+  test("denying the person an approved allow names keeps them off the allowlist", async () => {
+    const world = await linkFakeChannel();
+    const approval = await world.approve(allow("U-carol"));
+
+    const attempt = await world.verifyWhile(approval, () =>
+      denyPerson(world.database, world.lead, "U-carol", world.now()),
+    );
+
+    expect(attempt).toEqual({ kind: "settled", approval: null });
+    expect(await readState(world.database, approval)).toEqual(reversed);
+    expect(await readAllowed(world.database)).toEqual([]);
+  });
+
+  test("pausing a link an approved resume would restart keeps it paused", async () => {
+    const world = await linkFakeChannel();
+    await world.database.write((transaction) => transaction`UPDATE links SET status = 'paused'`);
+    const approval = await world.approve({ action: "resume" });
+
+    const attempt = await world.verifyWhile(approval, () =>
+      pauseLink(world.database, world.lead, world.now()),
+    );
+
+    expect(attempt).toEqual({ kind: "settled", approval: null });
+    expect(await readState(world.database, approval)).toEqual(reversed);
+    expect(await readLinks(world.database)).toEqual([{ id: "link", status: "paused" }]);
+  });
+
+  test("unlinking a channel an approved link would link keeps it unlinked", async () => {
+    const world = await linkFakeChannel();
+    // The channel isn't linked yet.
+    await world.database.write((transaction) => transaction`DELETE FROM links`);
+    const approval = await world.approve({
+      action: "link",
+      slackChannelId: "C-link",
+      routineId: world.routineId,
+      allow: ["U-carol"],
+    });
+
+    const attempt = await world.verifyWhile(approval, () =>
+      unlinkChannel(world.database, world.lead, world.now(), createTestFolder()),
+    );
+
+    expect(attempt).toEqual({ kind: "settled", approval: null });
+    expect(await readState(world.database, approval)).toEqual(reversed);
+    expect(await readLinks(world.database)).toEqual([]);
+    expect(await readAllowed(world.database)).toEqual([]);
   });
 });
 
