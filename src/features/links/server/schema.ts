@@ -21,7 +21,6 @@ export async function initializeLinkSchema(db: Bun.SQL): Promise<void> {
     CREATE TABLE allowlist (
       link_id  TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE,
       user_id  TEXT NOT NULL,
-      label    TEXT,
       added_at INTEGER NOT NULL,
       PRIMARY KEY (link_id, user_id)
     );

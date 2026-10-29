@@ -48,12 +48,12 @@ export function statusCommand({
       for (const { id, slackChannelId, ...link } of stored) {
         const state = wakes.find((wake) => wake.id === id)!;
         const pending = state.requests.filter(isPending).length;
-        const allowed = await sql<{ userId: string; label: string | null }[]>`
-          SELECT user_id AS userId, label FROM allowlist WHERE link_id = ${id} ORDER BY added_at
+        const allowed = await sql<{ userId: string }[]>`
+          SELECT user_id AS userId FROM allowlist WHERE link_id = ${id} ORDER BY added_at
         `;
         const allowlist: string[] = [];
-        for (const { userId, label } of allowed) {
-          allowlist.push(personName((await readSlackPersonName(sql, userId)) ?? label, userId));
+        for (const { userId } of allowed) {
+          allowlist.push(personName(await readSlackPersonName(sql, userId), userId));
         }
         const unconfirmed: UnconfirmedPost[] = [];
         for (const post of await sql<Omit<UnconfirmedPost, "permalink">[]>`
