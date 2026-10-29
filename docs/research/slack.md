@@ -36,7 +36,7 @@ identifiers, timestamps, states and hashes that posting once and numbering need.
 ### Smaller v1: live Markdown probe
 
 On 2026-10-28, Slack Expert posted one `markdown` block in the approved
-#toy-box-private test channel, read it back and deleted it. A heading became a
+private test channel, read it back and deleted it. A heading became a
 header block. A list, fenced TypeScript and an HTTPS link became the corresponding
 rich-text elements. The initial escaped probe made `<!here>`, `@channel` and a
 bot-user `<@ID>` sample ordinary text elements, with no user or broadcast elements.
@@ -47,8 +47,8 @@ The reduced renderer therefore escapes `<` only before `@` or `!`, retains the
 zero-width break in plain broadcast words, and preserves other Markdown bytes.
 Control openers inside code are escaped too, an accepted limitation.
 
-A follow-up through the actual `renderMarkdown` and payload check in
-#toy-box-test preserved inline `Array<string>`, `a && b`, fenced comparisons
+A follow-up through the actual `renderMarkdown` and payload check in the
+test channel preserved inline `Array<string>`, `a && b`, fenced comparisons
 and a real blockquote. Raw bot-user and `<!date^...>` controls, and their numeric
 entity forms, came back only as text nodes, with no user, date or broadcast
 elements. The post was read back and deleted. These probes verify translation

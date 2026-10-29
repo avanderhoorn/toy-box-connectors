@@ -1,10 +1,11 @@
 # Toy Box, for the Slack integration
 
 How Toy Box works, where toy-box-slack attaches to it, and how to steer a Channel lead when Slack is
-involved. Every claim cites the Toy Box source at `/Users/avanderhoorn/Projects/toy-box` (commit
-`ff15be0`). Paths are relative to that repo unless they start with `toy-box-slack/`. **Fact** means
-read in code or observed. **Inference** means reasoned from code but not exercised. **Unverified**
-means an experiment in §6 should settle it.
+involved. Every claim cites the Toy Box source at commit
+[`ff15be0`](https://github.com/lostintangent/toy-box/tree/ff15be0c15b7ed6fcc97d086bdddd88aeb3f7757)
+of lostintangent/toy-box. Paths are relative to that repo unless they start with `toy-box-slack/`.
+**Fact** means read in code or observed. **Inference** means reasoned from code but not exercised.
+**Unverified** means an experiment in §6 should settle it.
 
 ## 0. Conclusions
 
