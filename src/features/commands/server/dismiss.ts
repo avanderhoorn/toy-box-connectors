@@ -5,19 +5,14 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { CommandRefusedError } from "@commands/model/protocol";
 import { dismissRequest, RequestStateError } from "@requests/model/lifecycle";
 import { saveRequest } from "@requests/server/database";
-import type { WakeScheduler } from "@wakes/server";
 import { readCallerLink, readLinkRequest, SEE_INBOX } from "./link";
 import type { CommandHandler } from "./serve";
 
 export type DismissCommandOptions = {
   database: BridgeDatabase;
-  wakes: Pick<WakeScheduler, "reconsider">;
 };
 
-export function dismissCommand({
-  database,
-  wakes,
-}: DismissCommandOptions): CommandHandler<"dismiss"> {
+export function dismissCommand({ database }: DismissCommandOptions): CommandHandler<"dismiss"> {
   return async ({ request: id, reason }, { channelId }) => {
     await database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
@@ -29,7 +24,6 @@ export function dismissCommand({
         throw new CommandRefusedError(`r${id} wasn't dismissed. ${error.message} ${SEE_INBOX}`);
       }
     });
-    wakes.reconsider();
     return { result: { request: `r${id}`, state: "dismissed" }, text: `Dismissed r${id}.` };
   };
 }

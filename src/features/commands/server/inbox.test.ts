@@ -1,4 +1,4 @@
-import { expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { dismissRequest, serveRequest } from "@requests/model/lifecycle";
@@ -31,11 +31,9 @@ test("shows changed requests first, up to its limit, and marks only those it sho
     });
     await saveRequest(transaction, dismissRequest(serveRequest(dismissed, 5), "Done"));
   });
-  const wakes = { reconsider: mock(() => {}) };
   const acknowledged: string[][] = [];
   const inbox = inboxCommand({
     database,
-    wakes,
     workspaceUrl: () => null,
     acknowledge: (requests) => acknowledged.push(requests.map(({ sourceTs }) => sourceTs)),
   });
@@ -56,6 +54,5 @@ test("shows changed requests first, up to its limit, and marks only those it sho
     { id: 4, state: "dismissed", attention: null, touchedAt: 5 },
     { id: 5, state: "open", attention: null, touchedAt: null },
   ]);
-  expect(wakes.reconsider).toHaveBeenCalledTimes(2);
   expect(acknowledged).toEqual([[askedAt(3).sourceTs], [askedAt(2).sourceTs]]);
 });

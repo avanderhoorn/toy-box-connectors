@@ -16,22 +16,16 @@ import {
   PUBLISH_COMMAND,
   type ToyBoxRoutine,
 } from "@toybox/model";
-import type { WakeScheduler } from "@wakes/server";
 import { readCallerLink, readLinkRequest, SEE_INBOX } from "./link";
 import type { CommandHandler } from "./serve";
 
 export type ReplyCommandOptions = {
   database: BridgeDatabase;
-  wakes: Pick<WakeScheduler, "reconsider">;
   outbox?: Pick<OutboxWorker, "poke">;
 };
 
 /** Queues the answer to a request in its thread. Only Slack's confirmation answers it. */
-export function replyCommand({
-  database,
-  wakes,
-  outbox,
-}: ReplyCommandOptions): CommandHandler<"reply"> {
+export function replyCommand({ database, outbox }: ReplyCommandOptions): CommandHandler<"reply"> {
   return async ({ request: id, text }, { channelId, at }) => {
     const post = await database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
@@ -40,7 +34,6 @@ export function replyCommand({
         queueReply(transaction, { requestId: id, text }, at),
       );
     });
-    wakes.reconsider();
     outbox?.poke();
     return {
       result: { request: `r${id}`, post: `o${post.number}`, state: post.state },

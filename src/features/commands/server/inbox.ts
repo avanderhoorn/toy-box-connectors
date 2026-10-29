@@ -22,13 +22,11 @@ import { serveRequest } from "@requests/model/lifecycle";
 import { readActiveRequests, saveRequest, type StoredRequest } from "@requests/server/database";
 import { readSlackPersonName } from "@slackapi/server/users";
 import { isPending } from "@wakes/model";
-import type { WakeScheduler } from "@wakes/server";
 import { readCallerLink } from "./link";
 import type { CommandHandler } from "./serve";
 
 export type InboxCommandOptions = {
   database: BridgeDatabase;
-  wakes: Pick<WakeScheduler, "reconsider">;
   /** The Slack workspace's URL, once Slack has said it, for permalinks. */
   workspaceUrl: () => string | null;
   acknowledge?: OutboxWorker["acknowledge"];
@@ -45,7 +43,6 @@ export type MessageRow = {
 
 export function inboxCommand({
   database,
-  wakes,
   workspaceUrl,
   acknowledge,
 }: InboxCommandOptions): CommandHandler<"inbox"> {
@@ -69,7 +66,6 @@ export function inboxCommand({
         more: waiting.length - requests.length,
       };
     });
-    wakes.reconsider();
     acknowledge?.(seen);
     return { result: inbox, text: presentInbox(inbox, at) };
   };

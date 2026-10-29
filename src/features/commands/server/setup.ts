@@ -22,7 +22,6 @@ import { fetchChannelFacts } from "@slackapi/server/channels";
 import { readInstallation } from "@slackapi/server/installation";
 import { fetchSlackPerson, readPersonIds, writeSlackPerson } from "@slackapi/server/users";
 import { readToyBoxChannel } from "@toybox/server/api";
-import type { WakeScheduler } from "@wakes/server";
 import { callerChannel, readCallerLink, type CallerLink } from "./link";
 import { confirmWidening } from "./owner";
 import type { CommandContext, CommandHandler } from "./serve";
@@ -31,7 +30,6 @@ export type SetupCommandOptions = {
   database: BridgeDatabase;
   bot: BotClient | null;
   toyBoxOrigin: URL;
-  wakes: Pick<WakeScheduler, "reconsider">;
 };
 
 export function linkCommand(options: SetupCommandOptions): CommandHandler<"link"> {
@@ -51,14 +49,13 @@ export function resumeCommand(options: SetupCommandOptions): CommandHandler<"res
   };
 }
 
-export function pauseCommand({ database, wakes }: SetupCommandOptions): CommandHandler<"pause"> {
+export function pauseCommand({ database }: SetupCommandOptions): CommandHandler<"pause"> {
   return async (_input, { channelId, at }) => {
     const link = await database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
       await pauseLink(transaction, link.id, at);
       return link;
     });
-    wakes.reconsider();
     const status = link.status === "active" ? "paused" : link.status;
     return {
       result: { status },
@@ -68,7 +65,7 @@ export function pauseCommand({ database, wakes }: SetupCommandOptions): CommandH
 }
 
 /** Deletes everything the bridge kept for the link. */
-export function unlinkCommand({ database, wakes }: SetupCommandOptions): CommandHandler<"unlink"> {
+export function unlinkCommand({ database }: SetupCommandOptions): CommandHandler<"unlink"> {
   return async (_input, { channelId }) => {
     const link = await database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
@@ -77,7 +74,6 @@ export function unlinkCommand({ database, wakes }: SetupCommandOptions): Command
       await deleteLink(transaction, link.id);
       return link;
     });
-    wakes.reconsider();
     return {
       result: { unlinked: link.slackChannelId },
       text: `Unlinked ${link.channel} and deleted what the bridge kept for it. The lead should delete its routines that run toy-box-slack.`,
@@ -119,7 +115,7 @@ export function allowCommand({ database, bot }: SetupCommandOptions): CommandHan
 }
 
 /** Cancels whatever the people it removes are still waiting on. */
-export function denyCommand({ database, wakes }: SetupCommandOptions): CommandHandler<"deny"> {
+export function denyCommand({ database }: SetupCommandOptions): CommandHandler<"deny"> {
   return async ({ users }, { channelId }) => {
     const { link, cancelled } = await database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
@@ -135,7 +131,6 @@ export function denyCommand({ database, wakes }: SetupCommandOptions): CommandHa
       }
       return { link, cancelled: asked.length };
     });
-    wakes.reconsider();
     const text = `None of them can ask the lead to act from ${link.channel} now.`;
     return {
       result: { cancelled },
@@ -149,7 +144,7 @@ export function denyCommand({ database, wakes }: SetupCommandOptions): CommandHa
  * settings `wanted` names, else the link's own, and the channel's audience as Slack says it is now.
  */
 async function linkChannel(
-  { database, bot, toyBoxOrigin, wakes }: SetupCommandOptions,
+  { database, bot, toyBoxOrigin }: SetupCommandOptions,
   { channelId, at, confirmed }: CommandContext,
   slackChannelId: string,
   wanted: Partial<Pick<CallerLink, "requestMode" | "observe">>,
@@ -165,7 +160,7 @@ async function linkChannel(
   if (typeof approved === "string") {
     throw new CommandRefusedError(approvalRefusal(approved, channel));
   }
-  const answer = await database.write(async (transaction) => {
+  return database.write(async (transaction) => {
     const link = await readToyBoxLink(transaction, toyBoxChannelId);
     if (link && link.slackChannelId !== slackChannelId) {
       throw new CommandRefusedError(
@@ -189,8 +184,6 @@ async function linkChannel(
       text: `The lead of ${toyBox} answers in ${channel} now, for the people \`toy-box-slack allow\` names.`,
     };
   });
-  wakes.reconsider();
-  return answer;
 }
 
 /** The Toy Box channel's name, refusing one that's missing or whose lead isn't on Copilot. */

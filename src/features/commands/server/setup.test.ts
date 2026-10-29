@@ -17,7 +17,6 @@ test("resume refuses a link Slack gave a new channel ID, before it asks Toy Box 
     database,
     bot: null,
     toyBoxOrigin: new URL("http://127.0.0.1"),
-    wakes: { reconsider: () => {} },
   });
 
   const answer = resume({}, { channelId: "toybox-link", at: 1_000 });
@@ -39,7 +38,6 @@ test("unlink deletes what the bridge kept for its link, and nothing of another l
     database,
     bot: null,
     toyBoxOrigin: new URL("http://127.0.0.1"),
-    wakes: { reconsider: () => {} },
   });
 
   await unlink({}, { channelId: "toybox-gone", at: 1_000 });

@@ -13,16 +13,14 @@ test("reply queues one answer in a request's thread, and refuses a second or ano
   const { database, now } = await createOutboxWorld();
   await createStoredLink(database, "other");
   await createStoredRequest(database, { linkId: "other", channelId: "C-other", state: "seen" });
-  const wakes = { reconsider: mock(() => {}) };
   const outbox = { poke: mock(() => {}) };
-  const reply = replyCommand({ database, wakes, outbox });
+  const reply = replyCommand({ database, outbox });
   const lead = { ...LEAD, at: now() };
 
   expect(await reply({ request: 1, text: "It's **fixed**." }, lead)).toEqual({
     result: { request: "r1", post: "o1", state: "queued" },
     text: "Queued o1 to answer r1 in its thread. If it can't post, inbox shows r1 again.",
   });
-  expect(wakes.reconsider).toHaveBeenCalledTimes(1);
   expect(await refusal(reply({ request: 1, text: "Again." }, lead))).toBe(
     "r1 wasn't answered. Request r1 is already reserved by o1 (queued). Run `toy-box-slack inbox` to see what waits on you.",
   );

@@ -135,7 +135,7 @@ export async function startBridge(
       });
     }
     const workspaceUrl = () => slack?.workspaceUrl() ?? null;
-    const setup = { database, bot, toyBoxOrigin: origin, wakes: scheduler };
+    const setup = { database, bot, toyBoxOrigin: origin };
     socket = listenForCommands(
       commandSocketPath(dataFolder),
       serveCommands(
@@ -143,12 +143,11 @@ export async function startBridge(
         {
           inbox: inboxCommand({
             database,
-            wakes: scheduler,
             workspaceUrl,
             acknowledge: (requests) => outbox?.acknowledge(requests),
           }),
-          dismiss: dismissCommand({ database, wakes: scheduler }),
-          reply: replyCommand({ database, wakes: scheduler, outbox }),
+          dismiss: dismissCommand({ database }),
+          reply: replyCommand({ database, outbox }),
           activity: activityCommand({ database, workspaceUrl }),
           "mark-read": markReadCommand({ database }),
           publish: publishCommand({
@@ -172,6 +171,7 @@ export async function startBridge(
           unlink: unlinkCommand(setup),
         },
         () => readCredentialsFile(dataFolder).OWNER_PASSPHRASE_HASH ?? null,
+        () => scheduler?.reconsider(),
       ),
     );
     return { failed: failure.promise, stop };

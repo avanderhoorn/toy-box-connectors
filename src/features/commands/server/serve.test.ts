@@ -1,4 +1,4 @@
-import { expect, onTestFinished, spyOn, test } from "bun:test";
+import { expect, mock, onTestFinished, spyOn, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { COMMANDS_PATH, CommandRefusedError } from "@commands/model/protocol";
 import { createStoredLink } from "@links/server/testFixtures";
@@ -7,7 +7,7 @@ import { serveCommands, type CommandHandlers } from "./serve";
 const LEAD = { sessionId: "toybox-link", channelId: null };
 
 /** Calls a bridge whose status answers, whose inbox refuses, and whose dismiss fails. */
-async function call(name: string, body: unknown) {
+async function call(name: string, body: unknown, onChange = () => {}) {
   const database = await openTestDatabase();
   await createStoredLink(database);
   const handlers: Partial<CommandHandlers> = {
@@ -24,6 +24,7 @@ async function call(name: string, body: unknown) {
     database,
     handlers as CommandHandlers,
     () => null,
+    onChange,
     () => 1_000,
   );
   const request = new Request(`http://bridge${COMMANDS_PATH}${name}`, {
@@ -94,4 +95,17 @@ test("logs why a command failed and says it may or may not have run", async () =
     },
   });
   expect(log).toHaveBeenCalledWith("Couldn't finish `dismiss`:", new Error("The disk is full."));
+});
+
+test("reports a change once a command has run, whether it answered, refused or failed", async () => {
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => log.mockRestore());
+  const onChange = mock(() => {});
+  const dismiss = { caller: LEAD, input: { request: "r1", reason: "Done" } };
+
+  expect((await call("status", { caller: LEAD, input: {} }, onChange)).status).toBe(200);
+  expect((await call("inbox", { caller: LEAD, input: {} }, onChange)).status).toBe(409);
+  expect((await call("dismiss", dismiss, onChange)).status).toBe(500);
+
+  expect(onChange).toHaveBeenCalledTimes(3);
 });

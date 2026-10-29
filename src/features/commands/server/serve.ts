@@ -34,11 +34,16 @@ export type CommandHandler<Name extends CommandName> = (
 
 export type CommandHandlers = { [Name in CommandName]: CommandHandler<Name> };
 
-/** Serves `handlers`, checking passphrases against the argon2id hash `ownerHash` reads, if any. */
+/**
+ * Serves `handlers`, checking passphrases against the argon2id hash `ownerHash` reads, if any.
+ * Calls `onChange` once each command has run, even one that refused or failed, since it may have
+ * written first.
+ */
 export function serveCommands(
   database: BridgeDatabase,
   handlers: CommandHandlers,
   ownerHash: () => string | null,
+  onChange: () => void,
   now = Date.now,
 ): (request: Request) => Promise<Response> {
   return async (request) => {
@@ -72,7 +77,11 @@ export function serveCommands(
       // The schema that parsed the input is the one the handler's type reads.
       const handler = handlers[name as CommandName] as CommandHandler<CommandName>;
       const context = { channelId: resolved.channelId, at: now(), confirmed: owner?.confirms };
-      return Response.json(await handler(input.data as never, context));
+      try {
+        return Response.json(await handler(input.data as never, context));
+      } finally {
+        onChange();
+      }
     } catch (error) {
       if (error instanceof CommandRefusedError) return answerError(409, error.message);
       console.error(`Couldn't finish \`${name}\`:`, error);
