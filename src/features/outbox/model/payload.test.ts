@@ -16,6 +16,9 @@ test("stored canonical bytes survive JSON and the send check unchanged", () => {
     message: original,
   });
   expect(checkLeadPayload(message("a".repeat(12_000))).kind).toBe("valid");
+  expect(checkLeadPayload(message("@\u200b\u200bx and @\u200b\u200b\u200beveryone")).kind).toBe(
+    "valid",
+  );
 });
 test("a stored snapshot cannot add controls, change parsing or bypass the limit", () => {
   const original = message();

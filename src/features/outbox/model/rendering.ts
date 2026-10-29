@@ -20,7 +20,7 @@ export function renderMarkdown(source: string): RenderResult {
   if (problem) return { kind: "refused", problem };
   if (!source.trim()) return { kind: "refused", problem: "empty" };
   const text = source
-    .replace(/@\u200b/g, "@")
+    .replace(/@\u200b+/g, "@")
     .replace(/<(?=[@!])/g, "&lt;")
     .replace(/@(here|channel|everyone)\b/gi, "@\u200b$1");
   if (text.length > 12_000) {
