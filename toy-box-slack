@@ -1,0 +1,5 @@
+#!/bin/sh
+# The command npm installs, which runs the compiled CLI beside it. Toy Box sets BUN_BE_BUN in every
+# agent's shell, and a compiled Bun program run with it set runs as Bun instead, so it's cleared here.
+unset BUN_BE_BUN
+exec "$(dirname "$(realpath "$0")")/toy-box-slack-darwin-arm64" "$@"

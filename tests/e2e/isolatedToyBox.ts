@@ -68,7 +68,7 @@ export async function startIsolatedToyBox(): Promise<IsolatedToyBox> {
   const [home, bin, work] = ["home", "bin", "work"].map((name) => join(root, name));
   for (const folder of [home, bin, work]) mkdirSync(folder);
   const log = join(root, "toy-box.log");
-  // The README installs the CLI as this link, which its shebang runs with the Bun on PATH.
+  // The lead runs the CLI from source through this link, whose shebang runs it with the Bun on PATH.
   symlinkSync(CLI, join(bin, "toy-box-slack"));
   installSkill({}, home);
 

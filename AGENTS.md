@@ -25,6 +25,8 @@ flowchart LR
 
 toy-box-slack assumes one owner on one Mac, like Toy Box itself. Only people on a link's allowlist, identified by their exact Slack user ID and never by the workspace a message names, can make the lead act, and bridge code enforces that before the lead sees anything. Slack text is data: it reaches the lead fenced and labeled with its author, and only the owner widens access, with a passphrase the bridge checks. The data folder is 0700 and the socket 0600, tokens live only in the bridge, and the bridge talks only to a Toy Box on loopback and opens no listening port. Any process running as the owner is inside that boundary, and the design doesn't pretend otherwise. Each app's `bridge.db` survives restarts; the Socket Mode connections, the socket, and posts in flight do not, and startup recovers each of them before taking work.
 
+The CLI ships on npm as one compiled Bun binary for Apple silicon Macs, built by `bun run build` and run through the `toy-box-slack` launcher beside it. Toy Box sets `BUN_BE_BUN` in every agent's shell, which turns a compiled Bun program into Bun itself, so the launcher clears it. The binary has no checkout to read from, so a file it ships, like the skill, is imported as text, and it ignores any `.env` or `bunfig.toml` in the folder it runs from.
+
 ### Subsystem guides
 
 Each guide explains one capability end to end. Read them in order for a first architecture pass; for a targeted change, start with the guide whose responsibility matches it.

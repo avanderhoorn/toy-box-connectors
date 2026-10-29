@@ -8,6 +8,7 @@
   },
   "type": "module",
   "scripts": {
+    "build": "bun build cli/index.ts --compile --minify --target=bun-darwin-arm64 --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile toy-box-slack-darwin-arm64",
     "check": "bun fmt --check && oxlint && bun check",
     "prepare": "git config core.hooksPath .githooks"
   },
