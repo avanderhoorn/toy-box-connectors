@@ -207,51 +207,20 @@ function proxySlack(
   return { slackApiUrl: new URL("/api/", server.url).href, acked };
 }
 
-/** Event `id` for the fake's app and bot, framed as Slack sends it over Socket Mode. */
-function eventEnvelope(id: string, event: object) {
-  return {
-    type: "events_api",
-    envelope_id: `env-${id}`,
-    accepts_response_payload: false,
-    retry_attempt: 0,
-    retry_reason: "",
-    payload: {
-      type: "event_callback",
-      team_id: "TFAKE",
-      api_app_id: "AFAKE",
-      event_id: `Ev-${id}`,
-      event_time: NOW / 1000,
-      authorizations: [
-        {
-          enterprise_id: null,
-          team_id: "TFAKE",
-          user_id: "UFAKEBOT",
-          is_bot: true,
-          is_enterprise_install: false,
-        },
-      ],
-      event,
-    },
-  };
-}
-
 describe("connecting", () => {
   test("Slack connects once the tokens are confirmed and Slack says hello, and takes what follows it", async () => {
     const log = silenceLog();
     const link = await linkFakeSlack();
+    const late = link.fake.envelope(post("1700000200.000100"));
     const slack = proxySlack(link.fake, {
-      frames: [
-        eventEnvelope("early", post("1700000100.000100")),
-        hello,
-        eventEnvelope("late", post("1700000200.000100")),
-      ],
+      frames: [link.fake.envelope(post("1700000100.000100")), hello, late],
     });
 
     const { supervisor } = link.supervise({ slackApiUrl: slack.slackApiUrl });
     expect(supervisor.state()).toEqual({ connection: "connecting", problem: null });
     expect(supervisor.workspaceUrl()).toBeNull();
     await waitFor(() => expect(supervisor.state()).toEqual(connected));
-    await waitFor(() => expect(slack.acked).toEqual(["env-late"]));
+    await waitFor(() => expect(slack.acked).toEqual([late.envelope_id]));
 
     expect(supervisor.workspaceUrl()).toBe("https://fake-workspace.slack.com/");
     expect(methodsCalled(link.fake)).toEqual(["auth.test", "bots.info", "apps.connections.open"]);

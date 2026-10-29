@@ -187,10 +187,8 @@ export function startFakeSlack(
     return { envelopeId };
   }
 
-  function sendEvent(
-    event: Record<string, unknown>,
-    settings: FakeEventOptions = {},
-  ): FakeSlackDelivery {
+  /** `event` framed as Slack sends it over Socket Mode. */
+  function envelope(event: Record<string, unknown>, settings: FakeEventOptions = {}) {
     const payload: Record<string, unknown> = {
       token: "fake-verification-token",
       context_team_id: identity.teamId,
@@ -219,14 +217,18 @@ export function startFakeSlack(
         },
       ];
     }
-    return sendFrame({
+    return {
       type: "events_api",
       envelope_id: crypto.randomUUID(),
       accepts_response_payload: false,
       retry_attempt: 0,
       retry_reason: "",
       payload,
-    });
+    };
+  }
+
+  function sendEvent(event: Record<string, unknown>, settings?: FakeEventOptions) {
+    return sendFrame(envelope(event, settings));
   }
 
   return {
@@ -242,6 +244,7 @@ export function startFakeSlack(
       return sockets.size;
     },
     sendFrame,
+    envelope,
     sendEvent,
     disconnect() {
       sendFrame({
