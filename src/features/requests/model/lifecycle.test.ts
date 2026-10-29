@@ -8,6 +8,7 @@ import {
   expireRequest,
   isActive,
   openRequest,
+  requestLifetimeMs,
   returnToSeen,
   serveRequest,
   type NewRequest,
@@ -27,7 +28,8 @@ const answering = beginAnswer(seen, 20);
 const updated = changeRequest(seen, 30);
 
 test("a request waits a week for the lead, which can act on it only once it has read it", () => {
-  expect(opened).toMatchObject({ createdAt: 1, changedAt: 1, expiresAt: 1 + 7 * 24 * 60 * 60_000 });
+  expect(requestLifetimeMs).toBe(7 * 24 * 60 * 60_000);
+  expect(opened).toMatchObject({ createdAt: 1, changedAt: 1 });
   expect(changeRequest(opened, 5)).toEqual({ ...opened, changedAt: 5 });
   expect(() => beginAnswer(opened, 5)).toThrow("A request that's open can't be answered.");
   expect(() => dismissRequest(opened, "no question")).toThrow("can't be dismissed");

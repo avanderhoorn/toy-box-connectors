@@ -19,7 +19,6 @@ export async function initializeRequestSchema(db: Bun.SQL): Promise<void> {
       created_at        INTEGER NOT NULL,
       changed_at        INTEGER NOT NULL,
       touched_at        INTEGER,
-      expires_at        INTEGER NOT NULL,
       closed_reason     TEXT,
       CHECK (attention IS NULL OR state = 'seen'),
       CHECK ((closed_reason IS NOT NULL) = (state IN ('dismissed', 'cancelled')))

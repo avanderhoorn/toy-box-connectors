@@ -9,7 +9,7 @@ const NOW = Date.parse("2026-10-28T12:00:00.000Z");
 test("wakes a lead once its requests settle, and stopping mid-run logs it and leaves no timer", async () => {
   const database = await openTestDatabase();
   await createStoredLink(database);
-  await createStoredRequest(database, { changedAt: NOW - 10_000, expiresAt: NOW + 60_000 });
+  await createStoredRequest(database, { createdAt: NOW - 10_000, changedAt: NOW - 10_000 });
   const { promise: woken, resolve } = Promise.withResolvers<string>();
   let clock = NOW;
   const wakeLead = async (channelId: string) => {

@@ -63,7 +63,7 @@ export async function createOutboxWorld() {
   const request = await createStoredRequest(database, {
     state: "seen",
     touchedAt: now(),
-    expiresAt: now() + 604_800_000,
+    createdAt: now(),
   });
   slack.setMessage("C-link", {
     type: "message",

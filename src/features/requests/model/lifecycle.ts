@@ -60,7 +60,6 @@ export type Request = {
   changedAt: number;
   /** When the lead last read or acted on the request. */
   touchedAt: number | null;
-  expiresAt: number;
   /** The lead's reason for a dismissal, or the cancel reason. */
   closedReason: string | null;
 };
@@ -89,7 +88,6 @@ export function openRequest(request: NewRequest, now: number): Request {
     createdAt: now,
     changedAt: now,
     touchedAt: null,
-    expiresAt: now + requestLifetimeMs,
     closedReason: null,
   };
 }

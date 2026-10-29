@@ -153,7 +153,7 @@ test("a reply Slack refuses after removing the bot suspends the link and wakes i
       const request = await createStoredRequest(database, {
         state: "seen",
         touchedAt: Date.now(),
-        expiresAt: Date.now() + 604_800_000,
+        createdAt: Date.now(),
       });
       await database.write((tx) =>
         queueReply(tx, { requestId: request.id, text: "The queued answer." }, Date.now()),

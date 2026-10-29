@@ -20,12 +20,10 @@ export const REQUESTS_ROUTINE = {
   prompt: "Run `toy-box-slack inbox` and answer what's waiting.",
 };
 
-const DAY = 24 * 60 * 60_000;
-
-/** Stores a request on the link that arrived just now, so it waits on the lead for a day. */
+/** Stores a request on the link that arrived just now, so it waits on the lead. */
 export function storeNewRequest(database: BridgeDatabase) {
   const at = Date.now();
-  return createStoredRequest(database, { createdAt: at, changedAt: at, expiresAt: at + DAY });
+  return createStoredRequest(database, { createdAt: at, changedAt: at });
 }
 
 /** Settings of a stored link, such as its request mode. */

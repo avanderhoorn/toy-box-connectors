@@ -1,6 +1,7 @@
 import {
   canMove,
   isActive,
+  requestLifetimeMs,
   requestStates,
   type Request,
   type RequestAttention,
@@ -30,7 +31,6 @@ type RequestRow = {
   created_at: number;
   changed_at: number;
   touched_at: number | null;
-  expires_at: number;
   closed_reason: string | null;
 };
 
@@ -73,7 +73,7 @@ export async function readActiveRequests(sql: Bun.SQL, linkId: string): Promise<
 export async function readOverdueRequests(sql: Bun.SQL, now: number): Promise<StoredRequest[]> {
   const rows = await sql<RequestRow[]>`
     SELECT * FROM requests
-    WHERE state IN ${sql(expiringStates)} AND expires_at <= ${now} ORDER BY id
+    WHERE state IN ${sql(expiringStates)} AND created_at <= ${now - requestLifetimeMs} ORDER BY id
   `;
   return rows.map(requestFromRow);
 }
@@ -161,7 +161,6 @@ function requestFromRow(row: RequestRow): StoredRequest {
     createdAt: row.created_at,
     changedAt: row.changed_at,
     touchedAt: row.touched_at,
-    expiresAt: row.expires_at,
     closedReason: row.closed_reason,
   };
 }
@@ -179,7 +178,6 @@ function requestColumns(request: Request): Omit<RequestRow, "id"> {
     created_at: request.createdAt,
     changed_at: request.changedAt,
     touched_at: request.touchedAt,
-    expires_at: request.expiresAt,
     closed_reason: request.closedReason,
   };
 }
