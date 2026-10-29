@@ -2,10 +2,20 @@
 
 import { onTestFinished } from "bun:test";
 import { join } from "node:path";
+import type { Subprocess } from "bun";
 import { openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
 import { startFakeSlack, type FakeSlackIdentity } from "../fakes/slack";
 
 const REPOSITORY = join(import.meta.dir, "..", "..");
+
+/** The bridges tests started that may still be running. */
+const bridges = new Set<Subprocess>();
+
+/** Kills every bridge a test started, as the test finishes. */
+function killBridges() {
+  for (const bridge of bridges) bridge.kill("SIGKILL");
+  bridges.clear();
+}
 
 /**
  * Run `toy-box-slack serve` with `home` as its home folder, collecting what it writes to stderr.
@@ -13,6 +23,8 @@ const REPOSITORY = join(import.meta.dir, "..", "..");
  * shell running the tests reaches it.
  */
 export function spawnBridge(home: string, env: Record<string, string> = {}) {
+  // Bun throws outside a running test, so a test that timed out starts no bridge it can't stop.
+  onTestFinished(killBridges);
   const child = Bun.spawn([process.execPath, "--no-env-file", "cli/index.ts", "serve"], {
     cwd: REPOSITORY,
     env: {
@@ -25,7 +37,7 @@ export function spawnBridge(home: string, env: Record<string, string> = {}) {
     stdout: "ignore",
     stderr: "pipe",
   });
-  onTestFinished(() => child.kill("SIGKILL"));
+  bridges.add(child);
 
   let stderr = "";
   const decoder = new TextDecoder();
@@ -61,7 +73,12 @@ export function spawnBridge(home: string, env: Record<string, string> = {}) {
 export function startSlackForBridge(identity?: Partial<FakeSlackIdentity>) {
   // Pages of one prove the bridge reads every page of whatever it lists.
   const slack = startFakeSlack({ identity, pageSize: 1 });
-  onTestFinished(() => slack.stop());
+  // Bun runs a test's finish hooks in order and skips the rest once one throws, as this fake's stop
+  // does when it saw unexpected traffic, so the bridges die before it stops.
+  onTestFinished(() => {
+    killBridges();
+    return slack.stop();
+  });
   slack.addChannel({ id: "C-link" });
   const env = {
     SLACK_API_URL: slack.url,
