@@ -39,9 +39,10 @@ export async function connectedBridge({
     botId: "B-bot",
     botUserId: BOT,
   });
+  const channel = link?.slack_channel_id ?? "C-link";
   // Slack must know the channel when the bridge connects, since catching up reads it.
   slack.addChannel({
-    id: link?.slack_channel_id ?? "C-link",
+    id: channel,
     name: "release-eng",
     is_private: true,
     members: [BOT, ALICE, MALLORY],
@@ -76,20 +77,20 @@ export async function connectedBridge({
     ...linked,
     slack,
     deliver,
-    /** Posts `message` in C-link, and sends the bridge its event. */
+    /** Posts `message` in the link's channel, and sends the bridge its event. */
     post: (message: FakeSlackMessage, options?: FakeEventOptions) => {
-      slack.setMessage("C-link", message);
-      return deliver(posted(message), options);
+      slack.setMessage(channel, message);
+      return deliver(posted(message, channel), options);
     },
     /** Edits `message` to say `text` at `editedTs`, and sends the bridge its event. */
     edit: (message: FakeSlackMessage, text: string, editedTs: SlackTs) => {
       const edited = { ...message, text, edited: { user: message.user, ts: editedTs } };
-      slack.setMessage("C-link", edited);
+      slack.setMessage(channel, edited);
       return deliver({
         type: "message",
         subtype: "message_changed",
         hidden: true,
-        channel: "C-link",
+        channel,
         message: edited,
         previous_message: message,
         event_ts: editedTs,

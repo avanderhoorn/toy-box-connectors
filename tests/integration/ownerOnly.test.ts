@@ -38,13 +38,12 @@ type Caller = "the lead" | "a member's session" | "a terminal";
  */
 async function ownedBridge() {
   const bridge = await connectedBridge({ link: { slack_channel_id: "C0LINK" } });
-  const { slack, channelId, home, dataFolder, deliver } = bridge;
+  const { slack, channelId, home, dataFolder, post } = bridge;
   slack.setUser(MALLORY_USER);
   writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", HASH);
   const [askedTs] = timestamps(1);
   const asked = said(ALICE, askedTs!, `<@${BOT}> can you check the deploy?`);
-  slack.setMessage("C0LINK", asked);
-  await deliver({ ...asked, channel: "C0LINK", event_ts: askedTs, channel_type: "group" });
+  await post(asked);
 
   const callers: Record<Caller, CallOptions> = {
     "the lead": { env: { COPILOT_AGENT_SESSION_ID: channelId } },
