@@ -13,10 +13,8 @@ function normalize(event: unknown) {
 }
 
 test("roots, replies and edits retain exact identity and routing context", () => {
-  expect(
-    normalize({ ...message, channel: "C1", thread_ts: message.ts, user_team: "TSIBLING" }),
-  ).toMatchObject({
-    message: { rootTs: message.ts, isReply: false, teamId: "TSIBLING", mentionsBot: true },
+  expect(normalize({ ...message, channel: "C1", thread_ts: message.ts })).toMatchObject({
+    message: { rootTs: message.ts, isReply: false, mentionsBot: true },
   });
   const reply = { ...message, ts: "1700000000.000101", thread_ts: message.ts };
   expect(normalize({ ...reply, channel: "C1" })).toMatchObject({

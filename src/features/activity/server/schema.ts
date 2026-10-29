@@ -2,16 +2,12 @@
 export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
   await db.unsafe(`
     -- A kept message has text and a content hash, and a content-free marker or a tombstone has
-    -- neither, nor any trace that it mentioned the bot. eligible marks a person's message, the only
-    -- kind that can start a request.
+    -- neither, nor any trace that it mentioned the bot.
     CREATE TABLE messages (
       channel_id   TEXT NOT NULL,
       ts           TEXT NOT NULL,
       thread_ts    TEXT,
       user_id      TEXT,
-      team_id      TEXT,
-      subtype      TEXT,
-      eligible     INTEGER NOT NULL CHECK (eligible IN (0, 1)),
       author_role  TEXT NOT NULL
         CHECK (author_role IN ('allowed', 'observed', 'self', 'other')),
       text         TEXT,
@@ -22,7 +18,6 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       version      TEXT NOT NULL,
       updated_seq  INTEGER NOT NULL CHECK (typeof(updated_seq) = 'integer' AND updated_seq > 0),
       PRIMARY KEY (channel_id, ts),
-      CHECK (eligible = (author_role IN ('allowed', 'observed'))),
       CHECK ((content_hash IS NULL) = (text IS NULL)),
       CHECK (text IS NOT NULL OR mentions_bot = 0),
       CHECK (text IS NULL OR (deleted = 0 AND author_role <> 'other'))

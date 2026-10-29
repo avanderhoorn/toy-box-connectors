@@ -15,9 +15,8 @@ import {
 const audience: LinkAudience = { allowlist: new Set(["U-owner"]), observe: "requesters" };
 const message = askMessage();
 
-test("a person is allowed by exact user ID, whatever workspace the message names", () => {
+test("a person is allowed by exact user ID", () => {
   expect(authorRole(message, audience)).toBe("allowed");
-  expect(authorRole({ ...message, teamId: "T-sibling" }, audience)).toBe("allowed");
   expect(authorRole({ ...message, userId: "U-stranger" }, audience)).toBe("observed");
   expect(authorRole({ ...message, userId: null }, audience)).toBe("observed");
   expect(authorRole({ ...message, author: "self" }, audience)).toBe("self");

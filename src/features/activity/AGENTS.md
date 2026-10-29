@@ -12,7 +12,7 @@ The ledger keeps one row per channel and `ts`. Every new, edited, or deleted mes
 
 A delete leaves a tombstone that no version of the message can undo, even one that arrives first, and its text is forgotten. When someone deletes a root that still has replies, Slack leaves a tombstone message in its place and sends the root's `message_deleted` only after the last reply's, so that tombstone counts as the delete, and the replies stay. Slack withdraws a message when an admin's key no longer unlocks it or a rule hides it, and the ledger stores that as its delete, since the bridge may no longer keep what it said. Only the message's own `hidden` flag counts, since Slack hides every edit and delete event too.
 
-Each message gets its author role when it's stored. In the default requesters mode, text is kept only from allowlisted people, from the bot, and from anyone posting in a thread where a request started. Every other message becomes a content-free marker, so the digest cursor still accounts for it. Another bot's text is never kept. A marker whose text is kept when the same version arrives again is filled in without counting as an edit.
+Each message gets its author role when it's stored, and a person's comes from their exact user ID, never the workspace the message names. In the default requesters mode, text is kept only from allowlisted people, from the bot, and from anyone posting in a thread where a request started. Every other message becomes a content-free marker, so the digest cursor still accounts for it. Another bot's text is never kept. A marker whose text is kept when the same version arrives again is filled in without counting as an edit.
 
 ## Catching up
 

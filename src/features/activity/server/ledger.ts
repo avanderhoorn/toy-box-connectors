@@ -60,9 +60,6 @@ export async function storeMessage(
     await writeMessage(transaction, link.id, channelId, ts, decision, {
       thread_ts: message.threadTs,
       user_id: message.userId,
-      team_id: message.teamId,
-      subtype: message.subtype,
-      eligible: message.author === "person" ? 1 : 0,
       author_role: role,
       text: kept ? message.text : null,
       content_hash: contentHash,
@@ -93,7 +90,7 @@ export async function storeDelete(
     ts,
     decision,
     decision.kind === "insert"
-      ? { eligible: 0, author_role: "other", deleted: 1, version: ts }
+      ? { author_role: "other", deleted: 1, version: ts }
       : { deleted: 1, text: null, content_hash: null, mentions_bot: 0 },
   );
   return decision;

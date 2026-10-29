@@ -18,8 +18,6 @@ export function askMessage(
     rootTs: ts,
     isReply: false,
     userId: "U-owner",
-    teamId: "T-home",
-    subtype: null,
     author: "person",
     text: "<@U-bot> can you look at the deploy?",
     mentions: ["U-bot"],

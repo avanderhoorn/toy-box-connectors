@@ -9,8 +9,6 @@ export const slackMessageSchema = z.object({
   ts: slackTsSchema.describe("Message ID"),
   thread_ts: slackTsSchema.nullish().describe("Root ID, including on roots themselves"),
   user: id.nullish().describe("Author"),
-  user_team: id.nullish().describe("Author's workspace, not authorization"),
-  team: id.nullish().describe("Message workspace"),
   bot_id: id.nullish().describe("Bot author"),
   app_id: id.nullish().describe("App author"),
   text: z.string().nullish().describe("Slack text"),
@@ -65,8 +63,6 @@ export type SlackMessage = {
   rootTs: SlackTs;
   isReply: boolean;
   userId: string | null;
-  teamId: string | null;
-  subtype: string | null;
   author: MessageAuthor;
   text: string;
   mentions: string[];
@@ -113,8 +109,6 @@ export function normalizeHistoryMessage(
       rootTs: isReply ? threadTs : payload.ts,
       isReply,
       userId: payload.user ?? null,
-      teamId: payload.user_team ?? payload.team ?? null,
-      subtype: payload.subtype ?? null,
       author: messageAuthor(payload, context),
       text,
       mentions,
