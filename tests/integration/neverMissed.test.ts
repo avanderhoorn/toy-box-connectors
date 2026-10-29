@@ -37,6 +37,26 @@ test("an event counts when Slack delivered it to the bot in its workspace, where
   expect(await stop()).toEqual({ code: 0, stderr: saying() });
 }, 15_000);
 
+test("a bare mention reaches the lead, and so does an okay the moment Slack shows its question", async () => {
+  const { slack, toyBox, inbox, reply, post, stop, saying } = await connectedBridge();
+  const [mentionTs] = timestamps(1);
+  await post(said(ALICE, mentionTs, `<@${BOT}>`));
+  await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
+  await inbox();
+  expect(await reply(1, "Should I deploy to prod?")).toMatchObject({ exitCode: 0 });
+
+  // Slack sends the bot its own post as it takes it, so before anyone can answer it.
+  await waitFor(() => expect(slack.getMessages("C-link")).toHaveLength(2));
+  const [okTs] = timestamps(1, Date.now() + 1);
+  await post(said(ALICE, okTs, "ok", { thread_ts: mentionTs }));
+
+  await waitFor(() => expect(toyBox.runs).toHaveLength(2), 5_000);
+  expect(await inbox()).toMatchObject({
+    requests: [{ id: 2, messages: [{ ts: mentionTs }, { role: "self" }, { ts: okTs }] }],
+  });
+  expect(await stop()).toEqual({ code: 0, stderr: saying() });
+}, 15_000);
+
 test("a request the bridge acked survives a crash, and the next bridge wakes the lead for it", async () => {
   // The first bridge would wait a minute to wake the lead, so it crashes before it does.
   const { toyBox, inbox, post, crash, stop, saying } = await connectedBridge({
@@ -102,6 +122,29 @@ test("what Slack kept while the bridge was down reaches the lead once it's back,
     database.read((sql) => sql`SELECT ts FROM messages ORDER BY ts`),
   );
   expect(stored).toEqual([askedTs, repliedTs, missedTs, followedTs].map((ts) => ({ ts })));
+}, 15_000);
+
+test("an okay to a question the bridge also missed reaches the lead, since catching up stores both oldest first", async () => {
+  const { slack, toyBox, inbox, reply, post, crash, stop, saying } = await connectedBridge();
+  const [mentionTs] = timestamps(1);
+  await post(said(ALICE, mentionTs, `<@${BOT}> can you check the deploy?`));
+  await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
+  await inbox();
+  expect(await reply(1, "It's green. Should I deploy to prod?")).toMatchObject({ exitCode: 0 });
+  await waitFor(() => expect(slack.getMessages("C-link")).toHaveLength(2));
+
+  // Alice answers while the bridge is down, and the bridge never stored Slack's event for its post.
+  const [okTs] = timestamps(1, Date.now() + 1);
+  slack.setMessage("C-link", said(ALICE, okTs, "ok", { thread_ts: mentionTs }));
+  await crash((database) =>
+    database.write((transaction) => transaction`DELETE FROM messages WHERE author_role = 'self'`),
+  );
+
+  await waitFor(() => expect(toyBox.runs).toHaveLength(2), 5_000);
+  expect(await inbox()).toMatchObject({
+    requests: [{ id: 2, messages: [{ ts: mentionTs }, { role: "self" }, { ts: okTs }] }],
+  });
+  expect(await stop()).toEqual({ code: 0, stderr: saying() });
 }, 15_000);
 
 test("catching up finds the bot was removed while the bridge was down and suspends the link", async () => {

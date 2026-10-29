@@ -8,6 +8,7 @@ import { createStoredLink } from "@links/server/testFixtures";
 import { beginAnswer, confirmAnswer, serveRequest } from "@requests/model/lifecycle";
 import type { SlackMessage } from "@slackapi/model/messages";
 import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
+import type { SlackTs } from "@slackapi/model/ts";
 import { readMessageRequest, readRequest, saveRequest } from "./database";
 import { takeDelete, takeMessage } from "./intake";
 
@@ -109,4 +110,24 @@ test("a finished request's messages ask again only by gaining a mention, but a n
   expect(await takeDeleteOf(database, more)).toBe(true);
   expect(await requestOf(database, more)).toMatchObject({ closedReason: "source_deleted" });
   expect(await take(database, replyMessage(ask, "1700000400.000100"))).toBe(true);
+});
+
+test("an okay follows up only when our newest message before it in the thread asked something", async () => {
+  const database = await openIntake();
+  await advance(database, "answered");
+  const ours = (ts: SlackTs, text: string) =>
+    replyMessage(ask, ts, { author: "self", userId: "U-bot", text });
+  const okay = (ts: SlackTs) => replyMessage(ask, ts, { text: "ok" });
+  expect(await take(database, ours("1700000200.000100", "Should I deploy to prod?"))).toBe(false);
+  expect(await take(database, ours("1700000300.000100", "Deployed."))).toBe(false);
+  const question = { userId: "U-allowed", text: "Is staging fine too?" };
+  expect(await take(database, replyMessage(ask, "1700000320.000100", question))).toBe(false);
+  expect(await take(database, okay("1700000350.000100"))).toBe(false);
+  expect(await take(database, ours("1700000400.000100", "Anything else?"))).toBe(false);
+  expect(await take(database, okay("1700000380.000100"))).toBe(false);
+  expect(await take(database, okay("1700000450.000100"))).toBe(true);
+  expect(await requestOf(database, okay("1700000450.000100"))).toMatchObject({
+    id: 2,
+    reason: "follow_up",
+  });
 });

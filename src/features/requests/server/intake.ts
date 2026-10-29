@@ -1,5 +1,6 @@
-import type { StoredVersion } from "@activity/server/ledger";
+import { readOwnTextBefore, type StoredVersion } from "@activity/server/ledger";
 import { classify, type ClassifyLink } from "@requests/model/classify";
+import { asksQuestion } from "@requests/model/courtesy";
 import { isActive, openRequest } from "@requests/model/lifecycle";
 import type { SlackMessage } from "@slackapi/model/messages";
 import { compareTs, type SlackTs } from "@slackapi/model/ts";
@@ -55,11 +56,13 @@ export async function takeMessage(
   const asked = await readThreadRequests(transaction, link.id, requester, message.rootTs);
   // Their later messages join the newest request still waiting on the lead.
   const active = asked.findLast(({ state }) => state === "open" || state === "seen") ?? null;
+  const ours = await readOwnTextBefore(transaction, message);
   const classification = classify(message, {
     link,
     role: stored.role,
     active,
     askedBefore: asked.some((request) => compareTs(request.sourceTs, ts) < 0),
+    leadAsked: ours !== null && asksQuestion(ours),
     firstSight: decision.kind === "insert",
     now,
   });

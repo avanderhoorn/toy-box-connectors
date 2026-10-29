@@ -10,6 +10,7 @@ const facts: ClassifyFacts = {
   role: "allowed",
   active: null,
   askedBefore: false,
+  leadAsked: false,
   firstSight: true,
   now: 1_700_000_300_000,
 };
@@ -20,6 +21,9 @@ const ask = askMessage();
 const reply = replyMessage(ask, "1700000200.000100");
 const root = { ...ask, text: "the deploy is red", mentions: [], mentionsBot: false };
 const tada = { ...reply, text: ":tada:" };
+const ok = { ...reply, text: "ok" };
+const bare = { ...ask, text: "<@U-bot>" };
+const bareReply = { ...reply, text: "<@U-bot>", mentions: ["U-bot"], mentionsBot: true };
 const toBob = { ...reply, text: "<@U-bob> can you look?", mentions: ["U-bob"] };
 const toBoth = { ...toBob, mentions: ["U-bob", "U-bot"], mentionsBot: true };
 const atLink = askMessage(facts.link.linkedAtTs);
@@ -43,6 +47,11 @@ test.each<[string, SlackMessage, Partial<ClassifyFacts>, Classification]>([
   ["nor adds to a request", reply, { role: "observed", active }, none("not_allowlisted")],
   ["a thank-you isn't a request", { ...ask, text: "<@U-bot> thanks!" }, {}, none("courtesy")],
   ["nor is a lone emoji in a request's thread", tada, { active }, none("courtesy")],
+  ["nor an okay after our answer", ok, { askedBefore: true }, none("courtesy")],
+  ["unless it answers our question", ok, { askedBefore: true, leadAsked: true }, asks("follow_up")],
+  ["but from anyone else it's only context", ok, { leadAsked: true }, none("context_only")],
+  ["a bare mention is a request", bare, {}, asks("mention")],
+  ["in a thread too", bareReply, {}, asks("mention")],
   ["a message for other people isn't for the bot", toBob, { active }, none("addressed_to_others")],
   ["one for them and the bot is", toBoth, {}, asks("mention")],
   ["the requester's later messages join their request", toBoth, { active }, joins],

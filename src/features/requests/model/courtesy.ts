@@ -35,11 +35,13 @@ const courtesyPhrase = `(?:${courtesyPhrases.join("|")})`;
 const courtesyPattern = new RegExp(`^${courtesyPhrase}(?: ${courtesyPhrase})*$`);
 
 /** Whether a message only thanks or acknowledges, such as "thanks!", "ok 👍" or a lone emoji. */
-export function isCourtesyOnly(message: Pick<SlackMessage, "text">): boolean {
+export function isCourtesyOnly(message: Pick<SlackMessage, "text" | "mentionsBot">): boolean {
   // A question waits for an answer, even a lone ? or an ok?.
   if (/[?？]/.test(message.text)) return false;
-  const words = message.text
-    .replace(/<[@!][^<>]*>/g, " ")
+  const unmarked = message.text.replace(/<[@!][^<>]*>/g, " ");
+  // A bare mention, even with a ! after it, asks the lead to read the thread.
+  if (message.mentionsBot && !/[^\s\p{P}]/u.test(unmarked)) return false;
+  const words = unmarked
     .replace(/&(?:amp|lt|gt);/g, " ")
     .replace(/:[\w+'-]+:/g, " ")
     // Symbols include most emoji, skin tones and flags. Pictographs also cover
@@ -50,4 +52,19 @@ export function isCourtesyOnly(message: Pick<SlackMessage, "text">): boolean {
     .filter((word) => word !== "")
     .join(" ");
   return words === "" || courtesyPattern.test(words);
+}
+
+/**
+ * Whether a message of ours asks something, so a reply to it may be an answer rather than courtesy.
+ * Our answers often hold a ? in code, a link or a URL, and those ask nothing.
+ */
+export function asksQuestion(text: string): boolean {
+  const prose = text
+    .replace(/```[\s\S]*?(?:```|$)/g, " ")
+    .replace(/`[^`\n]*`/g, " ")
+    .replace(/!?\[[^[\]\n]*\]\([^()\s]*\)/g, " ")
+    .replace(/<[^<>]*>/g, " ")
+    // A URL ends before trailing punctuation, as in "Did you check https://example.com?".
+    .replace(/\bhttps?:\/\/[^\s<>]*[^\s<>?!.,:;*_~'")\]]/gi, " ");
+  return /[?？]/.test(prose);
 }

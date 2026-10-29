@@ -11,9 +11,9 @@ import {
   type StoredMessage,
 } from "@activity/model/ledger";
 import type { SlackMessage } from "@slackapi/model/messages";
-import type { SlackTs } from "@slackapi/model/ts";
+import { compareTs, type SlackTs } from "@slackapi/model/ts";
 
-// The ledger's writes.
+// The ledger's reads and writes.
 //
 // Live events and catch-up store messages through these functions, in the transaction that records
 // what they read, so replaying an envelope or a history page converges to the same rows. A merge
@@ -88,6 +88,20 @@ export async function storeDelete(
       ? { author_role: "other", deleted: 1, version: ts }
       : { deleted: 1, text: null, content_hash: null, mentions_bot: 0 },
   );
+}
+
+/** What our newest message in `message`'s thread from before it says, if one is there. */
+export async function readOwnTextBefore(
+  transaction: Bun.SQL,
+  { channelId, rootTs, ts }: Pick<SlackMessage, "channelId" | "rootTs" | "ts">,
+): Promise<string | null> {
+  const ours = await transaction<{ ts: SlackTs; text: string }[]>`
+    SELECT ts, text FROM messages
+    WHERE channel_id = ${channelId} AND author_role = 'self' AND text IS NOT NULL
+      AND (ts = ${rootTs} OR thread_ts = ${rootTs})
+  `;
+  const earlier = ours.filter((message) => compareTs(message.ts, ts) < 0);
+  return earlier.toSorted((a, b) => compareTs(a.ts, b.ts)).at(-1)?.text ?? null;
 }
 
 /**

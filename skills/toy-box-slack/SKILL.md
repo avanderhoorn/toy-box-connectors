@@ -13,7 +13,7 @@ The toy-box-slack bridge links this Toy Box channel to one Slack channel. It kee
 
 ## Answer Slack requests
 
-A request is a question or an ask from someone on the allowlist, usually a mention of the bot. It needs an answer in Slack, so Toy Box's advice to finish quietly doesn't cover a request that waits on you.
+A request is a question or an ask from someone on the allowlist, usually a mention of the bot. A bare mention asks you to read the thread and answer what it needs. A request needs an answer in Slack, so Toy Box's advice to finish quietly doesn't cover one that waits on you.
 
 1. Run `toy-box-slack inbox`. It shows each request waiting on you with its thread so far, and marks it seen, which adds 👀 in Slack.
 2. Answer each one in its Slack thread, never in Toy Box. Pipe your Markdown to reply, quoting `'EOF'` so the shell leaves backticks and `$` alone:
@@ -26,7 +26,7 @@ A request is a question or an ask from someone on the allowlist, usually a menti
 
 3. Run `toy-box-slack inbox` again while it says more wait.
 
-Each request takes one reply. An edit or a follow-up before you reply changes the request, and reply refuses until inbox shows you the new text. After you reply, edits are ignored and a follow-up comes back as a new request, whose thread shows your answer, so answer it in that light. If your reply doesn't post, inbox shows the request again for you to answer.
+Each request takes one reply. An edit or a follow-up before you reply changes the request, and reply refuses until inbox shows you the new text. After you reply, edits are ignored and a follow-up comes back as a new request, whose thread shows your answer, so answer it in that light. When your reply asks something, even an okay from the requester comes back that way, so ask only what you need answered. If your reply doesn't post, inbox shows the request again for you to answer.
 
 - A long thread shows its first message, the request's own messages and the newest 20 replies, and a long message its first 4,000 characters, each saying how much it left out. Answer from what inbox shows, and when the answer depends on what it left out, say so rather than guess.
 - Reply yourself, even when a member did the work. Members can't post in Slack.

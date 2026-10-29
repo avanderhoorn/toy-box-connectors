@@ -12,8 +12,9 @@ import { requestLifetimeMs, type RequestReason } from "./lifecycle";
 // asked.
 //
 // Catch-up can store a message after later ones from the same thread, so the
-// rules about a requester's history only look backward from the message's own
-// ts. That way a late find classifies as it would have live.
+// rules about a requester's history and what we last said in the thread only
+// look backward from the message's own ts. That way a late find classifies as
+// it would have live.
 
 export type NoneReason =
   | "link_inactive"
@@ -46,6 +47,8 @@ export type ClassifyFacts = {
   active: { id: number; sourceTs: SlackTs } | null;
   /** Whether the author started a request in the thread, in any state, before this message. */
   askedBefore: boolean;
+  /** Whether our newest message in the thread before this one asked something. */
+  leadAsked: boolean;
   /** False when the message is an edit of one the ledger already stored. */
   firstSight: boolean;
   now: number;
@@ -59,7 +62,8 @@ export function classify(message: SlackMessage, facts: ClassifyFacts): Classific
     return none("too_old");
   }
   if (facts.role !== "allowed") return none("not_allowlisted");
-  if (isCourtesyOnly(message)) return none("courtesy");
+  // An okay can answer what we asked, so then it counts like any other reply.
+  if (!facts.leadAsked && isCourtesyOnly(message)) return none("courtesy");
   if (message.mentions.length > 0 && !message.mentionsBot) return none("addressed_to_others");
 
   // A paused link still lets a requester add to what they asked, so the lead reads it before
