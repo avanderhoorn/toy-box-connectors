@@ -145,6 +145,7 @@ test("apps share messages but keep membership, authorship, reactions and deletio
     data: { error: "channel_not_found" },
   });
   other.addChannel({ id: channel });
+  expect((await second.conversations.info({ channel })).channel?.is_private).toBe(true);
   const first = await client.chat.postMessage({ channel, text: "A" });
   const reply = await second.chat.postMessage({ channel, text: "B", thread_ts: first.ts! });
   expect([first.ts, reply.ts]).toEqual(["1.000000", "1.000001"]);

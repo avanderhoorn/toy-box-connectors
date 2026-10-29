@@ -15,7 +15,7 @@ import type { FakeSlack, FakeSlackApp, FakeSlackChannel, FakeSlackMessage } from
 import { startFakeToyBox } from "../fakes/toybox";
 import { spawnBridge, started, startSlackForBridge, withDatabase } from "./bridgeProcess";
 import { ALICE, BOT, PROMPTLY, posted, said, timestamps } from "./connectedBridge";
-import { REQUESTS_ROUTINE } from "./linkedBridge";
+import { REQUESTS_ROUTINE, type LinkColumns } from "./linkedBridge";
 import { waitFor } from "./waitFor";
 
 /** The Slack app the installation fixture records. */
@@ -242,25 +242,33 @@ async function startSharedChannel(
       ...options,
     });
 
+  /** Delivers a channel event, waiting until both apps have committed and acked it. */
+  const deliver = async (event: Record<string, unknown>) => {
+    const deliveries = slack.broadcastEvent(event);
+    expect(deliveries.map(({ appId }) => appId)).toEqual([
+      RECORDED.appId,
+      releasesSlack.identity.appId,
+    ]);
+    for (const { appId, envelopeId } of deliveries) {
+      const app = appId === RECORDED.appId ? slack : releasesSlack;
+      expect(await app.waitForAck(envelopeId, 5_000)).not.toBeNull();
+    }
+  };
+
   return {
     slack,
     releasesSlack,
     toyBox,
     leads,
+    dataFolder,
+    releasesFolder: releases.folder,
     share,
     as,
+    deliver,
     /** Posts `message` in C-link, and waits for both apps to ack its event, once each stored it. */
     post: async (message: FakeSlackMessage) => {
       slack.setMessage("C-link", message);
-      const deliveries = slack.broadcastEvent(posted(message));
-      expect(deliveries.map(({ appId }) => appId)).toEqual([
-        RECORDED.appId,
-        releasesSlack.identity.appId,
-      ]);
-      for (const { appId, envelopeId } of deliveries) {
-        const app = appId === RECORDED.appId ? slack : releasesSlack;
-        expect(await app.waitForAck(envelopeId, 5_000)).not.toBeNull();
-      }
+      await deliver(posted(message));
     },
     /** Stops the bridge, and checks it said only that both apps connected. */
     stop: async () => {
@@ -273,8 +281,8 @@ async function startSharedChannel(
 }
 
 /** Links `lead` to C-link in `database` and allows Alice there. */
-async function linkLead(database: BridgeDatabase, lead: string) {
-  await createStoredLink(database, "link", { toybox_channel_id: lead });
+async function linkLead(database: BridgeDatabase, lead: string, settings: LinkColumns = {}) {
+  await createStoredLink(database, "link", { ...settings, toybox_channel_id: lead });
   await database.write(
     (transaction) => transaction`
       INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', ${ALICE}, 0)
@@ -288,6 +296,302 @@ function postsBy(app: Pick<FakeSlack, "calls">) {
 }
 
 describe("two leads that share a Slack channel, each through its own app", () => {
+  test("the owner can link two Toy Box channels to one Slack channel through different apps", async () => {
+    const shared = await startSharedChannel();
+    const { leads, as } = shared;
+    const channel = "C0SHARED";
+    shared.share({ id: channel, name: "shared" });
+    for (const [lead, app] of [
+      [leads.docs, "default"],
+      [leads.releases, "releases"],
+    ] as const) {
+      const input = { slackChannel: channel, app };
+      const shown = await as(null, "link", input, { channelId: lead });
+      expect(shown.confirm).toBeString();
+      expect(
+        await as(null, "link", input, {
+          channelId: lead,
+          owner: { passphrase: PASSPHRASE, confirms: shown.confirm! },
+        }),
+      ).toMatchObject({ exitCode: 0 });
+    }
+    await shared.stop();
+    for (const [folder, lead] of [
+      [shared.dataFolder, leads.docs],
+      [shared.releasesFolder, leads.releases],
+    ] as const)
+      expect(
+        await withDatabase(folder, (database) =>
+          database.read((sql) => sql`SELECT toybox_channel_id, slack_channel_id FROM links`),
+        ),
+      ).toEqual([{ toybox_channel_id: lead, slack_channel_id: channel }]);
+  }, 15_000);
+
+  test.each(["mention", "all"] as const)(
+    "mentions reach only the named lead when both links use %s mode",
+    async (requestMode) => {
+      const shared = await startSharedChannel(async ({ home, releases, leads }) => {
+        await linkLead(home, leads.docs, { request_mode: requestMode });
+        await linkLead(releases, leads.releases, { request_mode: requestMode });
+      });
+      const { toyBox, leads, as, post } = shared;
+      const [docsTs, releasesTs] = timestamps(2);
+
+      await post(said(ALICE, docsTs!, `<@${BOT}> are the docs ready?`));
+      await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
+      expect((await as(leads.docs, "inbox")).json).toMatchObject({
+        requests: [{ id: 1, messages: [{ ts: docsTs }] }],
+      });
+      expect((await as(leads.releases, "inbox")).json).toMatchObject({ requests: [] });
+
+      await post(said(ALICE, releasesTs!, `<@${RELEASES_BOT}> is the release ready?`));
+      await waitFor(() => expect(toyBox.runs).toHaveLength(2), 5_000);
+      expect((await as(leads.docs, "inbox")).json).toMatchObject({
+        requests: [{ id: 1, attention: null, messages: [{ ts: docsTs }] }],
+      });
+      expect((await as(leads.releases, "inbox")).json).toMatchObject({
+        requests: [{ id: 1, messages: [{ ts: releasesTs }] }],
+      });
+      expect(toyBox.runs.map(({ channelId }) => channelId)).toEqual([leads.docs, leads.releases]);
+      await shared.stop();
+    },
+    15_000,
+  );
+
+  test("each bot posts as itself, and the other lead never reads or acts on its text", async () => {
+    const shared = await startSharedChannel(async ({ home, releases, leads }) => {
+      await linkLead(home, leads.docs, { observe: "channel" });
+      await linkLead(releases, leads.releases, { observe: "channel" });
+    });
+    const { slack, releasesSlack, toyBox, leads, as, post } = shared;
+    const [askedTs] = timestamps(1);
+    await post(said(ALICE, askedTs!, `<@${BOT}> <@${RELEASES_BOT}> is everything ready?`));
+    await waitFor(() => expect(toyBox.runs).toHaveLength(2), 5_000);
+    for (const lead of Object.values(leads))
+      expect((await as(lead, "inbox")).json).toMatchObject({
+        requests: [{ id: 1, messages: [{ ts: askedTs }] }],
+      });
+
+    const reply = async (lead: string, text: string) => {
+      const before = { docs: slack.acks.length, releases: releasesSlack.acks.length };
+      expect(await as(lead, "reply", { request: "r1", text })).toMatchObject({ exitCode: 0 });
+      await waitFor(() => {
+        expect(slack.acks).toHaveLength(before.docs + 1);
+        expect(releasesSlack.acks).toHaveLength(before.releases + 1);
+      }, 5_000);
+    };
+    await reply(leads.docs, `<@${RELEASES_BOT}> the docs are ready.`);
+    expect((await as(leads.releases, "inbox")).json).toMatchObject({
+      requests: [{ id: 1, attention: null, messages: [{ ts: askedTs }] }],
+    });
+    await reply(leads.releases, `<@${BOT}> the release is ready.`);
+    for (const lead of Object.values(leads))
+      expect((await as(lead, "inbox")).json).toMatchObject({ requests: [] });
+
+    const botPosts = slack.getMessages("C-link").filter(({ bot_id }) => bot_id !== undefined);
+    expect(botPosts).toHaveLength(2);
+    for (const app of [slack, releasesSlack]) {
+      expect(postsBy(app)).toHaveLength(1);
+      expect(postsBy(app)[0]).toMatchObject({
+        token: app.botToken,
+        args: { channel: "C-link", thread_ts: askedTs },
+      });
+      expect(botPosts.find(({ bot_id }) => bot_id === app.identity.botId)).toMatchObject({
+        user: app.identity.botUserId,
+        app_id: app.identity.appId,
+        thread_ts: askedTs,
+      });
+    }
+    expect(toyBox.runs).toHaveLength(2);
+    await shared.stop();
+
+    for (const [folder, own] of [
+      [shared.dataFolder, slack],
+      [shared.releasesFolder, releasesSlack],
+    ] as const) {
+      const stored = await withDatabase(folder, (database) =>
+        database.read(
+          (sql) => sql`
+            SELECT ts, author_role, user_id, text FROM messages
+            WHERE ts <> ${askedTs} ORDER BY ts
+          `,
+        ),
+      );
+      expect(stored).toEqual(
+        botPosts.map((message) => ({
+          ts: message.ts,
+          author_role: message.bot_id === own.identity.botId ? "self" : "other",
+          user_id: message.bot_id === own.identity.botId ? own.identity.botUserId : null,
+          text: message.bot_id === own.identity.botId ? message.text : null,
+        })),
+      );
+      expect(
+        await withDatabase(folder, (database) =>
+          database.read((sql) => sql`SELECT state FROM requests ORDER BY id`),
+        ),
+      ).toEqual([{ state: "answered" }]);
+    }
+  }, 15_000);
+
+  test("a named thread follow-up changes only that lead's request, and an unmentioned one changes both", async () => {
+    const shared = await startSharedChannel(async ({ home, releases, leads }) => {
+      await linkLead(home, leads.docs);
+      await linkLead(releases, leads.releases);
+    });
+    const { toyBox, leads, as, post } = shared;
+    const [rootTs, releasesTs, docsTs, bothTs] = timestamps(4);
+    await post(said(ALICE, rootTs!, `<@${BOT}> <@${RELEASES_BOT}> is everything ready?`));
+    await waitFor(() => expect(toyBox.runs).toHaveLength(2), 5_000);
+    for (const lead of Object.values(leads)) await as(lead, "inbox");
+
+    await post(
+      said(ALICE, releasesTs!, `<@${RELEASES_BOT}> can you check the release?`, {
+        thread_ts: rootTs,
+      }),
+    );
+    await waitFor(() => expect(toyBox.runs).toHaveLength(3), 5_000);
+    expect(toyBox.runs[2]?.channelId).toBe(leads.releases);
+    expect((await as(leads.docs, "inbox")).json).toMatchObject({
+      requests: [{ id: 1, attention: null }],
+    });
+    expect((await as(leads.releases, "inbox")).json).toMatchObject({
+      requests: [{ id: 1, attention: "updated" }],
+    });
+
+    await post(said(ALICE, docsTs!, `<@${BOT}> can you check the docs?`, { thread_ts: rootTs }));
+    await waitFor(() => expect(toyBox.runs).toHaveLength(4), 5_000);
+    expect(toyBox.runs[3]?.channelId).toBe(leads.docs);
+    expect((await as(leads.docs, "inbox")).json).toMatchObject({
+      requests: [{ id: 1, attention: "updated" }],
+    });
+    expect((await as(leads.releases, "inbox")).json).toMatchObject({
+      requests: [{ id: 1, attention: null }],
+    });
+
+    await post(said(ALICE, bothTs!, "And can you check production?", { thread_ts: rootTs }));
+    await waitFor(() => expect(toyBox.runs).toHaveLength(6), 5_000);
+    expect(
+      toyBox.runs
+        .slice(4)
+        .map(({ channelId }) => channelId)
+        .toSorted(),
+    ).toEqual(Object.values(leads).toSorted());
+    for (const lead of Object.values(leads))
+      expect((await as(lead, "inbox")).json).toMatchObject({
+        requests: [{ id: 1, attention: "updated" }],
+      });
+    await shared.stop();
+  }, 15_000);
+
+  test("editing a mention moves the request to the other lead, and deleting it ends that request", async () => {
+    const shared = await startSharedChannel(async ({ home, releases, leads }) => {
+      await linkLead(home, leads.docs);
+      await linkLead(releases, leads.releases);
+    });
+    const { slack, toyBox, leads, as, post, deliver } = shared;
+    const [askedTs, editedTs, deletedTs] = timestamps(3);
+    const original = said(ALICE, askedTs!, `<@${BOT}> is everything ready?`);
+    await post(original);
+    await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
+    await as(leads.docs, "inbox");
+    const edited = {
+      ...original,
+      text: `<@${RELEASES_BOT}> is everything ready?`,
+      edited: { user: ALICE, ts: editedTs },
+    };
+    slack.setMessage("C-link", edited);
+    await deliver({
+      type: "message",
+      subtype: "message_changed",
+      hidden: true,
+      channel: "C-link",
+      message: edited,
+      previous_message: original,
+      ts: editedTs,
+      event_ts: editedTs,
+    });
+    await waitFor(() => expect(toyBox.runs).toHaveLength(2), 5_000);
+    expect(toyBox.runs.map(({ channelId }) => channelId)).toEqual([leads.docs, leads.releases]);
+    expect((await as(leads.docs, "inbox")).json).toMatchObject({ requests: [] });
+    expect((await as(leads.releases, "inbox")).json).toMatchObject({
+      requests: [{ id: 1, messages: [{ ts: askedTs, edited: true }] }],
+    });
+    slack.deleteMessage("C-link", askedTs!);
+    await deliver({
+      type: "message",
+      subtype: "message_deleted",
+      hidden: true,
+      channel: "C-link",
+      deleted_ts: askedTs,
+      previous_message: edited,
+      ts: deletedTs,
+      event_ts: deletedTs,
+    });
+    for (const lead of Object.values(leads))
+      expect((await as(lead, "inbox")).json).toMatchObject({ requests: [] });
+    await shared.stop();
+    for (const folder of [shared.dataFolder, shared.releasesFolder])
+      expect(
+        await withDatabase(folder, (database) =>
+          database.read(
+            (sql) => sql`
+              SELECT deleted, text, user_id FROM messages WHERE ts = ${askedTs}
+            `,
+          ),
+        ),
+      ).toEqual([{ deleted: 1, text: null, user_id: null }]);
+  }, 15_000);
+
+  test("one bot leaving suspends only its app's link while the other lead keeps answering", async () => {
+    const shared = await startSharedChannel(async ({ home, releases, leads }) => {
+      await linkLead(home, leads.docs);
+      await linkLead(releases, leads.releases);
+    });
+    const { slack, releasesSlack, leads, as, deliver } = shared;
+    // Startup's history read must not discover the removal instead of the membership event.
+    await waitFor(() => {
+      for (const app of [slack, releasesSlack])
+        expect(app.calls.some(({ method }) => method === "conversations.history")).toBe(true);
+    }, 5_000);
+    releasesSlack.addChannel({ id: "C-link", is_member: false });
+    await deliver({
+      type: "member_left_channel",
+      channel: "C-link",
+      user: RELEASES_BOT,
+      team: RECORDED.teamId,
+    });
+    expect((await as(leads.docs, "status")).json).toMatchObject({
+      apps: [{ app: "default", links: [{ status: "active", statusReason: null }] }],
+    });
+    expect((await as(leads.releases, "status")).json).toMatchObject({
+      apps: [{ app: "releases", links: [{ status: "suspended", statusReason: "bot_removed" }] }],
+    });
+    const [askedTs] = timestamps(1);
+    const message = said(ALICE, askedTs!, `<@${BOT}> are the docs ready?`);
+    slack.setMessage("C-link", message);
+    const deliveries = slack.broadcastEvent(posted(message));
+    expect(deliveries.map(({ appId }) => appId)).toEqual([slack.identity.appId]);
+    expect(await slack.waitForAck(deliveries[0]!.envelopeId, 5_000)).not.toBeNull();
+    expect((await as(leads.docs, "inbox")).json).toMatchObject({
+      requests: [{ id: 1, messages: [{ ts: askedTs }] }],
+    });
+    expect(
+      await as(leads.docs, "reply", { request: "r1", text: "The docs are ready." }),
+    ).toMatchObject({
+      exitCode: 0,
+    });
+    await waitFor(
+      () =>
+        expect(
+          slack.getMessages("C-link").filter(({ bot_id }) => bot_id === slack.identity.botId),
+        ).toHaveLength(1),
+      5_000,
+    );
+    expect(postsBy(slack)).toHaveLength(1);
+    expect(postsBy(releasesSlack)).toEqual([]);
+    await shared.stop();
+  }, 15_000);
+
   test("each lead's commands run in its own app, so its answer goes out as that app's bot", async () => {
     const shared = await startSharedChannel(async ({ home, releases, leads }) => {
       await linkLead(home, leads.docs);
