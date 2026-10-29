@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { serveRequest } from "@requests/model/lifecycle";
 import { readRequest, saveRequest } from "@requests/server/database";
 import {
+  OutboxRefusedError,
   queuePublication,
   readReadyOutbox,
   recoverOutboxAttempts,
@@ -50,6 +51,21 @@ test("scheduled slots reserve publications across retraction, without using toda
     (await database.write((tx) => queuePublication(tx, { ...input, scheduledAt: now() }, now())))
       .id,
   ).not.toBe(first.id);
+});
+
+test("a publication needs a series name and a scheduled run that has already come", async () => {
+  const { database, now } = await createOutboxWorld();
+  const publish = (input: { series?: string; scheduledAt?: number }) =>
+    database.write((tx) =>
+      queuePublication(
+        tx,
+        { linkId: "link", series: "release-notes", scheduledAt: now(), text: "Notes", ...input },
+        now(),
+      ),
+    );
+  await expect(publish({ series: "release notes" })).rejects.toThrow(OutboxRefusedError);
+  await expect(publish({ scheduledAt: now() + 60_000 })).rejects.toThrow(OutboxRefusedError);
+  expect(await publish({})).toMatchObject({ kind: "publication", state: "queued" });
 });
 
 test("interrupted sends become unknown, never ready, and reject late attempt settlement", async () => {
