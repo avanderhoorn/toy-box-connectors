@@ -1,19 +1,19 @@
-// The bridge as its own process, the way launchd runs it.
+// The bridge as its own process, started in the background or at a terminal.
 
 import { onTestFinished } from "bun:test";
 import { join } from "node:path";
-import type { Subprocess } from "bun";
 import { openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
 import { startFakeSlack, type FakeSlackIdentity } from "../fakes/slack";
 
 const REPOSITORY = join(import.meta.dir, "..", "..");
+const SERVE = [process.execPath, "--no-env-file", "cli/index.ts", "serve"];
 
-/** The bridges tests started that may still be running. */
-const bridges = new Set<Subprocess>();
+/** How to kill each bridge tests started that may still be running. */
+const bridges = new Set<() => void>();
 
 /** Kills every bridge a test started, as the test finishes. */
 function killBridges() {
-  for (const bridge of bridges) bridge.kill("SIGKILL");
+  for (const kill of bridges) kill();
   bridges.clear();
 }
 
@@ -29,26 +29,20 @@ export function started(home: string) {
 }
 
 /**
- * Run `toy-box-slack serve` with `home` as its home folder, collecting what it writes to stderr.
- * Its environment holds only `PATH`, its home and data folders, and `env`, so nothing from the
- * shell running the tests reaches it.
+ * Run `toy-box-slack serve` in the background with `home` as its home folder and only `env`
+ * besides, collecting what it writes to stderr. It reads `stdin`, or nothing, and never a terminal.
  */
-export function spawnBridge(home: string, env: Record<string, string> = {}) {
+export function spawnBridge(home: string, env: Record<string, string> = {}, stdin?: Blob) {
   // Bun throws outside a running test, so a test that timed out starts no bridge it can't stop.
   onTestFinished(killBridges);
-  const child = Bun.spawn([process.execPath, "--no-env-file", "cli/index.ts", "serve"], {
+  const child = Bun.spawn(SERVE, {
     cwd: REPOSITORY,
-    env: {
-      PATH: process.env.PATH,
-      HOME: home,
-      TOY_BOX_SLACK_HOME: join(home, ".toy-box-slack"),
-      ...env,
-    },
-    stdin: "ignore",
+    env: environment(home, env),
+    stdin: stdin ?? "ignore",
     stdout: "ignore",
     stderr: "pipe",
   });
-  bridges.add(child);
+  bridges.add(() => child.kill("SIGKILL"));
 
   let stderr = "";
   const decoder = new TextDecoder();
@@ -77,6 +71,73 @@ export function spawnBridge(home: string, env: Record<string, string> = {}) {
 }
 
 /**
+ * Run `toy-box-slack serve` at a terminal of its own, the way the owner starts it, with `home` as
+ * its home folder and only `env` besides. `script` gives it the terminal, copies everything the
+ * terminal shows to the test and exits as the bridge does, with its exit code. `cat` passes on
+ * what the test types, since `script` can't read from a socket, and is never done, since `script`
+ * would send the bridge an end of input.
+ */
+export function serveAtTerminal(home: string, env: Record<string, string> = {}) {
+  onTestFinished(killBridges);
+  const shell = ["bash", "-c", 'exec script -q /dev/null "$@" < <(exec cat)', "bash"];
+  const terminal = Bun.spawn([...shell, ...SERVE], {
+    cwd: REPOSITORY,
+    env: environment(home, env),
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "inherit",
+    // A process group of its own, so killing the group closes the terminal, which hangs up on the
+    // bridge.
+    detached: true,
+  });
+  bridges.add(() => {
+    try {
+      process.kill(-terminal.pid, "SIGKILL");
+    } catch {
+      // It exited on its own.
+    }
+  });
+
+  let shown = "";
+  const decoder = new TextDecoder();
+  const drained = (async () => {
+    for await (const chunk of terminal.stdout) shown += decoder.decode(chunk, { stream: true });
+  })();
+  /** What the terminal showed, without the colors Bun gives stderr, with a file's line endings. */
+  const transcript = () => Bun.stripANSI(shown).replaceAll("\r\n", "\n");
+
+  return {
+    /** Resolves once the terminal shows `text`, and rejects if the bridge exits or takes too long. */
+    async shows(text: string) {
+      const deadline = Date.now() + 10_000;
+      while (!transcript().includes(text)) {
+        if (terminal.exitCode !== null || Date.now() > deadline) {
+          throw new Error(`The terminal didn't show ${JSON.stringify(text)}:\n${transcript()}`);
+        }
+        await Bun.sleep(10);
+      }
+    },
+    /** Types `line` and presses Return. */
+    async type(line: string) {
+      await terminal.stdin.write(`${line}\r`);
+      await terminal.stdin.flush();
+    },
+    /** Presses Ctrl-C. */
+    async interrupt() {
+      await terminal.stdin.write("\x03");
+      await terminal.stdin.flush();
+    },
+    /** Waits for the bridge to exit, and returns its exit code and everything the terminal showed. */
+    async exit() {
+      const code = await terminal.exited;
+      await terminal.stdin.end();
+      await drained;
+      return { code, transcript: transcript() };
+    },
+  };
+}
+
+/**
  * A fake Slack whose tokens belong to `identity`, or else the fake's own workspace and app, with the
  * channel C-link a linked bridge watches, and the environment that points a bridge at it with both
  * tokens.
@@ -97,6 +158,19 @@ export function startSlackForBridge(identity?: Partial<FakeSlackIdentity>) {
     SLACK_APP_TOKEN: slack.appToken,
   };
   return { slack, env };
+}
+
+/**
+ * The environment `serve` runs in: `PATH`, its home and data folders, and `env`, so nothing from the
+ * shell running the tests reaches it.
+ */
+function environment(home: string, env: Record<string, string>) {
+  return {
+    PATH: process.env.PATH,
+    HOME: home,
+    TOY_BOX_SLACK_HOME: join(home, ".toy-box-slack"),
+    ...env,
+  };
 }
 
 /** Opens the data folder's database for `use` while no bridge holds it. */

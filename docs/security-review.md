@@ -87,10 +87,11 @@ before asking for the owner's passphrase. The bridge checks it against the
 argon2id hash in `credentials.env`, read afresh at every check, and recomputes
 the preview inside its write transaction. A changed preview is refused.
 Every `link` asks, including a narrowing change. There is no lockout.
-`passphrase` changes the hash locally, with the old passphrase, while the
-bridge may keep running. A forgotten one requires removing its hash line and
-setting it again. Never put the passphrase in Toy Box or Slack. Caller roles
-alone cannot authorize widening, and there are no Slack approval buttons.
+`serve` asks for the first passphrase at a terminal, never without one or in a
+lead's shell. `passphrase` changes the hash locally, with the old passphrase,
+while the bridge may keep running. A forgotten one requires removing its hash
+line and setting it again. Never put the passphrase in Toy Box or Slack. Caller
+roles alone cannot authorize widening, and there are no Slack approval buttons.
 
 Only a linked channel's lead can reply or publish. A terminal can inspect
 status but cannot answer as the lead. Member sessions are refused, including

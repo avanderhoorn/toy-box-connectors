@@ -1,8 +1,9 @@
 // Bridge startup and shutdown.
 //
-// The bridge prepares its data folder, reads its settings, takes the
-// single-bridge lock, and only then opens `bridge.db`, so a second bridge stops
-// before it opens anything.
+// At a terminal, `serve` first asks the owner for any Slack token or passphrase
+// it's missing. The bridge then prepares its data folder, reads its settings,
+// takes the single-bridge lock, and only then opens `bridge.db`, so a second
+// bridge stops before it opens anything.
 // Then it starts its work: forgetting old messages hourly, connecting to Slack
 // once both tokens are set, waking leads, and answering commands on its socket.
 // It lets go of everything in the reverse order, so it stops taking commands
@@ -14,6 +15,7 @@
 
 import { join } from "node:path";
 import { forgetOldMessages } from "@activity/server/ledger";
+import { askForMissingCredentials } from "@commands/client/firstRun";
 import { installSkill } from "@commands/client/skill";
 import { unconfiguredSlack, type SlackState } from "@commands/model/status";
 import { activityCommand, markReadCommand } from "@commands/server/activity";
@@ -54,6 +56,11 @@ export interface Bridge {
 export async function serveBridge(): Promise<number> {
   try {
     const dataFolder = resolveDataFolder();
+    // Only the owner answers these, never a lead, whose shell can be a terminal too.
+    if (process.stdin.isTTY && !process.env.COPILOT_AGENT_SESSION_ID) {
+      const saved = await askForMissingCredentials(dataFolder, process.env);
+      if (saved) console.error(saved);
+    }
     const bridge = await startBridge(dataFolder);
     // Whoever started the bridge may stop it as soon as it says it's running, so it listens first.
     const stopped = shutdownSignal(bridge.failed);

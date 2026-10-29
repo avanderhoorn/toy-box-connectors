@@ -15,7 +15,7 @@ import {
   commandErrorSchema,
   type CommandCall,
 } from "@commands/model/protocol";
-import { passphraseReader } from "./passphrase";
+import { secretReader } from "./passphrase";
 
 /** How a call went: its exit code, the Markdown to print, and what --json prints instead. */
 export type CallOutcome = { exitCode: 0 | 1 | 2; text: string; json: unknown; confirm?: string };
@@ -111,7 +111,7 @@ function socketCommand(name: string, spec: CommandSpec): CommandDef {
       let outcome = await callBridge(name, input, { channelId });
       if (outcome.confirm !== undefined) {
         process.stderr.write(`${outcome.text}\n\n`);
-        const reader = passphraseReader();
+        const reader = secretReader();
         const passphrase = await reader.read("Type the owner's passphrase, or press Ctrl-C: ");
         reader.close();
         const owner = passphrase === null ? null : { passphrase, confirms: outcome.confirm };

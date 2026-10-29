@@ -14,7 +14,7 @@ import { version } from "../package.json";
 const serve = defineCommand({
   meta: {
     name: "serve",
-    description: "Run the bridge in the foreground until SIGTERM or SIGINT, and install its skill",
+    description: "Run the bridge, asking at a terminal for what's missing, and install its skill",
   },
   async run() {
     // Loaded on demand so the commands the lead runs don't load the bridge.
