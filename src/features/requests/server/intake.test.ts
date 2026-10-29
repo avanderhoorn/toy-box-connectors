@@ -46,10 +46,10 @@ function requestOf(database: BridgeDatabase, { channelId, ts }: SlackMessage) {
   return database.read((sql) => readMessageRequest(sql, channelId, ts));
 }
 
-/** Has the lead read request 1 and take it as far as `state`, with the outbox's help. */
-function advance(database: BridgeDatabase, state: "seen" | "answering" | "answered") {
+/** Has the lead read request `id` and take it as far as `state`, with the outbox's help. */
+function advance(database: BridgeDatabase, state: "seen" | "answering" | "answered", id = 1) {
   return database.write(async (transaction) => {
-    let request = serveRequest((await readRequest(transaction, 1))!, now);
+    let request = serveRequest((await readRequest(transaction, id))!, now);
     if (state !== "seen") request = beginAnswer(request, now);
     if (state === "answered") request = confirmAnswer(request);
     await saveRequest(transaction, request);
@@ -100,7 +100,7 @@ test("once the lead answers, edits change nothing and a new message asks again",
   expect(await requestOf(database, more)).toMatchObject({ state: "open", reason: "follow_up" });
 });
 
-test("a finished request's messages ask again only by gaining a mention", async () => {
+test("a finished request's messages ask again only by gaining a mention, but a new reply follows up", async () => {
   const database = await openIntake();
   await take(database, more);
   await advance(database, "answered");
@@ -111,4 +111,6 @@ test("a finished request's messages ask again only by gaining a mention", async 
   const mentioned = editMessage(more, "1700000300.000100", "<@U-bot> one more look?");
   expect(await take(database, mentioned)).toBe(true);
   expect(await requestOf(database, more)).toMatchObject({ id: 2, reason: "mention" });
+  await advance(database, "answered", 2);
+  expect(await take(database, replyMessage(ask, "1700000400.000100"))).toBe(true);
 });
