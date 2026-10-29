@@ -1,4 +1,15 @@
+import { onTestFinished, spyOn } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
+
+/** What Slack's SDKs printed, which goes to the console rather than through `log`. */
+export function captureConsole(): () => unknown[][] {
+  const spies = (["debug", "info", "warn", "error"] as const).map((level) => {
+    const spy = spyOn(console, level).mockImplementation(() => {});
+    onTestFinished(() => spy.mockRestore());
+    return spy;
+  });
+  return () => spies.flatMap((spy) => spy.mock.calls);
+}
 
 /**
  * Persist the installation the other fixtures belong to: app A-app in team T-home, with our bot

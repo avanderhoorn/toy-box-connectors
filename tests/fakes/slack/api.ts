@@ -212,8 +212,12 @@ export function createFakeSlackApi(options: {
     });
   }
 
-  function failure(error: string): Response {
-    return Response.json({ ok: false, error });
+  function failure(error: string, messages?: string[]): Response {
+    return Response.json({
+      ok: false,
+      error,
+      ...(messages && { response_metadata: { messages } }),
+    });
   }
 
   function timestamp(): string {
@@ -496,7 +500,7 @@ export function createFakeSlackApi(options: {
             { ok: false, error: "service_unavailable" },
             { status: injected.status },
           );
-        if ("error" in injected) return failure(injected.error);
+        if ("error" in injected) return failure(injected.error, injected.messages);
       }
       const response = work(input.data, injected);
       if (injected && "lostResponse" in injected) {

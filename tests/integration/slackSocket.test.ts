@@ -1,6 +1,7 @@
 import { expect, onTestFinished, test } from "bun:test";
 import type { SocketFrame } from "@slackapi/model/envelopes";
 import { openSlackSocket } from "@slackapi/server/socketMode";
+import { captureConsole } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../fakes/slack";
 import { waitFor } from "./waitFor";
 
@@ -62,4 +63,15 @@ test("a failed apps.connections.open makes one attempt, not an SDK reconnect loo
   expect(await socket.opened).toMatchObject({ kind: "failed", failure: { kind: "rate_limited" } });
   await socket.closed;
   expect(slack.calls).toHaveLength(1);
+});
+test("the SDK prints nothing when a connection fails to open", async () => {
+  const slack = startFakeSlack();
+  onTestFinished(() => slack.stop());
+  const printed = captureConsole();
+  slack.failNext("apps.connections.open", { error: "invalid_auth" });
+  const socket = openSlackSocket(slack.appToken, { slackApiUrl: slack.url, onFrame() {} });
+  onTestFinished(() => socket.close());
+  expect(await socket.opened).toMatchObject({ kind: "failed", failure: { kind: "auth_failed" } });
+  await socket.closed;
+  expect(printed()).toEqual([]);
 });

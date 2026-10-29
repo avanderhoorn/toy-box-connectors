@@ -4,7 +4,7 @@ import type { ChannelSuspendReason } from "@links/model/audience";
 //
 // Slack answers a failed call with an error code. Most are the caller's to classify, but a few say
 // the bot token itself no longer works, or that Slack is limiting the call, and every caller treats
-// those the same way.
+// those the same way. So does a request Slack explains what was wrong with.
 
 const authFailures: ReadonlySet<string> = new Set([
   "invalid_auth",
@@ -36,6 +36,15 @@ export function isRateLimit(error: string): boolean {
  */
 export function isErrorCode(error: unknown): error is string {
   return typeof error === "string" && /^[a-z][a-z0-9_]*$/.test(error);
+}
+
+/**
+ * Whether Slack explained what was wrong with a request, such as an argument or a block, in an
+ * "[ERROR]" message. Its text can quote the request, so only whether there is one counts.
+ * https://docs.slack.dev/changelog/2016/09/28/response-metadata-is-on-the-way
+ */
+export function isRequestFault(messages: readonly string[] = []): boolean {
+  return messages.some((message) => message.includes("[ERROR]"));
 }
 
 /**

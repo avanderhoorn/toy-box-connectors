@@ -6,10 +6,12 @@ import {
   WebAPIRateLimitedError,
   WebAPIRequestError,
   WebClient,
+  type Logger,
   type WebAPICallResult,
   type WebClientOptions,
 } from "@slack/web-api";
-import { isAuthFailure, isErrorCode, isRateLimit } from "../model/errors";
+import { log } from "@/shared/log";
+import { isAuthFailure, isErrorCode, isRateLimit, isRequestFault } from "../model/errors";
 import { markAuthFailed } from "./installation";
 
 export const slackCallTimeoutMs = 10_000;
@@ -43,7 +45,7 @@ export function createBotClient(
 ): BotClient {
   const client = new WebClient(token, {
     ...oneAttemptOptions({ slackApiUrl, timeoutMs }),
-    logLevel: LogLevel.ERROR,
+    logger: silentLogger,
   });
   const cooldowns = new Map<string, number>();
   return {
@@ -66,6 +68,10 @@ export function createBotClient(
         if (failure.kind === "auth_failed" && (await database.write(markAuthFailed))) {
           onAuthFailed?.(failure.error);
         }
+        // A request Slack explains what was wrong with is the bridge's mistake, and its caller may
+        // keep only the code, so the owner hears of it here.
+        if (failure.kind === "error" && isRequestFault(failure.data.response_metadata?.messages))
+          log(`Slack refused ${method} with ${failure.error}.`);
         return failure;
       }
     },
@@ -87,6 +93,20 @@ export function oneAttemptOptions({
     allowAbsoluteUrls: false,
   } satisfies WebClientOptions;
 }
+
+/**
+ * Keeps the Slack SDKs off stderr. Their loggers print payloads, and Slack's explanations of failed
+ * calls, which can quote them. The bridge says what went wrong itself.
+ */
+export const silentLogger: Logger = {
+  debug() {},
+  info() {},
+  warn() {},
+  error() {},
+  setLevel() {},
+  setName() {},
+  getLevel: () => LogLevel.ERROR,
+};
 
 export function readCallFailure(error: unknown): CallFailure | null {
   if (error instanceof WebAPIRateLimitedError)

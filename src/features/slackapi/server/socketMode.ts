@@ -1,11 +1,6 @@
-import {
-  LogLevel,
-  SocketModeClient,
-  type Logger,
-  type SocketModeOptions,
-} from "@slack/socket-mode";
+import { SocketModeClient, type SocketModeOptions } from "@slack/socket-mode";
 import { readFrame, type SocketFrame } from "../model/envelopes";
-import { oneAttemptOptions, readCallFailure, type CallFailure } from "./botClient";
+import { oneAttemptOptions, readCallFailure, silentLogger, type CallFailure } from "./botClient";
 
 export type SocketOpening =
   | { kind: "open" | "closed" }
@@ -118,14 +113,3 @@ function terminate(client: SocketModeClient) {
   socket?.disconnect();
   if (socket?.readyState === WebSocket.CLOSING) socket.disconnect();
 }
-
-// The SDK's normal logger includes payloads.
-const silentLogger: Logger = {
-  debug() {},
-  info() {},
-  warn() {},
-  error() {},
-  setLevel() {},
-  setName() {},
-  getLevel: () => LogLevel.ERROR,
-};

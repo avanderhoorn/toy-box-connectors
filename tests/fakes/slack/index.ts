@@ -31,7 +31,8 @@ export type FakeSlackAck = {
 };
 
 export type FakeSlackFailure =
-  | { error: string }
+  /** Slack explains a request it finds fault with in `messages`, as "[ERROR] ..." lines. */
+  | { error: string; messages?: string[] }
   | { retryAfter: number }
   | { status: number }
   | { lostResponse: true }

@@ -1,7 +1,7 @@
 import { expect, onTestFinished, test } from "bun:test";
-import { openTestDatabase } from "@bridge/server/testFixtures";
+import { captureLog, openTestDatabase } from "@bridge/server/testFixtures";
 import { createBotClient } from "@slackapi/server/botClient";
-import { createStoredInstallation } from "@slackapi/server/testFixtures";
+import { captureConsole, createStoredInstallation } from "@slackapi/server/testFixtures";
 import {
   fetchSlackPerson,
   readPersonIds,
@@ -9,6 +9,9 @@ import {
   writeSlackPerson,
 } from "@slackapi/server/users";
 import { startFakeSlack } from "../fakes/slack";
+
+/** How Slack explains blocks it can't accept, which names where they went wrong. */
+const BLOCKS_FAULT = "[ERROR] failed to match all allowed schemas [json-pointer:/blocks/0/text]";
 
 async function setup() {
   let at = 1000;
@@ -82,6 +85,31 @@ test("token failures persist and notify once, even across clients", async () => 
     );
   }
   expect(failed).toEqual(["invalid_auth"]);
+});
+test("the SDK prints nothing, even Slack's explanation of what was wrong with a request", async () => {
+  const { slack, bot } = await setup();
+  captureLog();
+  const printed = captureConsole();
+  const channel = slack.addChannel();
+  slack.failNext("chat.postMessage", { error: "invalid_blocks", messages: [BLOCKS_FAULT] });
+  expect(
+    await bot.call("chat.postMessage", (client) =>
+      client.chat.postMessage({ channel, text: "answer" }),
+    ),
+  ).toMatchObject({ kind: "error", error: "invalid_blocks" });
+  expect(printed()).toEqual([]);
+});
+test("logs the method and code of a request Slack found fault with, and no other refusal", async () => {
+  const { slack, bot } = await setup();
+  const logged = captureLog();
+  const channel = slack.addChannel();
+  const post = () =>
+    bot.call("chat.postMessage", (client) => client.chat.postMessage({ channel, text: "answer" }));
+  slack.failNext("chat.postMessage", { error: "not_in_channel" });
+  expect(await post()).toMatchObject({ kind: "error", error: "not_in_channel" });
+  slack.failNext("chat.postMessage", { error: "invalid_blocks", messages: [BLOCKS_FAULT] });
+  expect(await post()).toMatchObject({ kind: "error", error: "invalid_blocks" });
+  expect(logged()).toEqual(["Slack refused chat.postMessage with invalid_blocks."]);
 });
 test("fresh users.info binds Enterprise aliases to stored names, not cached admission", async () => {
   const { slack, database, bot } = await setup();
