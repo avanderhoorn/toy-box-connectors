@@ -62,8 +62,7 @@ export async function serveBridge(): Promise<number> {
     const dataFolder = resolveDataFolder();
     // Only the owner answers these, never a lead, whose shell can be a terminal too.
     if (process.stdin.isTTY && resolveSessionId(process.env) === null) {
-      const saved = await askForMissingCredentials(dataFolder, process.env);
-      if (saved) log(saved);
+      for (const saved of await askForMissingCredentials(dataFolder, process.env)) log(saved);
     }
     const bridge = await startBridge(dataFolder);
     // Nothing may await from here until the bridge says it's running, or Slack could log first.

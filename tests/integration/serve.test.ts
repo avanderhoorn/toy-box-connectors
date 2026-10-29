@@ -5,8 +5,13 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DEFAULT_APP } from "@bridge/model/apps";
+import { locateApp } from "@bridge/server/apps";
 import { prepareDataFolder } from "@bridge/server/dataFolder";
-import { readCredentialsFile, writeCredential } from "@bridge/server/environment";
+import {
+  readAppCredentialsFile,
+  readCredentialsFile,
+  writeCredential,
+} from "@bridge/server/environment";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { BUNDLED_SKILL } from "@commands/client/skill";
 import { rejectedTokensProblem } from "@slackapi/model/identity";
@@ -21,6 +26,11 @@ import {
 const PASSPHRASE = "correct horse battery staple";
 /** What the terminal shows as the owner presses Ctrl-C while the bridge runs. */
 const STOPPED_AT_TERMINAL = "^Ctoy-box-slack is stopping after SIGINT\n";
+
+/** The owner's passphrase, hashed cheaply for a test that never checks it. */
+function passphraseHash() {
+  return Bun.password.hash(PASSPHRASE, { algorithm: "argon2id", memoryCost: 8, timeCost: 1 });
+}
 
 test("asks the owner at a terminal for both tokens and a passphrase the first time, then starts", async () => {
   const home = createTestFolder();
@@ -68,12 +78,7 @@ test("replaces a token Slack rejects the way the bridge says, asking for it whil
   prepareDataFolder(dataFolder);
   writeCredential(dataFolder, "SLACK_BOT_TOKEN", "xoxb-revoked");
   writeCredential(dataFolder, "SLACK_APP_TOKEN", slack.appToken);
-  const hash = await Bun.password.hash(PASSPHRASE, {
-    algorithm: "argon2id",
-    memoryCost: 8,
-    timeCost: 1,
-  });
-  writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", hash);
+  writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", await passphraseHash());
   const running = serveAtTerminal(home, env);
   await running.shows(rejectedTokensProblem([["SLACK_BOT_TOKEN", "invalid_auth"]], DEFAULT_APP));
 
@@ -105,6 +110,47 @@ test("replaces a token Slack rejects the way the bridge says, asking for it whil
     code: 0,
     transcript: `${started(home)}Connected to Slack.\n${STOPPED_AT_TERMINAL}`,
   });
+}, 20_000);
+
+test("asks at a terminal for each app's missing tokens by the app's name, and says what it saved in each file", async () => {
+  const home = createTestFolder();
+  const { slack } = startSlackForBridge();
+  const env = { SLACK_API_URL: slack.url };
+  const dataFolder = join(home, ".toy-box-slack");
+  prepareDataFolder(dataFolder);
+  writeCredential(dataFolder, "SLACK_BOT_TOKEN", slack.botToken);
+  writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", await passphraseHash());
+  // A bridge already runs, as under launchd, so serve stops once it has saved what it asked for.
+  const running = spawnBridge(home, env);
+  await running.running();
+  const releases = locateApp(dataFolder, "releases");
+  mkdirSync(releases.folder, { recursive: true, mode: 0o700 });
+  writeCredential(releases.folder, "SLACK_APP_TOKEN", "xapp-releases");
+
+  const terminal = serveAtTerminal(home, env);
+  await terminal.shows("(xapp-...): ");
+  await terminal.type("xapp-default");
+  await terminal.shows("(xoxb-...): ");
+  await terminal.type("xoxb-releases");
+
+  expect(await terminal.exit()).toEqual({
+    code: 1,
+    transcript: [
+      "Paste the Slack app-level token (xapp-...): ",
+      "Paste the releases app's Slack bot token (xoxb-...): ",
+      `Saved SLACK_APP_TOKEN in ${join(dataFolder, "credentials.env")}.`,
+      `Saved SLACK_BOT_TOKEN in ${releases.credentials}.`,
+      `Another toy-box-slack bridge is already running for ${dataFolder}. Stop it before starting a new one.`,
+      "",
+    ].join("\n"),
+  });
+  expect(readCredentialsFile(dataFolder).SLACK_APP_TOKEN).toBe("xapp-default");
+  expect(readAppCredentialsFile(releases.folder)).toEqual({
+    SLACK_BOT_TOKEN: "xoxb-releases",
+    SLACK_APP_TOKEN: "xapp-releases",
+  });
+  running.child.kill("SIGTERM");
+  expect((await running.exit()).code).toBe(0);
 }, 20_000);
 
 test("stops without saving or starting when the owner presses Ctrl-C at a prompt", async () => {
