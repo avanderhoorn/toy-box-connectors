@@ -6,7 +6,7 @@ import {
   slackMessageSchema,
 } from "./messages";
 
-const context = { botUserId: "UBOT", botId: "BBOT", isBotUser: (id: string) => id === "UOTHERBOT" };
+const context = { botUserId: "UBOT", botId: "BBOT" };
 const message = { type: "message", user: "UALICE", text: "<@UBOT> help", ts: "1700000000.000100" };
 function normalize(event: unknown) {
   return normalizeMessageEvent(slackMessageEventSchema.parse(event), context);
@@ -66,7 +66,6 @@ test("deletion tombstones and withdrawals never become executable text", () => {
 test.each([
   [{ user: "UBOT" }, "self"],
   [{ bot_id: "BOTHER" }, "bot"],
-  [{ user: "UOTHERBOT" }, "bot"],
   [{ app_id: "AOTHER" }, "bot"],
   [{ user: "USLACKBOT" }, "bot"],
   [{ subtype: "channel_join" }, "notice"],

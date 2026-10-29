@@ -16,7 +16,7 @@ import { fetchHistoryPage, fetchThreadPage } from "@slackapi/server/history";
 import { markConnected, readConnectedAt, readInstallation } from "@slackapi/server/installation";
 import { defaultWakeTimings, retryDelay, type WakeTimings } from "@wakes/model";
 import { sleep } from "@/shared/sleep";
-import { ingestMessageEvent, readMessageContext } from "./ingest";
+import { ingestMessageEvent } from "./ingest";
 
 // Catching up.
 //
@@ -171,10 +171,9 @@ export function startCatchUp(
     const changed = await database.write(async (transaction) => {
       const installation = await readInstallation(transaction);
       if (installation === null || installation.status === "uninstalled") return false;
-      const context = await readMessageContext(transaction, installation);
       let changed = false;
       for (const message of messages.toSorted((left, right) => compareTs(left.ts, right.ts))) {
-        const event = normalizeHistoryMessage(channelId, message, context);
+        const event = normalizeHistoryMessage(channelId, message, installation);
         changed = (await ingestMessageEvent(transaction, event, now())) || changed;
       }
       return changed;

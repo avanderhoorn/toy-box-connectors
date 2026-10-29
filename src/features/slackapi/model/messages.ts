@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Installation } from "./installation";
 import { compareTs, slackTsSchema, type SlackTs } from "./ts";
 
 const id = z.string().min(1);
@@ -77,11 +78,7 @@ export type SlackMessageEvent =
   | { kind: "message"; message: SlackMessage; edit: boolean }
   | { kind: "deleted"; channelId: string; ts: SlackTs }
   | { kind: "replied" };
-export type NormalizeContext = {
-  botUserId: string;
-  botId: string;
-  isBotUser(userId: string): boolean;
-};
+type NormalizeContext = Pick<Installation, "botUserId" | "botId">;
 
 export function normalizeMessageEvent(
   event: SlackMessageEventPayload,
@@ -153,5 +150,5 @@ function messageAuthor(payload: SlackMessagePayload, context: NormalizeContext):
   if (payload.user === context.botUserId || payload.bot_id === context.botId) return "self";
   if (payload.bot_id || payload.app_id || subtype === "bot_message") return "bot";
   if (!payload.user) return "notice";
-  return payload.user === "USLACKBOT" || context.isBotUser(payload.user) ? "bot" : "person";
+  return payload.user === "USLACKBOT" ? "bot" : "person";
 }

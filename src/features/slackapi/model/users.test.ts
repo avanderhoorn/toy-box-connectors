@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { personIds, slackUserSchema } from "./users";
+import { slackUserSchema } from "./users";
 
 test("user facts preserve Enterprise identities and do not assume absent flags mean full membership", () => {
   const user = slackUserSchema.parse({
@@ -9,9 +9,9 @@ test("user facts preserve Enterprise identities and do not assume absent flags m
     profile: { display_name: "Alice", real_name: "Alice Smith" },
     future_field: true,
   });
-  expect(personIds(user)).toEqual(["U1", "W1"]);
   expect(user).toMatchObject({
     enterpriseId: "E1",
+    enterpriseUserId: "W1",
     isBot: null,
     isRestricted: null,
     isUltraRestricted: null,

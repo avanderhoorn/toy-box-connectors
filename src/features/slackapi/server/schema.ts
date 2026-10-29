@@ -9,8 +9,7 @@ export async function initializeSlackApiSchema(db: Bun.SQL): Promise<void> {
     );
     CREATE TABLE users (
       user_id TEXT PRIMARY KEY,
-      display_name TEXT, real_name TEXT, is_bot INTEGER CHECK (is_bot IN (0, 1)),
-      refreshed_at INTEGER
+      display_name TEXT, real_name TEXT
     );
     CREATE TABLE user_aliases (
       alias_id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE

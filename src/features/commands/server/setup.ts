@@ -101,7 +101,7 @@ export function allowCommand({ database, bot }: SetupCommandOptions): CommandHan
       const ask = added.length ? confirmWidening(preview, confirmed) : null;
       if (ask) return ask;
       for (const person of added) {
-        await writeSlackPerson(transaction, person, at);
+        await writeSlackPerson(transaction, person);
         await allowPerson(transaction, link.id, person.id, at);
       }
       return {

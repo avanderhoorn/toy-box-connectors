@@ -99,7 +99,7 @@ test("fresh users.info binds Enterprise aliases to stored names, not cached admi
   );
   const facts = await bot.call("users.info", (client) => fetchSlackPerson(client, "WALICE"));
   if (facts.kind !== "ok" || facts.result === null) throw new Error("Expected fresh user facts");
-  await database.write((tx) => writeSlackPerson(tx, facts.result!, 1000));
+  await database.write((tx) => writeSlackPerson(tx, facts.result!));
   expect(await database.read((sql) => readPersonIds(sql, "WALICE"))).toEqual(["UALICE", "WALICE"]);
   expect(await database.read((sql) => readSlackPersonName(sql, "WALICE"))).toBe("Alice Smith");
 });

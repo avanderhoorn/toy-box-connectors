@@ -71,12 +71,3 @@ export const slackUserSchema = z
     displayName: user.profile?.display_name || null,
     realName: user.real_name || user.profile?.real_name || null,
   }));
-
-/** The IDs a message or click from `person` can carry: their user ID, then any other ID Slack gave them. */
-export function personIds(person: SlackPerson): string[] {
-  const ids = [person.id];
-  if (person.enterpriseUserId && person.enterpriseUserId !== person.id) {
-    ids.push(person.enterpriseUserId);
-  }
-  return ids;
-}

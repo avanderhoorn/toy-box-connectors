@@ -8,7 +8,7 @@ import type { Installation } from "@slackapi/model/installation";
 import { normalizeMessageEvent, type SlackMessageEventPayload } from "@slackapi/model/messages";
 import { readInstallation } from "@slackapi/server/installation";
 import { noteGap, noteHello } from "./catchUp";
-import { ingestMessageEvent, readMessageContext } from "./ingest";
+import { ingestMessageEvent } from "./ingest";
 
 // The receiver.
 //
@@ -178,7 +178,7 @@ async function takeMessage(
   installation: Installation,
   now: number,
 ): Promise<Taken> {
-  const event = normalizeMessageEvent(payload, await readMessageContext(transaction, installation));
+  const event = normalizeMessageEvent(payload, installation);
   return { changed: await ingestMessageEvent(transaction, event, now) };
 }
 
