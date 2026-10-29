@@ -191,20 +191,13 @@ export async function readDueReconciliations(sql: Bun.SQL, now: number): Promise
 
 /** Call only after policy checks, then commit before invoking Slack. */
 export async function startOutboxAttempt(tx: Bun.SQL, item: OutboxItem, now: number) {
-  const current = await readOutboxItem(tx, item.id);
-  if (
-    !current ||
-    current.state !== "queued" ||
-    current.attempts !== item.attempts ||
-    current.payloadHash !== item.payloadHash
-  )
-    return { kind: "changed" as const };
   const [row] = await tx<OutboxRow[]>`
     UPDATE outbox SET state = 'sending', attempts = attempts + 1, attempt_started_at = ${now},
       next_attempt_at = NULL, error = NULL, updated_at = ${now}
-    WHERE id = ${item.id} AND state = 'queued' RETURNING *
+    WHERE id = ${item.id} AND state = 'queued' AND attempts = ${item.attempts}
+      AND payload_hash = ${item.payloadHash} RETURNING *
   `;
-  return { kind: "started" as const, item: outboxItem(row!) };
+  return row ? outboxItem(row) : null;
 }
 
 /** A late response cannot settle a newer attempt, or resurrect an unlinked item. */

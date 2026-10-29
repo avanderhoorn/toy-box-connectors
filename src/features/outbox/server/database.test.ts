@@ -56,13 +56,13 @@ test("interrupted sends become unknown, never ready, and reject late attempt set
   const { database, queue, read, now } = await createOutboxWorld();
   const queued = await queue();
   const started = await database.write((tx) => startOutboxAttempt(tx, queued, now()));
-  if (started.kind !== "started") throw new Error("Expected an attempt");
+  if (!started) throw new Error("Expected an attempt");
   await database.write((tx) => recoverOutboxAttempts(tx, now()));
   expect(await database.read((sql) => readReadyOutbox(sql, now()))).toEqual([]);
   expect(await read(queued.id)).toMatchObject({ state: "delivery_unknown", attempts: 1 });
   expect(
     await database.write((tx) =>
-      settleOutboxAttempt(tx, started.item, { state: "sent", slackTs: "1700000200.1" }, now()),
+      settleOutboxAttempt(tx, started, { state: "sent", slackTs: "1700000200.1" }, now()),
     ),
   ).toBeNull();
   const unknown = await read(queued.id);
@@ -79,14 +79,9 @@ test("a definite refusal can reuse only its own row, after inbox clears reply_fa
   const world = await createOutboxWorld();
   const item = await world.queue();
   const started = await world.database.write((tx) => startOutboxAttempt(tx, item, world.now()));
-  if (started.kind !== "started") throw new Error("Expected an attempt");
+  if (!started) throw new Error("Expected an attempt");
   await world.database.write((tx) =>
-    settleOutboxAttempt(
-      tx,
-      started.item,
-      { state: "failed", error: "invalid_blocks" },
-      world.now(),
-    ),
+    settleOutboxAttempt(tx, started, { state: "failed", error: "invalid_blocks" }, world.now()),
   );
   await expect(world.queue("Corrected")).rejects.toThrow();
   await world.database.write(async (tx) => {

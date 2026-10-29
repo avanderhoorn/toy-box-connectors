@@ -12,6 +12,7 @@ import { canonicalUserId } from "@slackapi/server/users";
 import { ZodError } from "zod";
 import { outboxMetadata, postReceipt, writeOutcome } from "../model/delivery";
 import { checkLeadPayload } from "../model/payload";
+import type { RenderedMessage } from "../model/rendering";
 import {
   failQueuedItem,
   readOutboxItem,
@@ -31,6 +32,7 @@ type Prepared =
       kind: "started";
       item: OutboxItem;
       identity: Pick<Installation, "appId" | "botId">;
+      message: RenderedMessage;
     };
 
 export function createPostDelivery(
@@ -71,16 +73,14 @@ export function createPostDelivery(
       );
       if (verdict?.kind !== "approved")
         return { kind: "waiting", reason: "channel_not_approved", until: null };
-      return prepare(tx, queued, now());
+      return prepare(tx, id, now());
     });
     if (prepared.kind !== "started") return prepared;
-    const { item, identity } = prepared;
-    const payload = checkLeadPayload(item.payload);
-    if (payload.kind !== "valid") throw new Error("A committed post has an invalid snapshot.");
+    const { item, identity, message } = prepared;
     const outcome = writeOutcome(
       await bot.call("chat.postMessage", (client) =>
         client.chat.postMessage({
-          ...payload.message,
+          ...message,
           channel: item.channelId,
           metadata: outboxMetadata(item),
           ...(item.threadTs === null ? {} : { thread_ts: item.threadTs, reply_broadcast: false }),
@@ -110,10 +110,9 @@ export function createPostDelivery(
     });
   }
 
-  async function prepare(tx: Bun.SQL, queued: OutboxItem, at: number): Promise<Prepared> {
-    const item = await readOutboxItem(tx, queued.id);
-    if (!item || item.state !== "queued" || item.payloadHash !== queued.payloadHash)
-      return { kind: "changed" };
+  async function prepare(tx: Bun.SQL, id: string, at: number): Promise<Prepared> {
+    const item = await readOutboxItem(tx, id);
+    if (!item || item.state !== "queued") return { kind: "changed" };
     const installation = await readInstallation(tx);
     if (!installation || installation.status !== "active")
       return { kind: "waiting", reason: "installation_inactive", until: null };
@@ -136,7 +135,9 @@ export function createPostDelivery(
     const payload = checkLeadPayload(item.payload);
     if (payload.kind !== "valid") return refuse(tx, item, payload.problem, at);
     const started = await startOutboxAttempt(tx, item, at);
-    return started.kind === "started" ? { ...started, identity: installation } : started;
+    return started
+      ? { kind: "started", item: started, identity: installation, message: payload.message }
+      : { kind: "changed" };
   }
 
   async function refuse(
