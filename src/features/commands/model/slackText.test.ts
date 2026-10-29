@@ -74,6 +74,7 @@ describe("rendering Slack text", () => {
       `ping @${ZWSP}lead (https://x.dev)`,
     );
     expect(renderSlackText("ping @\u0007lead", names)).toBe(`ping @${ZWSP}lead`);
+    expect(renderSlackText("ask @1password", names)).toBe(`ask @${ZWSP}1password`);
   });
 
   test("leaves email addresses alone", () => {
@@ -126,7 +127,8 @@ describe("personName", () => {
 });
 
 test("oneLine cuts between graphemes", () => {
-  expect(oneLine("ab👨‍👩‍👧 cd", 4)).toBe("ab…");
+  expect(oneLine("ab👨‍👩‍👧 cd", 6)).toBe("ab…");
+  expect(oneLine("cafe\u0301 au lait", 5)).toBe("caf…");
   expect(oneLine("short", 5)).toBe("short");
 });
 

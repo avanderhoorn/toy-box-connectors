@@ -11,6 +11,7 @@ test.each<readonly [OutputProblem, string]>([
   ["openai_key", `sk-proj-${"a".repeat(80)}`],
   ["aws_key", `AKIA${"A".repeat(16)}`],
   ["aws_key", `aws_secret_access_key = "${"a".repeat(40)}"`],
+  ["aws_key", `"aws_secret_access_key": "${"a".repeat(40)}"`],
   ["private_key", "-----BEGIN OPENSSH PRIVATE KEY-----"],
   ["url_credentials", `https://${"user"}:${"password"}@example.com`],
   ["url_credentials", `ftp://${"user"}:p)ass@example.com`],
@@ -27,4 +28,10 @@ test.each([
   `ssh://${"user"}@example.com`,
 ])("ordinary text is not a secret: %s", (source) => {
   expect(outputProblem(source)).toBeNull();
+});
+
+test("a long run of spaces can't stall the scan", () => {
+  const started = performance.now();
+  expect(outputProblem(`aws_secret_access_key${" ".repeat(100_000)}x`)).toBeNull();
+  expect(performance.now() - started).toBeLessThan(500);
 });

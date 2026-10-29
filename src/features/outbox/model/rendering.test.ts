@@ -11,6 +11,10 @@ test("one Markdown block retains formatting and makes mentions inert", () => {
   expect(result.message.text.slice(0, code.length)).toBe(code);
   expect(result.message.text).toContain("&lt;!here> @\u200bchannel &lt;@U123>");
   expect(renderMarkdown("@\u200bpackage/name")).toHaveProperty("message.text", "@package/name");
+  expect(renderMarkdown("@Here, @CHANNEL")).toHaveProperty(
+    "message.text",
+    "@\u200bHere, @\u200bCHANNEL",
+  );
 });
 
 test("the complete escaped message must fit 12000 characters and exclude blank or secret output", () => {

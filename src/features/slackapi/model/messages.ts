@@ -114,7 +114,7 @@ function snapshot(
   const isReply = threadTs !== null && compareTs(threadTs, payload.ts) !== 0;
   const text = payload.text ?? "";
   const mentions = [
-    ...new Set(Array.from(text.matchAll(/<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/g), (match) => match[1]!)),
+    ...new Set(Array.from(text.matchAll(/<@([UW][A-Z0-9]+)(?:\|[^<>]*)?>/g), (match) => match[1]!)),
   ].sort();
   return {
     kind: "message",

@@ -23,6 +23,15 @@ test.each([
   "thanks, can you also check staging?",
   "thanksgiving plans?",
   "is it ok?",
+  "ok?",
+  "?",
+  "<@U-bot|toy-box> ？",
 ])("%p could carry a decision or a question", (text) => {
   expect(isCourtesyOnly({ text })).toBe(false);
+});
+
+test("unclosed markup can't stall the check", () => {
+  const started = performance.now();
+  expect(isCourtesyOnly({ text: "<@U1 ".repeat(80_000) })).toBe(false);
+  expect(performance.now() - started).toBeLessThan(500);
 });

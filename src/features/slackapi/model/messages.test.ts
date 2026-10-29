@@ -89,3 +89,19 @@ test("malformed core fields refuse, additive fields and file attachments are ign
     slackMessageSchema.parse({ ...message, files: [{ id: "F1" }], future_field: true }),
   ).not.toHaveProperty("files");
 });
+
+test("mentions read once each, with or without a label", () => {
+  expect(
+    normalize({
+      ...message,
+      channel: "C1",
+      text: "<@UBOT|toy-box> ask <@UALICE> and <@UALICE|al>",
+    }),
+  ).toMatchObject({ message: { mentions: ["UALICE", "UBOT"], mentionsBot: true } });
+});
+
+test("unclosed markup can't stall reading a message", () => {
+  const started = performance.now();
+  normalize({ ...message, channel: "C1", text: "<@UA|".repeat(40_000) });
+  expect(performance.now() - started).toBeLessThan(500);
+});

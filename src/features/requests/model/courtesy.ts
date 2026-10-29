@@ -36,8 +36,10 @@ const courtesyPattern = new RegExp(`^${courtesyPhrase}(?: ${courtesyPhrase})*$`)
 
 /** Whether a message only thanks or acknowledges, such as "thanks!", "ok 👍" or a lone emoji. */
 export function isCourtesyOnly(message: Pick<SlackMessage, "text">): boolean {
+  // A question waits for an answer, even a lone ? or an ok?.
+  if (/[?？]/.test(message.text)) return false;
   const words = message.text
-    .replace(/<[@!][^>]*>/g, " ")
+    .replace(/<[@!][^<>]*>/g, " ")
     .replace(/&(?:amp|lt|gt);/g, " ")
     .replace(/:[\w+'-]+:/g, " ")
     // Symbols include most emoji, skin tones and flags. Pictographs also cover
