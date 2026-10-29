@@ -62,7 +62,7 @@ Great code pursues simplicity by placing a rich domain model at the center, deco
 
 ## Definition of Done
 
-- Run `bun run check` and fix any formatting, lint, or typecheck issues. The pre-commit hook runs it too.
+- Run `bun run check` and fix any formatting, lint, or typecheck issues. The pre-commit hook runs the linter and formats staged files, and CI runs check, the tests and the build on every push and pull request.
 - Run `bun test` and fix any failing tests. It runs the unit and integration suites with no network or credentials.
 - Prove every failure a change handles with a test at the layer that can observe it: unit tests for policies, integration tests for anything that crosses Slack, Toy Box, the socket, or a process boundary.
 - Update the owning guide when a change moves a responsibility or an invariant.
