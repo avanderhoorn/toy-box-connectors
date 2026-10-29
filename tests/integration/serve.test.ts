@@ -17,7 +17,7 @@ import { BUNDLED_SKILL } from "@commands/client/skill";
 import { rejectedTokensProblem } from "@slackapi/model/identity";
 import {
   installedSkill,
-  serveAtTerminal,
+  runAtTerminal,
   spawnBridge,
   startSlackForBridge,
   started,
@@ -35,7 +35,7 @@ function passphraseHash() {
 test("asks the owner at a terminal for both tokens and a passphrase the first time, then starts", async () => {
   const home = createTestFolder();
   const { slack } = startSlackForBridge();
-  const terminal = serveAtTerminal(home, { SLACK_API_URL: slack.url });
+  const terminal = runAtTerminal(home, ["serve"], { SLACK_API_URL: slack.url });
 
   for (const [prompt, answer] of [
     ["(xoxb-...): ", slack.botToken],
@@ -79,7 +79,7 @@ test("replaces a token Slack rejects the way the bridge says, asking for it whil
   writeCredential(dataFolder, "SLACK_BOT_TOKEN", "xoxb-revoked");
   writeCredential(dataFolder, "SLACK_APP_TOKEN", slack.appToken);
   writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", await passphraseHash());
-  const running = serveAtTerminal(home, env);
+  const running = runAtTerminal(home, ["serve"], env);
   await running.shows(rejectedTokensProblem([["SLACK_BOT_TOKEN", "invalid_auth"]], DEFAULT_APP));
 
   const lines = readFileSync(credentials, "utf8").split("\n");
@@ -87,7 +87,7 @@ test("replaces a token Slack rejects the way the bridge says, asking for it whil
     credentials,
     lines.filter((line) => !line.startsWith("SLACK_BOT_TOKEN=")).join("\n"),
   );
-  const terminal = serveAtTerminal(home, env);
+  const terminal = runAtTerminal(home, ["serve"], env);
   await terminal.shows("(xoxb-...): ");
   await terminal.type(slack.botToken);
 
@@ -103,7 +103,7 @@ test("replaces a token Slack rejects the way the bridge says, asking for it whil
   await running.interrupt();
   expect((await running.exit()).code).toBe(0);
 
-  const restarted = serveAtTerminal(home, env);
+  const restarted = runAtTerminal(home, ["serve"], env);
   await restarted.shows("Connected to Slack.");
   await restarted.interrupt();
   expect(await restarted.exit()).toEqual({
@@ -127,7 +127,7 @@ test("asks at a terminal for each app's missing tokens by the app's name, and sa
   mkdirSync(releases.folder, { recursive: true, mode: 0o700 });
   writeCredential(releases.folder, "SLACK_APP_TOKEN", "xapp-releases");
 
-  const terminal = serveAtTerminal(home, env);
+  const terminal = runAtTerminal(home, ["serve"], env);
   await terminal.shows("(xapp-...): ");
   await terminal.type("xapp-default");
   await terminal.shows("(xoxb-...): ");
@@ -155,7 +155,7 @@ test("asks at a terminal for each app's missing tokens by the app's name, and sa
 
 test("stops without saving or starting when the owner presses Ctrl-C at a prompt", async () => {
   const home = createTestFolder();
-  const terminal = serveAtTerminal(home);
+  const terminal = runAtTerminal(home, ["serve"]);
   await terminal.shows("(xoxb-...): ");
   await terminal.interrupt();
 
@@ -169,7 +169,7 @@ test("stops without saving or starting when the owner presses Ctrl-C at a prompt
 
 test("never asks in a lead's shell, which can be a terminal too", async () => {
   const home = createTestFolder();
-  const terminal = serveAtTerminal(home, { COPILOT_AGENT_SESSION_ID: "a-lead-session" });
+  const terminal = runAtTerminal(home, ["serve"], { COPILOT_AGENT_SESSION_ID: "a-lead-session" });
   await terminal.shows("toy-box-slack is running");
   await terminal.interrupt();
 

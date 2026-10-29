@@ -1,4 +1,5 @@
-// The bridge as its own process, started in the background or at a terminal.
+// The bridge as its own process, started in the background or at a terminal, and the owner's other
+// terminal commands.
 
 import { onTestFinished } from "bun:test";
 import { join } from "node:path";
@@ -6,12 +7,12 @@ import { openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database
 import { startFakeSlack, type FakeSlackIdentity } from "../fakes/slack";
 
 const REPOSITORY = join(import.meta.dir, "..", "..");
-const SERVE = [process.execPath, "--no-env-file", "cli/index.ts", "serve"];
+const CLI = [process.execPath, "--no-env-file", "cli/index.ts"];
 
-/** How to kill each bridge tests started that may still be running. */
+/** How to kill each bridge or terminal tests started that may still be running. */
 const bridges = new Set<() => void>();
 
-/** Kills every bridge a test started, as the test finishes. */
+/** Kills every bridge and terminal a test started, as the test finishes. */
 function killBridges() {
   for (const kill of bridges) kill();
   bridges.clear();
@@ -35,7 +36,7 @@ export function started(home: string) {
 export function spawnBridge(home: string, env: Record<string, string> = {}, stdin?: Blob) {
   // Bun throws outside a running test, so a test that timed out starts no bridge it can't stop.
   onTestFinished(killBridges);
-  const child = Bun.spawn(SERVE, {
+  const child = Bun.spawn([...CLI, "serve"], {
     cwd: REPOSITORY,
     env: environment(home, env),
     stdin: stdin ?? "ignore",
@@ -71,23 +72,23 @@ export function spawnBridge(home: string, env: Record<string, string> = {}, stdi
 }
 
 /**
- * Run `toy-box-slack serve` at a terminal of its own, the way the owner starts it, with `home` as
- * its home folder and only `env` besides. `script` gives it the terminal, copies everything the
- * terminal shows to the test and exits as the bridge does, with its exit code. `cat` passes on
- * what the test types, since `script` can't read from a socket, and is never done, since `script`
- * would send the bridge an end of input.
+ * Run `toy-box-slack <args>` at a terminal of its own, the way the owner runs `serve` or `add-app`,
+ * with `home` as its home folder and only `env` besides. `script` gives it the terminal, copies
+ * everything the terminal shows to the test and exits as the command does, with its exit code.
+ * `cat` passes on what the test types, since `script` can't read from a socket, and is never done,
+ * since `script` would send the command an end of input.
  */
-export function serveAtTerminal(home: string, env: Record<string, string> = {}) {
+export function runAtTerminal(home: string, args: string[], env: Record<string, string> = {}) {
   onTestFinished(killBridges);
   const shell = ["bash", "-c", 'exec script -q /dev/null "$@" < <(exec cat)', "bash"];
-  const terminal = Bun.spawn([...shell, ...SERVE], {
+  const terminal = Bun.spawn([...shell, ...CLI, ...args], {
     cwd: REPOSITORY,
     env: environment(home, env),
     stdin: "pipe",
     stdout: "pipe",
     stderr: "inherit",
     // A process group of its own, so killing the group closes the terminal, which hangs up on the
-    // bridge.
+    // command.
     detached: true,
   });
   bridges.add(() => {
@@ -107,7 +108,7 @@ export function serveAtTerminal(home: string, env: Record<string, string> = {}) 
   const transcript = () => shown.replaceAll("\r\n", "\n");
 
   return {
-    /** Resolves once the terminal shows `text`, and rejects if the bridge exits or takes too long. */
+    /** Resolves once the terminal shows `text`, and rejects if the command exits or takes too long. */
     async shows(text: string) {
       const deadline = Date.now() + 10_000;
       while (!transcript().includes(text)) {
@@ -127,7 +128,7 @@ export function serveAtTerminal(home: string, env: Record<string, string> = {}) 
       await terminal.stdin.write("\x03");
       await terminal.stdin.flush();
     },
-    /** Waits for the bridge to exit, and returns its exit code and everything the terminal showed. */
+    /** Waits for the command to exit, and returns its exit code and everything the terminal showed. */
     async exit() {
       const code = await terminal.exited;
       await terminal.stdin.end();

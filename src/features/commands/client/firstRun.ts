@@ -16,13 +16,13 @@ import {
 import { BridgeRefusedError } from "@bridge/server/refusal";
 import { choosePassphrase, secretReader, type SecretReader } from "./passphrase";
 
-/** The tokens `serve` asks for, with the setting each fills and what one starts with. */
-const TOKENS = [
+/** The tokens an app needs, with the setting each fills and what one starts with. */
+export const TOKENS = [
   { name: "SLACK_BOT_TOKEN", setting: "botToken", kind: "Slack bot token", prefix: "xoxb-" },
   { name: "SLACK_APP_TOKEN", setting: "appToken", kind: "Slack app-level token", prefix: "xapp-" },
 ] as const;
 
-type Token = (typeof TOKENS)[number];
+export type Token = (typeof TOKENS)[number];
 
 /**
  * Asks the owner for each Slack token an app in `dataFolder` is missing, the default app's first,
@@ -49,8 +49,15 @@ export async function askForMissingCredentials(
   const reader = openReader();
   try {
     for (const { app, missing } of apps) {
+      const forApp = app.name === DEFAULT_APP ? "" : ` for the ${app.name} app`;
       for (const token of missing) {
-        writeCredential(app.folder, token.name, await askForToken(reader, app.name, token));
+        const answer = await askForToken(reader, app.name, token);
+        if (answer === null) {
+          throw new BridgeRefusedError(
+            `No ${token.kind} was given${forApp}, so toy-box-slack didn't start.`,
+          );
+        }
+        writeCredential(app.folder, token.name, answer);
       }
     }
     if (passphrase) {
@@ -71,20 +78,16 @@ export async function askForMissingCredentials(
 
 /**
  * The owner's answer for the `app` app's `token`, asked by the app's name unless it's the default
- * app. Refuses an answer that isn't there or isn't a token.
+ * app, or null when they gave none. Refuses an answer that isn't a token.
  */
-async function askForToken(
+export async function askForToken(
   reader: SecretReader,
   app: string,
   { kind, prefix }: Token,
-): Promise<string> {
-  const added = app !== DEFAULT_APP;
-  const whose = added ? `${app} app's ` : "";
+): Promise<string | null> {
+  const whose = app === DEFAULT_APP ? "" : `${app} app's `;
   const answer = (await reader.read(`Paste the ${whose}${kind} (${prefix}...): `))?.trim();
-  if (!answer) {
-    const forApp = added ? ` for the ${app} app` : "";
-    throw new BridgeRefusedError(`No ${kind} was given${forApp}, so toy-box-slack didn't start.`);
-  }
+  if (!answer) return null;
   if (!new RegExp(`^${prefix}[\\w-]+$`).test(answer)) {
     throw new BridgeRefusedError(
       `That isn't a ${kind}, which is one word starting with ${prefix}, so it wasn't saved.`,

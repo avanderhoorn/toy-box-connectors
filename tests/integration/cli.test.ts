@@ -162,6 +162,18 @@ test("refuses passphrase in a Copilot session before it reads or saves anything"
   expect(existsSync(join(home, ".toy-box-slack"))).toBe(false);
 });
 
+test("refuses add-app without a terminal, even when stdin holds both tokens", async () => {
+  const home = createTestFolder();
+
+  const tokens = "xoxb-releases\nxapp-releases\n";
+  expect(await runToyBoxSlack(["add-app", "releases"], { HOME: home }, tokens)).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr: "Only the owner at a terminal runs `add-app`.\n",
+  });
+  expect(existsSync(join(home, ".toy-box-slack"))).toBe(false);
+});
+
 test("refuses a session that doesn't lead a linked channel, with exit 1", async () => {
   const { home } = await startLinkedBridge();
   const stranger = { HOME: home, COPILOT_AGENT_SESSION_ID: "session-elsewhere" };

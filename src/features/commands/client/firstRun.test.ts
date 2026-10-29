@@ -10,10 +10,9 @@ import {
   type AppCredentials,
   type Credentials,
 } from "@bridge/server/environment";
-import { BridgeRefusedError } from "@bridge/server/refusal";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { askForMissingCredentials } from "./firstRun";
-import type { SecretReader } from "./passphrase";
+import { asksAppTokenOf, asksBotTokenOf, owner, refusalOf } from "./testFixtures";
 
 const BOT_TOKEN = "xoxb-1234-5678-AbCdEf";
 const APP_TOKEN = "xapp-1-A0123-4567-abcdef";
@@ -25,29 +24,6 @@ const ASKS_PASSPHRASE = [
   "Choose the owner's passphrase, which link, allow and resume ask for: ",
   "The new passphrase again: ",
 ];
-/** What `serve` asks for an added app's two tokens. */
-const asksBotTokenOf = (app: string) => `Paste the ${app} app's Slack bot token (xoxb-...): `;
-const asksAppTokenOf = (app: string) => `Paste the ${app} app's Slack app-level token (xapp-...): `;
-
-/** The owner at a terminal, answering each prompt with the next of `answers`, null for none. */
-function owner(...answers: (string | null)[]) {
-  const typing = {
-    asked: [] as string[],
-    opened: 0,
-    closed: 0,
-    reader: (): SecretReader => {
-      typing.opened++;
-      return {
-        read: async (prompt) => {
-          typing.asked.push(prompt);
-          return answers.shift() ?? null;
-        },
-        close: () => typing.closed++,
-      };
-    },
-  };
-  return typing;
-}
 
 /** A data folder as `serve` first finds it: missing, or holding just `credentials`. */
 function dataFolderWith(credentials: Credentials = {}): string {
@@ -69,17 +45,6 @@ function addedApp(dataFolder: string, name: string, credentials: AppCredentials 
     writeCredential(app.folder, setting as keyof AppCredentials, value);
   }
   return app;
-}
-
-/** The whole message `asking` refuses with. */
-async function refusalOf(asking: Promise<unknown>): Promise<string> {
-  try {
-    await asking;
-  } catch (error) {
-    if (error instanceof BridgeRefusedError) return error.message;
-    throw error;
-  }
-  throw new Error("Expected a refusal.");
 }
 
 test("asks a new data folder for both tokens and the passphrase, and saves them at mode 600", async () => {
