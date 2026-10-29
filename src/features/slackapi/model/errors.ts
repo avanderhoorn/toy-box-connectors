@@ -6,26 +6,20 @@ import type { ChannelSuspendReason } from "@links/model/audience";
 // the bot token itself no longer works, or that Slack is limiting the call, and every caller treats
 // those the same way.
 
-// The workspace is moving into an Enterprise org, so its tokens stop working until it's reset.
-const orgMigrations: ReadonlySet<string> = new Set(["team_added_to_org", "org_login_required"]);
-
 const authFailures: ReadonlySet<string> = new Set([
   "invalid_auth",
   "not_authed",
   "account_inactive",
   "token_revoked",
   "token_expired",
-  ...orgMigrations,
+  // The workspace is moving into an Enterprise org, so its tokens stop working until it's reset.
+  "team_added_to_org",
+  "org_login_required",
 ]);
 
 /** Whether `error` means Slack rejected the bot token, which puts the installation in auth_failed. */
 export function isAuthFailure(error: string): boolean {
   return authFailures.has(error);
-}
-
-/** Whether `error` means Slack rejects every token while the workspace moves into an Enterprise org. */
-export function isOrgMigration(error: string): boolean {
-  return orgMigrations.has(error);
 }
 
 // Besides a 429, Slack can limit a call with one of these in an ok:false body.

@@ -15,11 +15,7 @@ const callbackSchema = z.object({
   authorizations: z.array(authorizationSchema).nullish().describe("Receiving installation"),
   event: z.looseObject({ type: id.describe("Event type") }),
 });
-const rateLimitSchema = z.object({
-  type: z.literal("app_rate_limited"),
-  team_id: id.describe("Rate-limited workspace"),
-  api_app_id: id.describe("Rate-limited app"),
-});
+const rateLimitSchema = z.object({ type: z.literal("app_rate_limited") });
 const payloadSchema = z.discriminatedUnion("type", [callbackSchema, rateLimitSchema]);
 const headerSchema = z.object({
   type: id.describe("Socket frame type"),
@@ -46,7 +42,7 @@ export type SocketFrame =
   | { kind: "disconnect"; reason: string | null }
   | { kind: "event"; envelopeId: string; callback: EventCallback }
   | { kind: "rate_limited"; envelopeId: string | null }
-  | { kind: "other"; type: string; envelopeId: string | null }
+  | { kind: "other"; envelopeId: string | null }
   | { kind: "malformed"; envelopeId: string | null; issues: string[] };
 
 /** Raw frames bypass SDK dispatch, which cannot handle Slack's top-level app_rate_limited. */
@@ -74,12 +70,11 @@ export function readFrame(raw: string): SocketFrame {
       : malformed(envelopeId, issuesOf(reason.error));
   }
   if (!["events_api", "app_rate_limited"].includes(header.type))
-    return { kind: "other", type: header.type, envelopeId };
+    return { kind: "other", envelopeId };
   const payload = payloadSchema.safeParse(
     header.type === "app_rate_limited" ? value : header.payload,
   );
   if (!payload.success) return malformed(envelopeId, issuesOf(payload.error));
-  if (header.type === "events_api" && !envelopeId) return malformed(null, ["missing_envelope_id"]);
   const event = payload.data;
   if (event.type === "app_rate_limited") return { kind: "rate_limited", envelopeId };
   if (!envelopeId) return malformed(null, ["missing_envelope_id"]);

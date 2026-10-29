@@ -18,7 +18,7 @@ test("event decoding retains lifecycle targets and never repeats malformed conte
   });
   expect(result).toMatchObject({ kind: "malformed", channelId: "C1" });
   expect(JSON.stringify(result)).not.toContain("private content");
-  expect(readSlackEvent({ type: "toString" })).toEqual({ kind: "other", type: "toString" });
+  expect(readSlackEvent({ type: "toString" })).toEqual({ kind: "other" });
 });
 
 test("Enterprise routing distinguishes missing, empty and foreign authorization lists", () => {

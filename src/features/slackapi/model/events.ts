@@ -11,7 +11,7 @@ export type SlackEvent =
   | { kind: "channel_id_changed"; oldChannelId: string; newChannelId: string }
   | { kind: "uninstalled" }
   | { kind: "tokens_revoked"; botUserIds: string[] }
-  | { kind: "other"; type: string }
+  | { kind: "other" }
   | { kind: "malformed"; issues: string[]; channelId: string | null };
 export type RoutingIdentity = Pick<Installation, "appId" | "teamId" | "botUserId" | "enterpriseId">;
 
@@ -42,7 +42,7 @@ export const handledEventTypes: ReadonlySet<string> = new Set([
 
 export function readSlackEvent(event: EventCallback["event"]): SlackEvent {
   const channelChange = channelChanges[event.type];
-  if (!handledEventTypes.has(event.type)) return { kind: "other", type: event.type };
+  if (!handledEventTypes.has(event.type)) return { kind: "other" };
   try {
     if (event.type === "message")
       return { kind: "message", payload: slackMessageEventSchema.parse(event) };

@@ -13,14 +13,13 @@ export type SocketOpening =
   | { kind: "dropped"; detail: string };
 export type SlackSocket = {
   opened: Promise<SocketOpening>;
-  closed: Promise<number>;
+  closed: Promise<void>;
   ack(envelopeId: string): void;
   close(): void;
 };
 export type SlackSocketOptions = {
   onFrame: (frame: SocketFrame, arrivedAt: number) => void;
   slackApiUrl?: string;
-  timeoutMs?: number;
   helloTimeoutMs?: number;
   pingTimeoutMs?: number;
   now?: () => number;
@@ -32,14 +31,13 @@ export function openSlackSocket(
   {
     onFrame,
     slackApiUrl,
-    timeoutMs,
     helloTimeoutMs = 30_000,
     pingTimeoutMs,
     now = () => Date.now(),
   }: SlackSocketOptions,
 ): SlackSocket {
   const opened = Promise.withResolvers<SocketOpening>();
-  const closed = Promise.withResolvers<number>();
+  const closed = Promise.withResolvers<void>();
   let closing = false;
   let helloTimer: ReturnType<typeof setTimeout> | undefined;
   const settle = (result: SocketOpening) => {
@@ -52,7 +50,7 @@ export function openSlackSocket(
       autoReconnectEnabled: false,
       clientPingTimeout: pingTimeoutMs,
       logger: silentLogger,
-      clientOptions: oneAttemptOptions({ slackApiUrl, timeoutMs }),
+      clientOptions: oneAttemptOptions({ slackApiUrl }),
     },
     (raw) => {
       if (closing) return;
@@ -84,7 +82,7 @@ export function openSlackSocket(
             },
           },
     );
-    closed.resolve(now());
+    closed.resolve();
   });
   function close() {
     if (closing) return;
