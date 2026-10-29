@@ -1,8 +1,22 @@
 import { expect, test } from "bun:test";
-import { resolveCaller, type CallerFacts, type CallerRole } from "./callers";
+import { resolveCaller, resolveSessionId, type CallerFacts, type CallerRole } from "./callers";
 
 const LINKED = new Set(["toybox-link", "toybox-other"]);
 const ANYONE: CallerRole[] = ["lead", "terminal"];
+
+test.each<[string, NodeJS.ProcessEnv, string | null]>([
+  ["a session", { COPILOT_AGENT_SESSION_ID: "toybox-link" }, "toybox-link"],
+  [
+    "a session with spaces around it",
+    { COPILOT_AGENT_SESSION_ID: " toybox-link\n" },
+    "toybox-link",
+  ],
+  ["no session", {}, null],
+  ["an empty session", { COPILOT_AGENT_SESSION_ID: "" }, null],
+  ["a blank session", { COPILOT_AGENT_SESSION_ID: " " }, null],
+])("reads %s from the environment", (_, env, sessionId) => {
+  expect(resolveSessionId(env)).toBe(sessionId);
+});
 
 test.each<[string, CallerFacts, string | null]>([
   ["a linked channel's lead", { sessionId: "toybox-link", channelId: null }, "toybox-link"],

@@ -8,6 +8,7 @@ import { z } from "zod";
 import { resolveDataFolder } from "@bridge/server/dataFolder";
 import { commandSocketPath } from "@bridge/server/socket";
 import { commands, optionName, type CommandSpec } from "@commands/model";
+import { resolveSessionId } from "@commands/model/callers";
 import {
   COMMAND_TIMEOUT,
   COMMANDS_PATH,
@@ -51,7 +52,7 @@ export async function callBridge(
   { channelId = null, env = process.env, home = homedir(), owner }: CallOptions = {},
 ): Promise<CallOutcome> {
   const dataFolder = resolveDataFolder(env, home);
-  const sessionId = env.COPILOT_AGENT_SESSION_ID?.trim() || null;
+  const sessionId = resolveSessionId(env);
   const call: CommandCall = { caller: { sessionId, channelId }, input, owner };
   let response: Response;
   try {

@@ -128,14 +128,14 @@ test("allow shows who it adds and takes the owner's passphrase on stdin, as set 
   expect(await allow("first\n")).toEqual({
     exitCode: 1,
     stdout: "",
-    stderr: `${shown}No passphrase is set, so nothing can widen access. Run \`toy-box-slack passphrase\` at a terminal first.\n`,
+    stderr: `${shown}No passphrase is set, so nothing can widen access. The owner sets one with \`toy-box-slack passphrase\` at their own terminal.\n`,
   });
   expect(await passphrase("first\nfirst\n")).toEqual({
     exitCode: 0,
     stdout: "Set the owner's passphrase.\n",
     stderr: "",
   });
-  // Changing it needs the old one, so a lead that runs passphrase can't replace it.
+  // Changing it needs the old one, even at a terminal.
   expect(await passphrase("guess\nmine\nmine\n")).toMatchObject({ exitCode: 1 });
   expect(await passphrase("first\nsecond\nsecond\n")).toMatchObject({ exitCode: 0 });
   expect(await allow("first\n")).toEqual({
@@ -149,6 +149,18 @@ test("allow shows who it adds and takes the owner's passphrase on stdin, as set 
     stderr: shown,
   });
 }, 15_000);
+
+test("refuses passphrase in a Copilot session before it reads or saves anything", async () => {
+  const home = createTestFolder();
+  const lead = { HOME: home, COPILOT_AGENT_SESSION_ID: "toybox-link" };
+
+  expect(await runToyBoxSlack(["passphrase"], lead, "chosen\nchosen\n")).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr: "Only the owner at a terminal runs `passphrase`.\n",
+  });
+  expect(existsSync(join(home, ".toy-box-slack"))).toBe(false);
+});
 
 test("refuses a session that doesn't lead a linked channel, with exit 1", async () => {
   const { home } = await startLinkedBridge();

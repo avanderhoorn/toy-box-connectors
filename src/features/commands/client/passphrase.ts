@@ -7,6 +7,7 @@ import { Writable } from "node:stream";
 import { prepareDataFolder } from "@bridge/server/dataFolder";
 import { readCredentialsFile, writeCredential } from "@bridge/server/environment";
 import { BridgeRefusedError } from "@bridge/server/refusal";
+import { resolveSessionId } from "@commands/model/callers";
 
 /** Reads what the owner types a line at a time without showing it. */
 export interface SecretReader {
@@ -42,6 +43,10 @@ export function secretReader(): SecretReader {
 
 /** Sets the owner's passphrase, or changes it given the old one, and returns the exit code. */
 export async function setPassphrase(dataFolder: string): Promise<number> {
+  // A lead told that no passphrase is set would otherwise choose one, then widen access with it.
+  if (resolveSessionId(process.env) !== null) {
+    return refused("Only the owner at a terminal runs `passphrase`.");
+  }
   const reader = secretReader();
   try {
     prepareDataFolder(dataFolder);

@@ -4,7 +4,7 @@
 import { CommandRefusedError, type CommandAnswer } from "@commands/model/protocol";
 
 const NO_PASSPHRASE =
-  "No passphrase is set, so nothing can widen access. Run `toy-box-slack passphrase` at a terminal first.";
+  "No passphrase is set, so nothing can widen access. The owner sets one with `toy-box-slack passphrase` at their own terminal.";
 
 /** Refuses `passphrase` unless it's the owner's, given their passphrase's argon2id `hash`. */
 export async function checkOwner(passphrase: string, hash: string | null): Promise<void> {

@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { forgetOldMessages } from "@activity/server/ledger";
 import { askForMissingCredentials } from "@commands/client/firstRun";
 import { installSkill } from "@commands/client/skill";
+import { resolveSessionId } from "@commands/model/callers";
 import { unconfiguredSlack, type SlackState } from "@commands/model/status";
 import { activityCommand, markReadCommand } from "@commands/server/activity";
 import { dismissCommand } from "@commands/server/dismiss";
@@ -57,7 +58,7 @@ export async function serveBridge(): Promise<number> {
   try {
     const dataFolder = resolveDataFolder();
     // Only the owner answers these, never a lead, whose shell can be a terminal too.
-    if (process.stdin.isTTY && !process.env.COPILOT_AGENT_SESSION_ID) {
+    if (process.stdin.isTTY && resolveSessionId(process.env) === null) {
       const saved = await askForMissingCredentials(dataFolder, process.env);
       if (saved) console.error(saved);
     }

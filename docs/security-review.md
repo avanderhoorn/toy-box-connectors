@@ -88,10 +88,13 @@ argon2id hash in `credentials.env`, read afresh at every check, and recomputes
 the preview inside its write transaction. A changed preview is refused.
 Every `link` asks, including a narrowing change. There is no lockout.
 `serve` asks for the first passphrase at a terminal, never without one or in a
-lead's shell. `passphrase` changes the hash locally, with the old passphrase,
-while the bridge may keep running. A forgotten one requires removing its hash
-line and setting it again. Never put the passphrase in Toy Box or Slack. Caller
-roles alone cannot authorize widening, and there are no Slack approval buttons.
+lead's shell, and `passphrase` refuses to run in any Copilot session. Like
+every caller role, that stops a lead's mistakes, not a process that unsets the
+session variable. `passphrase` changes the hash locally, with the old
+passphrase, while the bridge may keep running. A forgotten one requires
+removing its hash line and setting it again. Never put the passphrase in Toy
+Box or Slack. Caller roles alone cannot authorize widening, and there are no
+Slack approval buttons.
 
 Only a linked channel's lead can reply or publish. A terminal can inspect
 status but cannot answer as the lead. Member sessions are refused, including

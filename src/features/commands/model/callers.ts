@@ -15,6 +15,11 @@ export const callerFactsSchema = z
   .strict();
 export type CallerFacts = z.output<typeof callerFactsSchema>;
 
+/** The session COPILOT_AGENT_SESSION_ID names in `env`, or null for someone at a terminal. */
+export function resolveSessionId(env: NodeJS.ProcessEnv): string | null {
+  return env.COPILOT_AGENT_SESSION_ID?.trim() || null;
+}
+
 export type CallerRole = "lead" | "terminal";
 
 const runners: Record<CallerRole, string> = {
