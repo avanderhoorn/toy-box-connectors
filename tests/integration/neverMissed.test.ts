@@ -104,6 +104,23 @@ test("what Slack kept while the bridge was down reaches the lead once it's back,
   expect(stored).toEqual([askedTs, repliedTs, missedTs, followedTs].map((ts) => ({ ts })));
 }, 15_000);
 
+test("catching up finds the bot was removed while the bridge was down and suspends the link", async () => {
+  const { slack, channelId, status, crash, stop, saying } = await connectedBridge();
+  await waitFor(() =>
+    expect(slack.calls.filter(({ method }) => method === "conversations.history")).toHaveLength(1),
+  );
+  await crash(async () => slack.addChannel({ id: "C-link", is_private: true, is_member: false }));
+
+  await waitFor(
+    async () =>
+      expect(await status(channelId)).toMatchObject({
+        json: { links: [{ status: "suspended", statusReason: "bot_removed" }] },
+      }),
+    5_000,
+  );
+  expect(await stop()).toEqual({ code: 0, stderr: saying() });
+}, 15_000);
+
 test("catching up waits out a rate limit, and stores a channel only once it has read all of it", async () => {
   const { slack, toyBox, inbox, status, stop, saying } = await connectedBridge({
     wakes: { debounce: 50, debounceLimit: 200, retry: 1_000, retryLimit: 1_000 },
