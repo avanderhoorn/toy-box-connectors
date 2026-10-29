@@ -6,3 +6,7 @@ node_modules
 .env
 .env.*
 !.env.example
+credentials.env
+
+# Slack text, should TOY_BOX_SLACK_HOME ever name a folder inside the checkout
+bridge.db*
