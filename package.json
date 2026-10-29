@@ -1,27 +1,42 @@
 {
-  "name": "toy-box-slack",
+  "name": "@avanderhoorn/toy-box-slack",
   "version": "0.1.0",
-  "private": true,
   "description": "Let a Toy Box channel's lead watch and answer a Slack channel",
-  "bin": {
-    "toy-box-slack": "cli/index.ts"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/avanderhoorn/toy-box-connectors.git"
   },
+  "bin": {
+    "toy-box-slack": "toy-box-slack"
+  },
+  "files": [
+    "toy-box-slack",
+    "toy-box-slack-darwin-arm64"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "bun build cli/index.ts --compile --minify --target=bun-darwin-arm64 --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile toy-box-slack-darwin-arm64",
     "check": "bun fmt --check && oxlint && bun check",
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true"
   },
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
     "@slack/socket-mode": "3.1.0",
     "@slack/web-api": "8.2.0",
+    "bun-types": "^1.4.4",
     "citty": "^0.2.2",
     "cron-parser": "^5.10.2",
-    "zod": "^4.6.7"
-  },
-  "devDependencies": {
-    "bun-types": "^1.4.4",
     "oxlint": "^1.90.0",
-    "oxlint-tsgolint": "^7.0.2005"
+    "oxlint-tsgolint": "^7.0.2005",
+    "zod": "^4.6.7"
   }
 }

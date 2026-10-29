@@ -8,12 +8,12 @@ No DMs, attachments, Slack Connect, org-wide installs, rotating tokens or non-Co
 
 ## Before you start
 
-On a Mac, install [Git](https://git-scm.com/download/mac), [Node 24](https://nodejs.org/en/download) and [Bun](https://bun.com/docs/installation) (tested with 1.4.4). With the Mac's default zsh, put `~/.local/bin` and `~/.bun/bin` on your PATH, then install Copilot and Toy Box:
+On an Apple silicon Mac, install [Node 24](https://nodejs.org/en/download). With the Mac's default zsh, put `~/.local/bin` on your PATH, then install Copilot, Toy Box and toy-box-slack:
 
 ```sh
-export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
-printf '%s\n' 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"' >> "$HOME/.zshrc"
-npm install --global --prefix "$HOME/.local" @github/copilot @lostintangent/toy-box
+export PATH="$HOME/.local/bin:$PATH"
+printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+npm install --global --prefix "$HOME/.local" @github/copilot @lostintangent/toy-box @avanderhoorn/toy-box-slack
 ```
 
 Run `copilot`, use `/login` to sign in, then exit. Start Toy Box **from this PATH**, so its leads can find `toy-box-slack`:
@@ -26,21 +26,13 @@ Toy Box has no authentication. Never expose it publicly or through a tunnel.
 
 ## Set up
 
-Toy Box keeps its terminal, so use another for these four steps.
+Toy Box keeps its terminal, so use another for these three steps.
 
 1. **Create the Slack app.** At <https://api.slack.com/apps>, choose **Create New App > From a manifest**, choose the approved workspace, and paste [docs/manifest.yaml](docs/manifest.yaml). Review the eight bot scopes and create the app. Install it to that workspace from **OAuth & Permissions**, which then shows its **Bot User OAuth Token** (`xoxb-...`). Under **Basic Information > App-Level Tokens**, generate an app-level token (`xapp-...`) with `connections:write`. The manifest already enables Socket Mode, so no public Request URL is needed. Do not enable token rotation.
 
-2. **Install the CLI.** From a Git checkout of this repository, run:
+2. **Start the bridge.** Run `toy-box-slack serve` and keep it running. The first time, it asks for both tokens and for a passphrase you choose, typed twice. Paste the tokens only there, never into Toy Box, Slack or the repository. Nothing you type is shown. `link`, `allow` and `resume` ask for the passphrase before they widen who can make the lead act, so make it strong and unique, and never put it in Toy Box or Slack. Each time it starts, `serve` installs the skill leads learn the CLI from, and names the file.
 
-   ```sh
-   bun install && bun link
-   ```
-
-   This puts `toy-box-slack` in `~/.bun/bin`, pointing at the checkout, so keep the checkout in place.
-
-3. **Start the bridge.** Run `toy-box-slack serve` and keep it running. The first time, it asks for both tokens and for a passphrase you choose, typed twice. Paste the tokens only there, never into Toy Box, Slack or the repository. Nothing you type is shown. `link`, `allow` and `resume` ask for the passphrase before they widen who can make the lead act, so make it strong and unique, and never put it in Toy Box or Slack. Each time it starts, `serve` installs the skill leads learn the CLI from, and names the file.
-
-4. **Link the channels.** Invite the app into the Slack channel with `/invite` and select **Toy Box**. Open <http://127.0.0.1:3000> and create a channel with a Copilot lead (tested with `claude-sonnet-5`). To use a lead that was already running instead, ask it to read the file `serve` named, since Copilot reads skills when a lead's session starts or resumes. Copy the Slack channel ID from the bottom of its details and the allowed people's member IDs from their profiles, then ask the lead to set up Slack for those IDs. It creates its inbox routine and prints the exact `link` and `allow` commands. Run them yourself in another terminal, and review each preview before you enter the passphrase. Their forms are:
+3. **Link the channels.** Invite the app into the Slack channel with `/invite` and select **Toy Box**. Open <http://127.0.0.1:3000> and create a channel with a Copilot lead (tested with `claude-sonnet-5`). To use a lead that was already running instead, ask it to read the file `serve` named, since Copilot reads skills when a lead's session starts or resumes. Copy the Slack channel ID from the bottom of its details and the allowed people's member IDs from their profiles, then ask the lead to set up Slack for those IDs. It creates its inbox routine and prints the exact `link` and `allow` commands. Run them yourself in another terminal, and review each preview before you enter the passphrase. Their forms are:
 
    ```sh
    toy-box-slack link --channel TOYBOX_ID --slack-channel SLACK_ID
@@ -59,12 +51,28 @@ People tell leads apart by the bot they mention, so leads in the same Slack chan
 
 The bridge answers only while `serve` runs. Ctrl-C stops it. When `serve` runs again, it catches up on what it missed, within the [limits](docs/operations.md#deletion-and-limits) of catch-up. To start it at login instead, see [operations](docs/operations.md#start-the-bridge-at-login).
 
-`serve` keeps the tokens and the passphrase's hash in `~/.toy-box-slack/credentials.env`, which only you can read. The bridge reads this file, not a checkout `.env`, and environment variables of the same names override it. `TOY_BOX_SLACK_HOME` selects another data folder, and `TOY_BOX_URL` a Toy Box other than <http://127.0.0.1:3000>. `toy-box-slack passphrase` changes the passphrase, given the old one, without a restart.
+`serve` keeps the tokens and the passphrase's hash in `~/.toy-box-slack/credentials.env`, which only you can read. The bridge reads this file, not a `.env`, and environment variables of the same names override it. `TOY_BOX_SLACK_HOME` selects another data folder, and `TOY_BOX_URL` a Toy Box other than <http://127.0.0.1:3000>. `toy-box-slack passphrase` changes the passphrase, given the old one, without a restart.
 
-## Commands and development
+To update, run `npm install --global --prefix "$HOME/.local" @avanderhoorn/toy-box-slack` again, then restart `serve`, or the [login job](docs/operations.md#start-the-bridge-at-login) that runs it. `serve` installs the new release's skill, so ask your leads to set their routines again from it, since a routine keeps the prompt it was created with.
+
+## Commands
 
 **Lead:** `inbox`, `reply`, `dismiss`, `activity`, `mark-read`, `publish`, `retract`. **Owner:** `passphrase`, `add-app`, `link`, `allow`, `resume`. **Lead or terminal:** `status`, `deny`, `pause`, `unlink`. **Operator:** `serve`.
 
 `toy-box-slack <command> --help` gives flags. See [operations](docs/operations.md) for status, pauses, uncertain posts, deletion and starting at login, [AGENTS.md](AGENTS.md) for architecture, and [research](docs/research) for evidence.
 
-Run `bun run check` and `bun test`. `bun install` enables the pre-commit hook in `.githooks`.
+## Developing
+
+1. Install [Bun](https://bun.com/docs/installation) 1.4.4, which CI builds with, and clone this repo
+1. Run `bun install`, which also points Git at the pre-commit hook
+1. Run `bun run check` and `bun test`, which CI runs on every push and pull request
+
+`./cli/index.ts` runs the CLI from source. `bun run build` compiles the binary the npm package ships, and `./toy-box-slack` runs it as npm installs it.
+
+## Publishing
+
+Update `package.json` to the next stable version and keep its release notes under a matching `## 📅 vX.Y.Z (date)` heading in `CHANGELOG.md`. Commit and push those changes, then select **Actions → Publish → Run workflow** on the branch to release.
+
+The workflow reads the version and notes from that exact commit, rejects an already published npm version, runs checks and tests, and builds the Apple silicon macOS CLI. It publishes the tested package through npm trusted publishing, then creates the matching GitHub tag and release with the changelog notes and npm tarball attached. No npm token or separately entered release version is needed.
+
+If a run fails before npm publication, fix the failure and rerun. If npm succeeds but GitHub release creation fails, recover the tarball from npm with `npm pack @avanderhoorn/toy-box-slack@X.Y.Z --ignore-scripts`, verify its registry integrity, and use that tarball and the original commit's changelog notes to finish the GitHub release manually. Do not rebuild or republish the same npm version.

@@ -207,7 +207,7 @@ The bridge answers only while it runs, and catch-up recovers what it missed
 while stopped, within the limits above, so starting it at login is optional.
 A login job has no terminal and never asks for anything, so set up with
 `serve` at a terminal first, as the README describes, then stop it with
-Ctrl-C. From the checkout, generate a per-user
+Ctrl-C. Then generate a per-user
 [launchd](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html)
 job:
 
@@ -218,10 +218,8 @@ cat > "$HOME/Library/LaunchAgents/local.toy-box-slack.plist" <<EOF
 <plist version="1.0"><dict>
   <key>Label</key><string>local.toy-box-slack</string>
   <key>ProgramArguments</key><array>
-    <string>$(command -v bun)</string><string>--no-env-file</string>
-    <string>$PWD/cli/index.ts</string><string>serve</string>
+    <string>$(command -v toy-box-slack)</string><string>serve</string>
   </array>
-  <key>WorkingDirectory</key><string>$PWD</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>$HOME/.toy-box-slack/bridge.log</string>
@@ -233,7 +231,7 @@ launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/local.toy-box-sla
 ```
 
 This expands absolute paths now because launchd does not expand `~` or shell
-variables. Keep the checkout in place. The job starts at login, not before
+variables. The job starts at login, not before
 login, and does not start Toy Box. Keep Toy Box running separately. The job
 starts the bridge again whenever it stops, including after a storage error.
 It logs to `~/.toy-box-slack/bridge.log`, which grows until you rotate it.
@@ -242,5 +240,5 @@ Stop the job with `launchctl bootout "gui/$(id -u)/local.toy-box-slack"`.
 Only one bridge runs for a data folder, so while the job runs, `serve` at a
 terminal asks for any app's token missing from its `credentials.env`, saves
 it, and stops without starting another. Restart the job to read the new token,
-or to start an app `add-app` added, with
+to start an app `add-app` added, or to run a release you installed, with
 `launchctl kickstart -k "gui/$(id -u)/local.toy-box-slack"`.

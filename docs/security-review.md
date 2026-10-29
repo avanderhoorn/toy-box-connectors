@@ -120,8 +120,8 @@ One owner on one Mac is the trust model. The data folder must be 0700,
 `credentials.env` must not be group/world accessible (use 0600), and the socket
 is 0600. The database, WAL and lock need not individually be 0600 because
 the folder protects them. Token and URL environment variables override the
-credential file; the owner hash is read only from that file. Checkout `.env`
-files are not loaded.
+credential file; the owner hash is read only from that file. The published CLI
+loads no `.env` or `bunfig.toml` from the folder it runs in.
 
 `serve` reads a missing token only at the owner's terminal, without echo, and
 saves it only in `credentials.env`. Tokens then stay in the bridge's normal
