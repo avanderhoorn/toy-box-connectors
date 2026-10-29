@@ -32,9 +32,9 @@ export function replyCommand({
   wakes,
   outbox,
 }: ReplyCommandOptions): CommandHandler<"reply"> {
-  return async ({ request: id, text }, { caller, at }) => {
+  return async ({ request: id, text }, { channelId, at }) => {
     const post = await database.write(async (transaction) => {
-      const link = await readCallerLink(transaction, caller);
+      const link = await readCallerLink(transaction, channelId);
       await readLinkRequest(transaction, link, id);
       return outboxRefusal(`r${id} wasn't answered.`, SEE_INBOX, () =>
         queueReply(transaction, { requestId: id, text }, at),
@@ -62,8 +62,8 @@ export function publishCommand({
   routines,
   outbox,
 }: PublishCommandOptions): CommandHandler<"publish"> {
-  return async ({ series, text }, { caller, at }) => {
-    const link = await database.read((sql) => readCallerLink(sql, caller));
+  return async ({ series, text }, { channelId, at }) => {
+    const link = await database.read((sql) => readCallerLink(sql, channelId));
     const command = `${PUBLISH_COMMAND} ${series}`;
     const routine = findRoutine((await routines(link.toyBoxChannelId)) ?? [], command);
     if (!routine) {
@@ -97,8 +97,8 @@ export function retractCommand({
   database,
   bot,
 }: RetractCommandOptions): CommandHandler<"retract"> {
-  return async ({ post: number }, { caller, at }) => {
-    const link = await database.read((sql) => readCallerLink(sql, caller));
+  return async ({ post: number }, { channelId, at }) => {
+    const link = await database.read((sql) => readCallerLink(sql, channelId));
     const didnt = `o${number} wasn't deleted.`;
     if (bot === null) throw new CommandRefusedError(`${didnt} Slack isn't active.`);
     await outboxRefusal(didnt, "", () => retractPost(database, bot, link.id, number, at));

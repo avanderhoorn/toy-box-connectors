@@ -6,7 +6,7 @@ import { saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { inboxCommand } from "./inbox";
 
-const LEAD = { role: "lead", channelId: "toybox-link" } as const;
+const LEAD = { channelId: "toybox-link" };
 
 /** The request asked at the root of a thread of its own. */
 function askedAt(thread: number) {
@@ -40,8 +40,8 @@ test("shows changed requests first, up to its limit, and marks only those it sho
     acknowledge: (requests) => acknowledged.push(requests.map(({ sourceTs }) => sourceTs)),
   });
 
-  const first = await inbox({ limit: 1 }, { caller: LEAD, at: 1_000 });
-  const second = await inbox({ limit: 10 }, { caller: LEAD, at: 2_000 });
+  const first = await inbox({ limit: 1 }, { ...LEAD, at: 1_000 });
+  const second = await inbox({ limit: 10 }, { ...LEAD, at: 2_000 });
 
   expect(first.result).toMatchObject({ requests: [{ id: 3 }], more: 2 });
   // The open request stayed unread until an inbox showed it.

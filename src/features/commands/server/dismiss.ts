@@ -18,9 +18,9 @@ export function dismissCommand({
   database,
   wakes,
 }: DismissCommandOptions): CommandHandler<"dismiss"> {
-  return async ({ request: id, reason }, { caller }) => {
+  return async ({ request: id, reason }, { channelId }) => {
     await database.write(async (transaction) => {
-      const link = await readCallerLink(transaction, caller);
+      const link = await readCallerLink(transaction, channelId);
       const request = await readLinkRequest(transaction, link, id);
       try {
         await saveRequest(transaction, dismissRequest(request, reason));

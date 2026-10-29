@@ -7,7 +7,7 @@ import { createStoredRequest } from "@requests/server/testFixtures";
 import { publishCommand, replyCommand, retractCommand } from "./posts";
 import { refusal } from "./testFixtures";
 
-const LEAD = { role: "lead", channelId: "toybox-link" } as const;
+const LEAD = { channelId: "toybox-link" };
 
 test("reply queues one answer in a request's thread, and refuses a second or another channel's request", async () => {
   const { database, now } = await createOutboxWorld();
@@ -16,7 +16,7 @@ test("reply queues one answer in a request's thread, and refuses a second or ano
   const wakes = { reconsider: mock(() => {}) };
   const outbox = { poke: mock(() => {}) };
   const reply = replyCommand({ database, wakes, outbox });
-  const lead = { caller: LEAD, at: now() };
+  const lead = { ...LEAD, at: now() };
 
   expect(await reply({ request: 1, text: "It's **fixed**." }, lead)).toEqual({
     result: { request: "r1", post: "o1", state: "queued" },
@@ -54,12 +54,12 @@ test("publish posts once for the latest scheduled run of the routine that runs i
   const run = `the run of "Release notes" scheduled ${clockTime(friday)}`;
 
   expect(
-    await publish({ series: "notes", text: "# Notes" }, { caller: LEAD, at: friday + 60_000 }),
+    await publish({ series: "notes", text: "# Notes" }, { ...LEAD, at: friday + 60_000 }),
   ).toEqual({
     result: { post: "o1", series: "notes", scheduledAt: friday, state: "queued" },
     text: `Queued o1 in #C-link for ${run}.`,
   });
-  const saturday = { caller: LEAD, at: new Date(2026, 9, 31, 9, 0).getTime() };
+  const saturday = { ...LEAD, at: new Date(2026, 9, 31, 9, 0).getTime() };
   expect(await refusal(publish({ series: "notes", text: "# Again" }, saturday))).toBe(
     `Nothing posted for ${run}. This publication slot is already reserved by o1 (queued).`,
   );
@@ -73,7 +73,7 @@ test("retract deletes the lead's post from Slack, and says why when it can't", a
   const world = await createOutboxWorld();
   const { id } = await world.queue();
   await world.post(id);
-  const lead = { caller: LEAD, at: world.now() };
+  const lead = { ...LEAD, at: world.now() };
   const retract = retractCommand({ database: world.database, bot: world.bot });
 
   const offline = retractCommand({ database: world.database, bot: null });

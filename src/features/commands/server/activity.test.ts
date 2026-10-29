@@ -6,7 +6,7 @@ import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtu
 import { activityCommand, markReadCommand } from "./activity";
 import { refusal } from "./testFixtures";
 
-const LEAD = { caller: { role: "lead", channelId: "toybox-link" }, at: 1_700_007_300_000 } as const;
+const LEAD = { channelId: "toybox-link", at: 1_700_007_300_000 };
 
 test("serves the messages that changed after the cursor a page at a time, and marks read only what it served", async () => {
   const database = await openTestDatabase();

@@ -23,9 +23,9 @@ export function activityCommand({
   database,
   workspaceUrl,
 }: ActivityCommandOptions): CommandHandler<"activity"> {
-  return async ({ limit }, { caller, at }) => {
+  return async ({ limit }, { channelId, at }) => {
     const activity = await database.write(async (transaction): Promise<Activity> => {
-      const link = await readCallerLink(transaction, caller);
+      const link = await readCallerLink(transaction, channelId);
       // A message shows once, as its latest change left it. One the bridge keeps no text for never
       // shows, and mark-read passes it with the rest.
       const unread = await transaction<ChangedMessage[]>`
@@ -68,9 +68,9 @@ export function activityCommand({
 export function markReadCommand({
   database,
 }: Pick<ActivityCommandOptions, "database">): CommandHandler<"mark-read"> {
-  return async ({ through }, { caller }) => {
+  return async ({ through }, { channelId }) => {
     const marked = await database.write(async (transaction) => {
-      const link = await readCallerLink(transaction, caller);
+      const link = await readCallerLink(transaction, channelId);
       const [cursor] = await transaction<{ through: number }[]>`
         UPDATE cursors SET through_seq = max(through_seq, ${through})
         WHERE link_id = ${link.id} AND served_through_seq >= ${through}

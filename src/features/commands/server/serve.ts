@@ -5,7 +5,7 @@
 import type { z } from "zod";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { commands, inputProblem, type CommandName, type CommandSpec } from "@commands/model";
-import { resolveCaller, type Caller } from "@commands/model/callers";
+import { resolveCaller } from "@commands/model/callers";
 import {
   COMMANDS_PATH,
   commandCallSchema,
@@ -19,7 +19,8 @@ const ANOTHER_RELEASE =
 
 /** What a command learns about its call besides its input. */
 export type CommandContext = {
-  caller: Caller;
+  /** The Toy Box channel the caller acts for, or null for a terminal that named none. */
+  channelId: string | null;
   /** When the bridge took the call. Commands read the time from here. */
   at: number;
   /** The change the owner confirmed with their passphrase, by the name the bridge gave it. */
@@ -70,7 +71,7 @@ export function serveCommands(
       if (owner) await checkOwner(owner.passphrase, ownerHash());
       // The schema that parsed the input is the one the handler's type reads.
       const handler = handlers[name as CommandName] as CommandHandler<CommandName>;
-      const context = { caller: resolved.caller, at: now(), confirmed: owner?.confirms };
+      const context = { channelId: resolved.channelId, at: now(), confirmed: owner?.confirms };
       return Response.json(await handler(input.data as never, context));
     } catch (error) {
       if (error instanceof CommandRefusedError) return answerError(409, error.message);

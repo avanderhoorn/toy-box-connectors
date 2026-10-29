@@ -34,9 +34,9 @@ export function statusCommand({
   workspaceUrl,
   timings = defaultWakeTimings,
 }: StatusCommandOptions): CommandHandler<"status"> {
-  return async (_input, { caller, at }) => {
+  return async (_input, { channelId, at }) => {
     const links = await database.read(async (sql) => {
-      const only = caller.channelId === null ? null : (await readCallerLink(sql, caller)).id;
+      const only = channelId === null ? null : (await readCallerLink(sql, channelId)).id;
       const stored = await sql<StoredLink[]>`
         SELECT id, toybox_channel_id AS toyBoxChannelId, slack_channel_id AS slackChannelId,
           status, status_reason AS statusReason, request_mode AS requestMode, observe

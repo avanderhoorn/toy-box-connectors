@@ -22,11 +22,12 @@ const runners: Record<CallerRole, string> = {
   terminal: "the owner at a terminal",
 };
 
-/** Who the bridge acts for. A terminal acts for the channel --channel names, or for none. */
-export type Caller = { role: CallerRole; channelId: string | null };
-
+/**
+ * The Toy Box channel the bridge acts for, or why it won't. A terminal acts for the channel
+ * --channel names, or for none.
+ */
 export type CallerResolution =
-  | { kind: "caller"; caller: Caller }
+  | { kind: "caller"; channelId: string | null }
   | { kind: "refused"; message: string };
 
 /** Who `facts` describe, when `linked` holds every linked Toy Box channel, if they may run `name`. */
@@ -55,5 +56,5 @@ export function resolveCaller(
     const allowed = callers.map((runner) => runners[runner]).join(" or ");
     return { kind: "refused", message: `Only ${allowed} runs \`${name}\`.` };
   }
-  return { kind: "caller", caller: { role, channelId: sessionId ?? channelId } };
+  return { kind: "caller", channelId: sessionId ?? channelId };
 }

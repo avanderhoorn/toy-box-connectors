@@ -49,10 +49,10 @@ export function inboxCommand({
   workspaceUrl,
   acknowledge,
 }: InboxCommandOptions): CommandHandler<"inbox"> {
-  return async ({ limit }, { caller, at }) => {
+  return async ({ limit }, { channelId, at }) => {
     const seen: StoredRequest[] = [];
     const inbox = await database.write(async (transaction): Promise<Inbox> => {
-      const link = await readCallerLink(transaction, caller);
+      const link = await readCallerLink(transaction, channelId);
       const waiting = inboxOrder(await readActiveRequests(transaction, link.id));
       const requests: InboxRequest[] = [];
       for (const request of waiting.slice(0, limit)) {

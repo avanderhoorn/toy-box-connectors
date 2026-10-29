@@ -4,26 +4,17 @@ import { resolveCaller, type CallerFacts, type CallerRole } from "./callers";
 const LINKED = new Set(["toybox-link", "toybox-other"]);
 const ANYONE: CallerRole[] = ["lead", "terminal"];
 
-test.each<[string, CallerFacts, CallerRole, string | null]>([
-  ["a linked channel's lead", { sessionId: "toybox-link", channelId: null }, "lead", "toybox-link"],
+test.each<[string, CallerFacts, string | null]>([
+  ["a linked channel's lead", { sessionId: "toybox-link", channelId: null }, "toybox-link"],
   [
     "a lead naming its own channel",
     { sessionId: "toybox-link", channelId: "toybox-link" },
-    "lead",
     "toybox-link",
   ],
-  [
-    "a terminal naming a channel",
-    { sessionId: null, channelId: "toybox-other" },
-    "terminal",
-    "toybox-other",
-  ],
-  ["a terminal naming none", { sessionId: null, channelId: null }, "terminal", null],
-])("acts for %s", (_, facts, role, channelId) => {
-  expect(resolveCaller(facts, LINKED, "status", ANYONE)).toEqual({
-    kind: "caller",
-    caller: { role, channelId },
-  });
+  ["a terminal naming a channel", { sessionId: null, channelId: "toybox-other" }, "toybox-other"],
+  ["a terminal naming none", { sessionId: null, channelId: null }, null],
+])("acts for %s", (_, facts, channelId) => {
+  expect(resolveCaller(facts, LINKED, "status", ANYONE)).toEqual({ kind: "caller", channelId });
 });
 
 test.each<[string, CallerFacts, readonly CallerRole[], string]>([

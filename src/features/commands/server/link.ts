@@ -1,4 +1,3 @@
-import type { Caller } from "@commands/model/callers";
 import { CommandRefusedError } from "@commands/model/protocol";
 import { channelName } from "@commands/model/slackText";
 import { readToyBoxLink, type ChannelLink } from "@links/server/database";
@@ -13,18 +12,18 @@ export type CallerLink = ChannelLink & {
 export const SEE_INBOX = "Run `toy-box-slack inbox` to see what waits on you.";
 
 /** The caller's Toy Box channel, refusing a terminal that didn't name one. */
-export function callerChannel(caller: Caller): string {
-  if (caller.channelId === null) {
+export function callerChannel(channelId: string | null): string {
+  if (channelId === null) {
     throw new CommandRefusedError("Name the Toy Box channel to act for with --channel.");
   }
-  return caller.channelId;
+  return channelId;
 }
 
 /** The link of the caller's Toy Box channel, refusing a caller whose channel has none. */
-export async function readCallerLink(sql: Bun.SQL, caller: Caller): Promise<CallerLink> {
-  const link = await readToyBoxLink(sql, callerChannel(caller));
+export async function readCallerLink(sql: Bun.SQL, channelId: string | null): Promise<CallerLink> {
+  const link = await readToyBoxLink(sql, callerChannel(channelId));
   if (!link) {
-    throw new CommandRefusedError(`Toy Box channel ${caller.channelId} isn't linked to Slack.`);
+    throw new CommandRefusedError(`Toy Box channel ${channelId} isn't linked to Slack.`);
   }
   return { ...link, channel: channelName(null, link.slackChannelId) };
 }

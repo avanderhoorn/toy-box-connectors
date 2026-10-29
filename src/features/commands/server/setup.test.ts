@@ -20,7 +20,7 @@ test("resume refuses a link Slack gave a new channel ID, before it asks Toy Box 
     wakes: { reconsider: () => {} },
   });
 
-  const answer = resume({}, { caller: { role: "terminal", channelId: "toybox-link" }, at: 1_000 });
+  const answer = resume({}, { channelId: "toybox-link", at: 1_000 });
 
   expect(await refusal(answer)).toBe(
     "The link to #C-link is suspended because Slack gave its channel a new ID. Run `toy-box-slack unlink`, then have the owner link the channel again by its new ID.",
@@ -42,7 +42,7 @@ test("unlink deletes what the bridge kept for its link, and nothing of another l
     wakes: { reconsider: () => {} },
   });
 
-  await unlink({}, { caller: { role: "lead", channelId: "toybox-gone" }, at: 1_000 });
+  await unlink({}, { channelId: "toybox-gone", at: 1_000 });
 
   expect(await countRows(database)).toEqual(before);
 });

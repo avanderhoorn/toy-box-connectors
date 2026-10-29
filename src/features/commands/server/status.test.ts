@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import type { CallerRole } from "@commands/model/callers";
 import type { Status } from "@commands/model/status";
 import { clockTime } from "@commands/model/wording";
 import { createStoredLink } from "@links/server/testFixtures";
@@ -11,19 +10,19 @@ import { statusCommand } from "./status";
 const HOUR = 60 * 60_000;
 const connected = () => ({ connection: "connected" as const, problem: null });
 
-test("shows a lead only its own link, and a terminal every link", async () => {
+test("shows only the caller's link, or every link to a terminal that names no channel", async () => {
   const database = await openTestDatabase();
   await createStoredLink(database);
   await createStoredLink(database, "other");
   const status = statusCommand({ database, slack: connected, workspaceUrl: () => null });
-  const shown = async (role: CallerRole, channelId: string | null) => {
-    const { result } = await status({}, { caller: { role, channelId }, at: 1_000 });
+  const shown = async (channelId: string | null) => {
+    const { result } = await status({}, { channelId, at: 1_000 });
     return (result as Status).links.map((link) => link.toyBoxChannelId).toSorted();
   };
 
-  expect(await shown("lead", "toybox-link")).toEqual(["toybox-link"]);
-  expect(await shown("lead", "toybox-other")).toEqual(["toybox-other"]);
-  expect(await shown("terminal", null)).toEqual(["toybox-link", "toybox-other"]);
+  expect(await shown("toybox-link")).toEqual(["toybox-link"]);
+  expect(await shown("toybox-other")).toEqual(["toybox-other"]);
+  expect(await shown(null)).toEqual(["toybox-link", "toybox-other"]);
 });
 
 test("lists the posts Slack never confirmed, linking each answer to its request", async () => {
@@ -34,8 +33,7 @@ test("lists the posts Slack never confirmed, linking each answer to its request"
   const at = friday + 3 * HOUR;
   const workspaceUrl = () => "https://acme.slack.com/";
   const status = statusCommand({ database, slack: connected, workspaceUrl });
-  const shown = async () =>
-    (await status({}, { caller: { role: "lead", channelId: "toybox-link" }, at })).text;
+  const shown = async () => (await status({}, { channelId: "toybox-link", at })).text;
   const notes = { kind: "publication", request_id: null, thread_ts: null, series: "notes" };
   const unknown = { state: "delivery_unknown", attempt_started_at: at - 2 * HOUR };
   await createStoredOutboxItem(database, 1, { ...notes, scheduled_at: 0, state: "sent" });

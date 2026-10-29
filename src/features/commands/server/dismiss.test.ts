@@ -6,7 +6,7 @@ import { createStoredRequest } from "@requests/server/testFixtures";
 import { dismissCommand } from "./dismiss";
 import { refusal } from "./testFixtures";
 
-const LEAD = { caller: { role: "lead", channelId: "toybox-link" }, at: 1_000 } as const;
+const LEAD = { channelId: "toybox-link", at: 1_000 };
 
 test("ends a request the lead read, keeping the lead's reason, and says why it can't end it twice", async () => {
   const database = await openTestDatabase();

@@ -42,7 +42,7 @@ export function linkCommand(options: SetupCommandOptions): CommandHandler<"link"
 /** Refuses a link Slack gave a new channel ID, which only unlink and a new link end. */
 export function resumeCommand(options: SetupCommandOptions): CommandHandler<"resume"> {
   return async (_input, context) => {
-    const link = await options.database.read((sql) => readCallerLink(sql, context.caller));
+    const link = await options.database.read((sql) => readCallerLink(sql, context.channelId));
     if (link.statusReason === "channel_id_changed") {
       const { because, fix } = suspensions.channel_id_changed;
       throw new CommandRefusedError(`The link to ${link.channel} is suspended ${because}. ${fix}`);
@@ -52,9 +52,9 @@ export function resumeCommand(options: SetupCommandOptions): CommandHandler<"res
 }
 
 export function pauseCommand({ database, wakes }: SetupCommandOptions): CommandHandler<"pause"> {
-  return async (_input, { caller, at }) => {
+  return async (_input, { channelId, at }) => {
     const link = await database.write(async (transaction) => {
-      const link = await readCallerLink(transaction, caller);
+      const link = await readCallerLink(transaction, channelId);
       await pauseLink(transaction, link.id, at);
       return link;
     });
@@ -69,9 +69,9 @@ export function pauseCommand({ database, wakes }: SetupCommandOptions): CommandH
 
 /** Deletes everything the bridge kept for the link. */
 export function unlinkCommand({ database, wakes }: SetupCommandOptions): CommandHandler<"unlink"> {
-  return async (_input, { caller }) => {
+  return async (_input, { channelId }) => {
     const link = await database.write(async (transaction) => {
-      const link = await readCallerLink(transaction, caller);
+      const link = await readCallerLink(transaction, channelId);
       await deleteLinkActivity(transaction, link);
       await deleteLinkRequests(transaction, link.id);
       await deleteLink(transaction, link.id);
@@ -87,7 +87,7 @@ export function unlinkCommand({ database, wakes }: SetupCommandOptions): Command
 
 /** Admits only full members, as Slack describes them now. */
 export function allowCommand({ database, bot }: SetupCommandOptions): CommandHandler<"allow"> {
-  return async ({ users }, { caller, at, confirmed }) => {
+  return async ({ users }, { channelId, at, confirmed }) => {
     const { slack, home } = await readSlackHome(database, bot);
     // An Enterprise member can be named by either of their IDs, and is allowed once.
     const people = new Map<string, SlackPerson>();
@@ -100,7 +100,7 @@ export function allowCommand({ database, bot }: SetupCommandOptions): CommandHan
       if (person) people.set(person.id, person);
     }
     return database.write(async (transaction) => {
-      const link = await readCallerLink(transaction, caller);
+      const link = await readCallerLink(transaction, channelId);
       const added = [...people.values()].filter((person) => !link.allowlist.has(person.id));
       const names = added.map((person) => `\n- ${shown(person, person.id)}`).join("");
       const preview = `Allowing them would let them ask the lead to act, from ${link.channel}:\n${names}`;
@@ -120,9 +120,9 @@ export function allowCommand({ database, bot }: SetupCommandOptions): CommandHan
 
 /** Cancels whatever the people it removes are still waiting on. */
 export function denyCommand({ database, wakes }: SetupCommandOptions): CommandHandler<"deny"> {
-  return async ({ users }, { caller }) => {
+  return async ({ users }, { channelId }) => {
     const { link, cancelled } = await database.write(async (transaction) => {
-      const link = await readCallerLink(transaction, caller);
+      const link = await readCallerLink(transaction, channelId);
       // An Enterprise member can be named by either of their IDs, and each is denied.
       const ids = await Promise.all(users.map((userId) => readPersonIds(transaction, userId)));
       const denied = new Set(ids.flat());
@@ -150,11 +150,11 @@ export function denyCommand({ database, wakes }: SetupCommandOptions): CommandHa
  */
 async function linkChannel(
   { database, bot, toyBoxOrigin, wakes }: SetupCommandOptions,
-  { caller, at, confirmed }: CommandContext,
+  { channelId, at, confirmed }: CommandContext,
   slackChannelId: string,
   wanted: Partial<Pick<CallerLink, "requestMode" | "observe">>,
 ): Promise<CommandAnswer> {
-  const toyBoxChannelId = callerChannel(caller);
+  const toyBoxChannelId = callerChannel(channelId);
   const toyBox = await readLinkableChannel(toyBoxOrigin, toyBoxChannelId);
   const { slack, home } = await readSlackHome(database, bot);
   const facts = await askSlack(slack, "conversations.info", (client) =>

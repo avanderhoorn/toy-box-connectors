@@ -40,7 +40,7 @@ test.each<[string, string, unknown, number, unknown]>([
     "status",
     { caller: LEAD, input: {} },
     200,
-    { result: { caller: { role: "lead", channelId: "toybox-link" }, at: 1_000 }, text: "Linked." },
+    { result: { channelId: "toybox-link", at: 1_000 }, text: "Linked." },
   ],
   [
     "names each problem with the input the way the CLI shows it",
