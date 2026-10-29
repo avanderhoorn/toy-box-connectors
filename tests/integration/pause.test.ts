@@ -1,6 +1,6 @@
-// A rare event in Slack pauses a link until the owner resumes it, and wakes the lead once so it can
-// tell them. Status says why, and what an allowed person asks while it's paused doesn't reach the
-// lead.
+// A rare event in Slack suspends a link until the owner resumes or unlinks it, and wakes the lead
+// once so it can tell them. Status says why, and what an allowed person asks while it's suspended
+// doesn't reach the lead.
 
 import { expect, test } from "bun:test";
 import { ALICE, BOT, connectedBridge, posted, said, timestamps } from "./connectedBridge";
@@ -56,7 +56,7 @@ test.each([
     reason: "channel_id_changed",
   },
 ])(
-  "a link pauses when $cause and wakes the lead once, and what Alice asks then doesn't reach it",
+  "when $cause, the bridge suspends the link and wakes the lead once, and what Alice asks then doesn't reach it",
   async ({ event, reason }) => {
     const { channelId, toyBox, status, inbox, deliver, post, stop, saying } =
       await connectedBridge();

@@ -36,7 +36,7 @@ the lead to set its routines again from it. Missing routines are retried;
 repeated unserved wakes eventually show stalled. Reading inbox serves work,
 so do not run it as the lead merely to inspect status.
 
-## Pause and repair
+## Pause, suspension and repair
 
 A paused link holds queued posts and opens no new requests. Existing requests
 still receive edits and deletes. Questions first asked while paused do not
@@ -53,9 +53,13 @@ toy-box-slack resume --channel TOYBOX_ID
 Pause and deny apply immediately without a passphrase. Resume shows its
 preview and asks for the passphrase.
 
-The owner must fix the cause before resuming with the passphrase. A new Slack
-channel ID requires unlinking the old link and linking the new ID. Do not edit
-the database to bypass an audience or policy refusal.
+The bridge suspends a link itself when Slack reports a change the owner must
+review, such as an archive, a widened audience, bot removal or a new channel
+ID. Like a paused link, it holds posts and opens no new requests, and status
+says why and what ends it. The owner must fix the cause before resuming with
+the passphrase. A new Slack channel ID instead requires unlinking the old link
+and linking the new ID. Do not edit the database to bypass an audience or
+policy refusal.
 
 Channel audience is checked at link, at resume and before every post, not
 at startup or before catch-up. If a share or privacy-change event was missed

@@ -156,7 +156,7 @@ export const commands = {
     input: z.object({}).strict(),
   },
   resume: {
-    description: "Answer and post in Slack again, once what paused the link is fixed",
+    description: "Answer and post in Slack again, once what paused or suspended the link is fixed",
     callers: ["terminal"],
     input: z.object({}).strict(),
   },

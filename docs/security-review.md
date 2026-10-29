@@ -102,7 +102,7 @@ known, approved workspace audience. Fresh channel checks at link, resume and
 before every post compare against what the owner approved, not the last
 refresh. Link and resume refuse archived channels. External sharing, a widened
 audience, private-to-public conversion,
-archive, a new channel ID, bot removal or an applicable policy refusal pauses
+archive, a new channel ID, bot removal or an applicable policy refusal suspends
 the link. A failed fresh read does not authorize sending. These checks cannot
 make a send atomic with Slack's next channel change.
 
@@ -203,7 +203,7 @@ Verify these against landed code, not this document:
 - The manifest's eight scopes, startup token/app/workspace/org identity checks,
   Enterprise routing and refusal of unsupported installations.
 - Exact-ID request admission, caller refusal, passphrase checks for widening,
-  fresh channel checks, and pause behavior under races and failed lookups.
+  fresh channel checks, and suspension behavior under races and failed lookups.
 - Observation boundaries, stale-question refusal, send-time safety, no
   duplicate send after a crash, and explicit unknown-post status.
 - Retention and unlink/uninstall cascades, including outbox text and WAL,
