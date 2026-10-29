@@ -18,7 +18,14 @@ import {
   STOP_TIMEOUT,
   type IsolatedToyBox,
 } from "./isolatedToyBox";
-import { linkSlack, REQUESTS_ROUTINE, skillRoutine, type SlackLink } from "./slackLink";
+import {
+  adding,
+  LINK_TIMEOUT,
+  linkSlack,
+  REQUESTS_ROUTINE,
+  skillRoutine,
+  type SlackLink,
+} from "./slackLink";
 import {
   CREATE_CHANNEL_TIMEOUT,
   createTestChannel,
@@ -40,7 +47,7 @@ describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slac
       channel = await createTestChannel(toyBox, { name: "Release", purpose: PURPOSE });
       link = await linkSlack(toyBox, channel);
     },
-    STARTUP_TIMEOUT + CREATE_CHANNEL_TIMEOUT + STOP_TIMEOUT + 35_000,
+    STARTUP_TIMEOUT + CREATE_CHANNEL_TIMEOUT + LINK_TIMEOUT + STOP_TIMEOUT,
   );
   afterAll(async () => {
     try {
@@ -202,11 +209,6 @@ describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slac
     { turns: 0 },
   );
 });
-
-/** Asks the lead to add `routine` as given. */
-function adding({ title, schedule, prompt }: typeof REQUESTS_ROUTINE) {
-  return `a routine titled "${title}" with the schedule "${schedule}" and exactly this prompt: "${prompt}"`;
-}
 
 /** Commits `subjects` to main in the channel's folder, making it a repository if it isn't one. */
 function ship(toyBox: IsolatedToyBox, ...subjects: string[]) {

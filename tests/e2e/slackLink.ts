@@ -1,20 +1,29 @@
-// A Slack channel linked to a test channel through the real bridge.
+// A Slack channel linked to test channels through the real bridge.
 //
 // The bridge runs as its owner's would, as `toy-box-slack serve` under the isolated Toy Box's HOME,
-// so the lead's commands reach it, and it wakes the lead through that Toy Box. Slack is a fake with
-// the guarantee suites' people: the link watches C0LINK, a private channel the bot, Alice and
+// so each lead's commands reach it, and it wakes each lead through that Toy Box. Slack is a fake
+// with the guarantee suites' people: the link watches C0LINK, a private channel the bot, Alice and
 // Mallory are in, and allows Alice. The owner sets it up at a terminal in the order the skill gives
 // them: they set a passphrase, start the bridge, link C0LINK and allow Alice, typing the passphrase
-// for each.
+// for each. A second lead shares C0LINK through a Slack app of its own, which the owner adds as the
+// operations guide says: they add the app at a terminal, restart the bridge, and link through it.
 
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { closeSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
+import { DEFAULT_APP } from "@bridge/model/apps";
+import { locateApp } from "@bridge/server/apps";
 import { resolveDataFolder } from "@bridge/server/dataFolder";
 import { BUNDLED_SKILL } from "@commands/client/skill";
 import type { WakeTimings } from "@wakes/model";
-import { startFakeSlack, type FakeSlack, type FakeSlackMessage } from "../fakes/slack";
+import {
+  startFakeSlack,
+  type FakeSlack,
+  type FakeSlackApp,
+  type FakeSlackMessage,
+} from "../fakes/slack";
+import { runAtTerminal } from "../integration/bridgeProcess";
 import { ALICE, BOT, MALLORY, posted } from "../integration/connectedBridge";
 import { CLI, runCli, waitUntil, type IsolatedToyBox } from "./isolatedToyBox";
 import type { TestChannel } from "./testChannel";
@@ -24,6 +33,12 @@ const SKILL_ROUTINE = /^\*\*(.+)\*\*, .+\n\n```text\n(.+)\n```$/gm;
 
 /** The routine a linked channel's lead adds, which the bridge runs to wake it. */
 export const REQUESTS_ROUTINE = skillRoutine("Slack requests");
+
+/** The releases app's bot, which shares C0LINK with the default app's. */
+export const RELEASES_BOT = "U0RELBOT";
+
+/** How long linking a lead can take, from waiting for its routine to allowing Alice. */
+export const LINK_TIMEOUT = 35_000;
 
 /** Wakes the lead a second after a request changes, so no scenario waits out the real debounce. */
 const PROMPTLY: Partial<WakeTimings> = { debounce: 1_000, debounceLimit: 2_000 };
@@ -37,12 +52,23 @@ const STOP_TIMEOUT = 5_000;
 
 const PASSPHRASE = "correct horse battery staple";
 
-export type SlackLink = {
-  slack: FakeSlack;
-  /** Posts `message` in C0LINK, and resolves once the bridge acked its event. */
-  post(message: FakeSlackMessage): Promise<void>;
-  /** The rows `query` reads from the bridge's database as it stands. */
+/** One of the bridge's apps, as Slack and its bridge.db see it. */
+export type LinkedApp = {
+  slack: FakeSlackApp;
+  /** The rows `query` reads from the app's bridge.db as it stands. */
   query<Row>(query: string, ...bindings: SQLQueryBindings[]): Row[];
+};
+
+/** C0LINK as the bridge serves it, through the default app, whose fake Slack hosts every app. */
+export type SlackLink = LinkedApp & {
+  slack: FakeSlack;
+  /** Posts `message` in C0LINK, and resolves once each of the bridge's apps acked its event. */
+  post(message: FakeSlackMessage): Promise<void>;
+  /**
+   * Links `channel` to C0LINK as well, through the releases app its owner adds for it, and resolves
+   * with that app once the restarted bridge serves it and the owner has allowed Alice there.
+   */
+  addLead(channel: TestChannel): Promise<LinkedApp>;
   /** Stops the bridge as its owner would, calls `whileDown`, and serves the link again. */
   restart(whileDown: () => void): Promise<void>;
   /** Stops the bridge, then Slack, which fails on any call it doesn't know. */
@@ -72,6 +98,8 @@ export async function linkSlack(toyBox: IsolatedToyBox, channel: TestChannel): P
     is_ultra_restricted: false,
   });
   const dataFolder = resolveDataFolder({}, toyBox.home);
+  /** The fake Slack app behind each of the bridge's apps, by the app's name. */
+  const apps = new Map<string, FakeSlackApp>([[DEFAULT_APP, slack]]);
   let bridge: Subprocess | undefined;
 
   function serving() {
@@ -92,37 +120,61 @@ export async function linkSlack(toyBox: IsolatedToyBox, channel: TestChannel): P
   }
 
   async function startBridge() {
-    const opened = slack.connections.length;
+    const waiting = [...apps.values()].map((app) => ({ app, opened: app.connections.length }));
     bridge = serve(toyBox, slack);
     await waitUntil(
-      "the bridge to connect to Slack",
+      "the bridge to connect each app to Slack",
       () => {
         serving();
-        return slack.connections.length > opened || undefined;
+        return waiting.every(({ app, opened }) => app.connections.length > opened) || undefined;
       },
       SLACK_TIMEOUT,
     );
   }
 
+  /** Links `lead` to C0LINK with `options` once it has added the requests routine, and allows Alice. */
+  async function linkLead(lead: TestChannel, ...options: string[]) {
+    await waitUntil(
+      "the lead to add its requests routine",
+      () => lead.routine(REQUESTS_ROUTINE.title),
+      10_000,
+    );
+    await runAsOwner(toyBox, "link", "--slack-channel", "C0LINK", "--channel", lead.id, ...options);
+    await runAsOwner(toyBox, "allow", ALICE, "--channel", lead.id);
+  }
+
   const link: SlackLink = {
-    slack,
+    ...linkedApp(slack, locateApp(dataFolder, DEFAULT_APP).database),
 
     async post(message) {
       serving();
       slack.setMessage("C0LINK", message);
-      const { envelopeId } = slack.sendEvent(posted(message, "C0LINK"));
-      if (!(await slack.waitForAck(envelopeId, SLACK_TIMEOUT))) {
-        throw new Error(`The bridge didn't ack ${message.ts} within ${SLACK_TIMEOUT / 1000} s.`);
-      }
+      const deliveries = slack.broadcastEvent(posted(message, "C0LINK"));
+      await Promise.all(
+        [...apps].map(async ([name, app]) => {
+          const delivery = deliveries.find(({ appId }) => appId === app.identity.appId);
+          if (!delivery || !(await app.waitForAck(delivery.envelopeId, SLACK_TIMEOUT))) {
+            throw new Error(
+              `The bridge's ${name} app didn't ack ${message.ts} within ${SLACK_TIMEOUT / 1000} s.`,
+            );
+          }
+        }),
+      );
     },
 
-    query<Row>(query: string, ...bindings: SQLQueryBindings[]) {
-      const database = new Database(join(dataFolder, "bridge.db"), { readonly: true });
+    async addLead(lead) {
+      const releases = slack.addApp({ botUserId: RELEASES_BOT });
+      releases.addChannel({ id: "C0LINK" });
       try {
-        return database.query<Row, SQLQueryBindings[]>(query).all(...bindings);
-      } finally {
-        database.close();
+        await addAppAsOwner(toyBox, "releases", releases);
+        apps.set("releases", releases);
+        await stopBridge();
+        await startBridge();
+        await linkLead(lead, "--app", "releases");
+      } catch (error) {
+        throw toyBox.failure(error);
       }
+      return linkedApp(releases, locateApp(dataFolder, "releases").database);
     },
 
     async restart(whileDown) {
@@ -141,15 +193,9 @@ export async function linkSlack(toyBox: IsolatedToyBox, channel: TestChannel): P
   };
 
   try {
-    await waitUntil(
-      "the lead to add its requests routine",
-      () => channel.routine(REQUESTS_ROUTINE.title),
-      10_000,
-    );
     await runAsOwner(toyBox, "passphrase");
     await startBridge();
-    await runAsOwner(toyBox, "link", "--slack-channel", "C0LINK", "--channel", channel.id);
-    await runAsOwner(toyBox, "allow", ALICE, "--channel", channel.id);
+    await linkLead(channel);
     return link;
   } catch (error) {
     const failure = toyBox.failure(error);
@@ -169,9 +215,42 @@ export function skillRoutine(title: string) {
   throw new Error(`The skill gives no routine titled "${title}".`);
 }
 
+/** Asks a lead to add `routine` as given. */
+export function adding({ title, schedule, prompt }: typeof REQUESTS_ROUTINE) {
+  return `a routine titled "${title}" with the schedule "${schedule}" and exactly this prompt: "${prompt}"`;
+}
+
+/** The app whose fake Slack is `slack` and whose bridge.db is at `database`. */
+function linkedApp<App extends FakeSlackApp>(slack: App, database: string) {
+  return {
+    slack,
+    query<Row>(query: string, ...bindings: SQLQueryBindings[]) {
+      const opened = new Database(database, { readonly: true });
+      try {
+        return opened.query<Row, SQLQueryBindings[]>(query).all(...bindings);
+      } finally {
+        opened.close();
+      }
+    },
+  };
+}
+
 /** Runs `toy-box-slack <args>` as the owner at a terminal, typing their passphrase at each prompt. */
 function runAsOwner(toyBox: IsolatedToyBox, ...args: string[]) {
   return runCli(toyBox.home, args, `${PASSPHRASE}\n`.repeat(2));
+}
+
+/** Adds the `name` app as its owner does, pasting `app`'s tokens at a terminal of their own. */
+async function addAppAsOwner(toyBox: IsolatedToyBox, name: string, app: FakeSlackApp) {
+  const terminal = runAtTerminal(toyBox.home, ["add-app", name]);
+  await terminal.shows("(xoxb-...): ");
+  await terminal.type(app.botToken);
+  await terminal.shows("(xapp-...): ");
+  await terminal.type(app.appToken);
+  const { code, transcript } = await terminal.exit();
+  if (code !== 0) {
+    throw new Error(`\`toy-box-slack add-app ${name}\` exited with ${code}.\n${transcript}`);
+  }
 }
 
 /** Runs `toy-box-slack serve` for the isolated Toy Box against `slack`, logging into the run's folder. */

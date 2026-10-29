@@ -39,6 +39,8 @@ export type TestChannel = {
   turn(wake: () => Promise<void>): Promise<void>;
   /** Runs the lead's routine titled `title`, and resolves once the turn it starts settles. */
   run(title: string): Promise<void>;
+  /** Resolves once `during` does, and fails if the lead started a turn before then. */
+  idleThrough(during: () => Promise<void>): Promise<void>;
   /** Counts the lead's messages in Toy Box's store, which holds a turn's posts once it settles. */
   leadPosts(): Promise<number>;
 };
@@ -173,6 +175,15 @@ function followChannel(toyBox: IsolatedToyBox, channelId: string) {
       await turn(async () => {
         await callToyBox(toyBox.origin, path, { method: "POST", expected: 204 });
       });
+    },
+
+    async idleThrough(during: () => Promise<void>) {
+      const before = presences.length;
+      await during();
+      following();
+      if (presences.slice(before).some(({ state }) => state === "working")) {
+        throw new Error(`The lead of ${channelId} started a turn that nothing should have woken.`);
+      }
     },
 
     /**
