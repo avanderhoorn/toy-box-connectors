@@ -33,10 +33,9 @@ test("one-use app tickets and strict acknowledgements match the wire", async () 
     connection_info: { app_id: fake.identity.appId },
   });
   expect((await fetch(result.url!.replace("ws:", "http:"))).status).toBe(403);
-  const sent = fake.sendEvent({ type: "message" }, { eventId: "Ev1", authorizations: undefined });
+  const sent = fake.sendEvent({ type: "message" }, { authorizations: undefined });
   await until(() => frames.length === 2);
   expect(frames[1]).toMatchObject({
-    payload: { event_id: "Ev1" },
     retry_attempt: 0,
     retry_reason: "",
   });

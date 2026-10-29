@@ -389,7 +389,7 @@ describe("losing the connection", () => {
     expect(link.fake.connections).toHaveLength(2);
     expect(await readMessages(link.database)).toEqual([{ ts: tsAt(NOW + 30_000) }]);
     link.fake.failNext("apps.connections.open", { status: 503 });
-    link.fake.disconnect("refresh_requested");
+    link.fake.disconnect();
     const problem = "Slack didn't answer apps.connections.open: HTTP 503.";
     await waitFor(() =>
       expect(supervisor.state()).toEqual({ connection: "reconnecting", problem }),

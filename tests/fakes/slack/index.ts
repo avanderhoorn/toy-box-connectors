@@ -41,8 +41,6 @@ export type FakeSlackFailure =
 export type FakeSlackDelivery = { envelopeId: string };
 
 export type FakeEventOptions = {
-  eventId?: string;
-  envelopeId?: string;
   teamId?: string;
   appId?: string;
   /** Omit this option for our bot tuple; explicitly pass undefined to omit the wire field. */
@@ -62,8 +60,6 @@ export function startFakeSlack(
   options: {
     now?: () => number;
     identity?: Partial<FakeSlackIdentity>;
-    pingIntervalMs?: number;
-    scopes?: readonly string[];
     pageSize?: number;
   } = {},
 ) {
@@ -149,7 +145,6 @@ export function startFakeSlack(
     botToken,
     appToken,
     now,
-    scopes: options.scopes,
     pageSize: options.pageSize,
     emitEvent(event, context) {
       if (sockets.size) sendEvent(event, { context });
@@ -164,7 +159,7 @@ export function startFakeSlack(
   });
   const heartbeat = setInterval(() => {
     if (responsive) for (const socket of sockets.values()) socket.ping("fake-slack");
-  }, options.pingIntervalMs ?? 1000);
+  }, 1000);
 
   async function route(request: Request): Promise<Response | undefined> {
     const target = new URL(request.url);
@@ -206,7 +201,7 @@ export function startFakeSlack(
       type: "event_callback",
       api_app_id: settings.appId ?? identity.appId,
       team_id: settings.teamId ?? identity.teamId,
-      event_id: settings.eventId ?? `Ev${crypto.randomUUID()}`,
+      event_id: `Ev${crypto.randomUUID()}`,
       event_time: Math.floor(now() / 1000),
       event: structuredClone(event),
     };
@@ -226,7 +221,7 @@ export function startFakeSlack(
     }
     return sendFrame({
       type: "events_api",
-      envelope_id: settings.envelopeId ?? crypto.randomUUID(),
+      envelope_id: crypto.randomUUID(),
       accepts_response_payload: false,
       retry_attempt: 0,
       retry_reason: "",
@@ -248,8 +243,12 @@ export function startFakeSlack(
     },
     sendFrame,
     sendEvent,
-    disconnect(reason: "warning" | "refresh_requested" | "link_disabled" = "refresh_requested") {
-      sendFrame({ type: "disconnect", reason, debug_info: { host: "fake-slack" } });
+    disconnect() {
+      sendFrame({
+        type: "disconnect",
+        reason: "refresh_requested",
+        debug_info: { host: "fake-slack" },
+      });
     },
     dropConnections() {
       for (const socket of sockets.values()) socket.terminate();

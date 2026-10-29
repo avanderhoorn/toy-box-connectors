@@ -106,7 +106,6 @@ export function createFakeSlackApi(options: {
   appToken: string;
   now: () => number;
   connectionUrl: () => string;
-  scopes?: readonly string[];
   pageSize?: number;
   emitEvent: (event: Record<string, unknown>, context: Record<string, unknown>) => void;
 }) {
@@ -535,7 +534,7 @@ export function createFakeSlackApi(options: {
               ...(identity.enterpriseId ? { enterprise_id: identity.enterpriseId } : {}),
               ...authChanges,
             },
-            { headers: { "x-oauth-scopes": (options.scopes ?? BOT_SCOPES).join(",") } },
+            { headers: { "x-oauth-scopes": BOT_SCOPES.join(",") } },
           ),
         );
       case "bots.info":
