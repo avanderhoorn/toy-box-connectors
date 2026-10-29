@@ -2,7 +2,7 @@
 
 One local bridge lets a [Toy Box](https://github.com/lostintangent/toy-box) channel's Copilot lead answer allowed people in one Slack channel, publish scheduled release notes there, and bring useful activity back to Toy Box.
 
-The four v1 guarantees are: only allowlisted people can open requests, only the owner widens access, uncertain posts are never resent, and events survive acknowledgement with gaps recovered or reported. Rare channel or policy changes suspend the link for owner review. The bridge keeps only what its links need, by default what allowed people say and the threads they ask in, and forgets any Slack text 30 days after it last changed. See [operations](docs/operations.md) for recovery and retention limits.
+It guarantees four things: only allowlisted people can open requests, only the owner widens access, a post whose delivery is uncertain is never resent, and every Slack event the bridge acknowledges survives a crash, with anything it missed recovered or reported. Rare channel or policy changes suspend the link for the owner to review. The bridge keeps only what its links need, by default what allowed people say and the threads they ask in, and forgets any Slack text 30 days after it last changed. See [operations](docs/operations.md) for recovery and retention limits.
 
 No DMs, attachments, Slack Connect, org-wide installs, rotating tokens or non-Copilot leads. Slack text the lead reads reaches Copilot and its selected model provider. Obtain company approval first and read the [reviewer guide](docs/security-review.md).
 
@@ -32,12 +32,15 @@ Toy Box keeps its terminal, so use another for these three steps.
 
 2. **Start the bridge.** Run `toy-box-slack serve` and keep it running. The first time, it asks for both tokens and for a passphrase you choose, typed twice. Paste the tokens only there, never into Toy Box, Slack or the repository. Nothing you type is shown. `link`, `allow` and `resume` ask for the passphrase before they widen who can make the lead act, so make it strong and unique, and never put it in Toy Box or Slack. Each time it starts, `serve` installs the skill leads learn the CLI from, and names the file.
 
-3. **Link the channels.** Invite the app into the Slack channel with `/invite` and select **Toy Box**. Open <http://127.0.0.1:3000> and create a channel with a Copilot lead (tested with `claude-sonnet-5`). To use a lead that was already running instead, ask it to read the file `serve` named, since Copilot reads skills when a lead's session starts or resumes. Copy the Slack channel ID from the bottom of its details and the allowed people's member IDs from their profiles, then ask the lead to set up Slack for those IDs. It creates its inbox routine and prints the exact `link` and `allow` commands. Run them yourself in another terminal, and review each preview before you enter the passphrase. Their forms are:
+3. **Link the channels.**
+   - In Slack, invite the app into the channel with `/invite` and select **Toy Box**. Copy the channel ID from the bottom of its details, and each allowed person's member ID from their profile.
+   - Open <http://127.0.0.1:3000> and create a channel with a Copilot lead (tested with `claude-sonnet-5`). To use a lead that was already running instead, ask it to read the file `serve` named, since Copilot reads skills when a lead's session starts or resumes.
+   - Ask the lead to set up Slack for those IDs. It creates its inbox routine and prints the exact `link` and `allow` commands. Run them yourself in another terminal, and review each preview before you enter the passphrase. Their forms are:
 
-   ```sh
-   toy-box-slack link --channel TOYBOX_ID --slack-channel SLACK_ID
-   toy-box-slack allow --channel TOYBOX_ID USER_ID
-   ```
+     ```sh
+     toy-box-slack link --channel TOYBOX_ID --slack-channel SLACK_ID
+     toy-box-slack allow --channel TOYBOX_ID USER_ID
+     ```
 
 Defaults are `--requests mention --observe requesters`; `--requests all` accepts any allowed person's top-level post, and `--observe channel` lets a digest read other people's text too. Ask the lead for opt-in digest or release-note routines if wanted.
 
@@ -54,6 +57,8 @@ The bridge answers only while `serve` runs. Ctrl-C stops it. When `serve` runs a
 `serve` keeps the tokens and the passphrase's hash in `~/.toy-box-slack/credentials.env`, which only you can read. The bridge reads this file, not a `.env`, and environment variables of the same names override it. `TOY_BOX_SLACK_HOME` selects another data folder, and `TOY_BOX_URL` a Toy Box other than <http://127.0.0.1:3000>. `toy-box-slack passphrase` changes the passphrase, given the old one, without a restart.
 
 To update, run `npm install --global --prefix "$HOME/.local" @avanderhoorn/toy-box-slack` again, then restart `serve`, or the [login job](docs/operations.md#start-the-bridge-at-login) that runs it. `serve` installs the new release's skill, so ask your leads to set their routines again from it, since a routine keeps the prompt it was created with.
+
+To remove it, ask each lead to delete its Slack routines, then stop `serve`, or stop the [login job](docs/operations.md#start-the-bridge-at-login) if you set one up and delete its plist. Run `npm uninstall --global --prefix "$HOME/.local" @avanderhoorn/toy-box-slack`, delete `~/.toy-box-slack` and the skill folder `~/.copilot/skills/toy-box-slack`, and uninstall each Slack app at <https://api.slack.com/apps>. Copies outside the bridge, such as Toy Box transcripts and posts already in Slack, stay, as the [reviewer guide](docs/security-review.md#retention-and-deletion) explains.
 
 ## Commands
 

@@ -212,6 +212,14 @@ credentials and non-Copilot leads. Use exactly one workspace installation.
 An internal org-shared channel does not require installing the app in each
 workspace. Do not weaken company controls if they require unsupported features.
 
+Besides its README and package.json, the npm package holds only a launcher
+script and one compiled Bun binary for Apple silicon Macs. The binary bundles
+the dependencies `bun.lock` pins, and installing the package runs no scripts.
+The maintainer built and published 0.1.0 from a clean clone of the commit
+tagged v0.1.0. Later releases are built, tested and published by the
+repository's Publish workflow through npm trusted publishing, which adds
+provenance. Each GitHub release attaches the tarball npm serves.
+
 Before rollout, assign app collaborators, operator, maintainer, incident and
 support contacts. Approve the host and network controls, credential handling,
 dependency updates, backup/restore, offboarding and deletion. On compromise,
