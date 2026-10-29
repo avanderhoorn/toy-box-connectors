@@ -9,7 +9,7 @@ import { readRequest, saveRequest } from "@requests/server/database";
 import { canonicalUserId } from "@slackapi/server/users";
 import type { SlackTs } from "@slackapi/model/ts";
 import { z } from "zod";
-import { nextReconciliation, type OutboxSettlement } from "../model/delivery";
+import { nextReconciliation, reconciliationDelays, type OutboxSettlement } from "../model/delivery";
 import { renderMarkdown, type RenderedMessage } from "../model/rendering";
 
 export class OutboxRefusedError extends Error {}
@@ -258,7 +258,7 @@ export async function advanceReconciliation(
 export async function recoverOutboxAttempts(tx: Bun.SQL, now: number): Promise<string[]> {
   const rows = await tx<{ id: string }[]>`
     UPDATE outbox SET state = 'delivery_unknown', error = 'interrupted_send',
-      next_attempt_at = attempt_started_at + 60000, updated_at = ${now}
+      next_attempt_at = attempt_started_at + ${reconciliationDelays[0]}, updated_at = ${now}
     WHERE state = 'sending' RETURNING id
   `;
   return rows.map((row) => row.id);

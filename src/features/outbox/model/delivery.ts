@@ -115,16 +115,11 @@ export function deleteReceipt(
   );
 }
 
+/** How long after an attempt each of the two checks for an unknown post runs. */
+export const reconciliationDelays = [60_000, 300_000] as const;
+
 export function nextReconciliation(attemptAt: number, completedPasses: number): number | null {
-  if (
-    !Number.isSafeInteger(attemptAt) ||
-    attemptAt < 0 ||
-    !Number.isInteger(completedPasses) ||
-    completedPasses < 0 ||
-    completedPasses > 2
-  )
-    throw new RangeError("Invalid reconciliation clock or pass.");
-  const delay = [60_000, 300_000][completedPasses];
+  const delay = reconciliationDelays[completedPasses];
   return delay === undefined ? null : attemptAt + delay;
 }
 

@@ -23,7 +23,7 @@ import {
 
 export type PostStep =
   | { kind: "settled"; item: OutboxItem }
-  | { kind: "waiting"; reason: string; until: number | null }
+  | { kind: "waiting"; reason: string }
   | { kind: "changed" };
 type Prepared =
   | PostStep
@@ -43,7 +43,7 @@ export function createPostDelivery(
     const queued = await database.read((sql) => readOutboxItem(sql, id));
     if (!queued || queued.state !== "queued") return { kind: "changed" };
     if (queued.nextAttemptAt !== null && queued.nextAttemptAt > now())
-      return { kind: "waiting", reason: "retry_after", until: queued.nextAttemptAt };
+      return { kind: "waiting", reason: "retry_after" };
     let facts: SlackCall<Awaited<ReturnType<typeof fetchChannelFacts>>>;
     try {
       facts = await bot.call("conversations.info", (client) =>
@@ -70,8 +70,7 @@ export function createPostDelivery(
         facts.result?.id === queued.channelId ? facts.result : null,
         now(),
       );
-      if (verdict?.kind !== "approved")
-        return { kind: "waiting", reason: "channel_not_approved", until: null };
+      if (verdict?.kind !== "approved") return { kind: "waiting", reason: "channel_not_approved" };
       return prepare(tx, id, now());
     });
     if (prepared.kind !== "started") return prepared;
@@ -101,10 +100,10 @@ export function createPostDelivery(
     if (!item || item.state !== "queued") return { kind: "changed" };
     const installation = await readInstallation(tx);
     if (!installation || installation.status !== "active")
-      return { kind: "waiting", reason: "installation_inactive", until: null };
+      return { kind: "waiting", reason: "installation_inactive" };
     const link = await readChannelLink(tx, item.channelId);
     if (!link || link.id !== item.linkId) return refuse(tx, item, "destination_changed", at);
-    if (link.status !== "active") return { kind: "waiting", reason: "link_inactive", until: null };
+    if (link.status !== "active") return { kind: "waiting", reason: "link_inactive" };
     if (item.kind === "reply") {
       const request = await readRequest(tx, item.requestId!);
       if (
@@ -142,7 +141,7 @@ export function createPostDelivery(
           updated_at = ${now()} WHERE id = ${item.id} AND state = 'queued' AND attempts = ${item.attempts}
       `;
     });
-    return { kind: "waiting", reason, until };
+    return { kind: "waiting", reason };
   }
   return { post };
 }

@@ -30,12 +30,10 @@ export function createReconciliation(
     if (!prepared) return { kind: "changed" };
     const { item, installation, active } = prepared;
     if (item.reconcilePass === 2 || item.nextAttemptAt === null)
-      return { kind: "waiting", reason: "delivery_unconfirmed", until: null };
+      return { kind: "waiting", reason: "delivery_unconfirmed" };
     if (!active || installation?.status !== "active")
-      return { kind: "waiting", reason: "link_or_installation_inactive", until: null };
-    if (item.nextAttemptAt > now())
-      return { kind: "waiting", reason: "retry_after", until: item.nextAttemptAt };
-    if (item.attemptStartedAt === null) throw new Error("An unknown post has no attempt clock.");
+      return { kind: "waiting", reason: "link_or_installation_inactive" };
+    if (item.nextAttemptAt > now()) return { kind: "waiting", reason: "retry_after" };
     const method = item.threadTs === null ? "conversations.history" : "conversations.replies";
     let cursor: string | null = null;
     const used = new Set<string>();
@@ -82,14 +80,14 @@ export function createReconciliation(
       if (next.kind === "incomplete") return hold(next.reason, now() + 60_000);
       if (next.kind === "done") {
         await database.write((tx) => advanceReconciliation(tx, item, null, null, now()));
-        return { kind: "waiting", reason: "delivery_unconfirmed", until: null };
+        return { kind: "waiting", reason: "delivery_unconfirmed" };
       }
       cursor = next.cursor;
       used.add(cursor);
     }
     async function hold(error: string, until: number): Promise<PostStep> {
       await database.write((tx) => advanceReconciliation(tx, item, error, until, now()));
-      return { kind: "waiting", reason: error, until };
+      return { kind: "waiting", reason: error };
     }
   }
   return { reconcile };
