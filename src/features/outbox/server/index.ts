@@ -1,6 +1,7 @@
 import type { BridgeDatabase } from "@bridge/server/database";
 import type { StoredRequest } from "@requests/server/database";
 import type { BotClient } from "@slackapi/server/botClient";
+import { log } from "@/shared/log";
 import { readDueReconciliations, readReadyOutbox } from "./database";
 import { createPostDelivery } from "./posts";
 import { createReconciliation } from "./reconcile";
@@ -40,7 +41,7 @@ export function startOutboxWorker(
     running = running.then(pass).catch((error) => {
       stopped = true;
       clearInterval(timer);
-      console.error("Stopped delivering Slack posts:", error);
+      log("Stopped delivering Slack posts:", error);
       onError(error);
     });
   }

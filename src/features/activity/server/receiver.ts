@@ -1,4 +1,5 @@
 import { acksInTime, lifecycleAction, type SlackDelivery } from "@activity/model/receiver";
+import { log } from "@/shared/log";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { recordUninstall, suspendChannelLinks } from "@links/server/lifecycle";
@@ -82,8 +83,7 @@ export function startSlackReceiver(
     }
     if (delivery.envelopeId !== null) {
       if (acksInTime(arrivedAt, now())) ack(delivery.envelopeId);
-      else
-        console.error("Stored a delivery from Slack too late to ack it, so Slack will resend it.");
+      else log("Stored a delivery from Slack too late to ack it, so Slack will resend it.");
     }
     if (taken.changed) onChange();
     if (taken.missed) onMissed();
@@ -103,7 +103,7 @@ export function startSlackReceiver(
 
   function fail(error: unknown) {
     stopped = true;
-    console.error("Stopped receiving from Slack:", error);
+    log("Stopped receiving from Slack:", error);
     onError(error);
   }
 
@@ -129,7 +129,7 @@ async function take(transaction: Bun.SQL, delivery: SlackDelivery, now: number):
       return takeEvent(transaction, delivery.callback, installation, now);
     case "rate_limited":
       await noteGap(transaction, now, now + 60_000);
-      console.error("Slack held events back for a minute, so the bridge will catch up on them.");
+      log("Slack held events back for a minute, so the bridge will catch up on them.");
       return missed;
     case "malformed":
       return takeMalformed(transaction, "a frame", delivery.issues, now);
@@ -190,8 +190,6 @@ async function takeMalformed(
   now: number,
 ): Promise<Taken> {
   await noteGap(transaction, now, now);
-  console.error(
-    `Couldn't read ${what} from Slack, so the bridge will catch up on it: ${issues.join(", ")}`,
-  );
+  log(`Couldn't read ${what} from Slack, so the bridge will catch up on it: ${issues.join(", ")}`);
   return missed;
 }

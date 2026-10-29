@@ -1,6 +1,7 @@
 // Waking a lead through a fake Toy Box that answers the way the real handlers do.
 
-import { expect, onTestFinished, spyOn, test } from "bun:test";
+import { expect, onTestFinished, test } from "bun:test";
+import { captureLog } from "@bridge/server/testFixtures";
 import { readToyBoxChannel, runToyBoxRoutine } from "@toybox/server/api";
 import { wakeLead } from "@toybox/server";
 import { startFakeToyBox } from "../fakes/toybox";
@@ -11,13 +12,6 @@ function startToyBox() {
   const toyBox = startFakeToyBox();
   onTestFinished(() => toyBox.stop());
   return { toyBox, origin: new URL(toyBox.url) };
-}
-
-/** Keeps what the bridge logs, rather than printing it. */
-function captureLog() {
-  const log = spyOn(console, "error").mockImplementation(() => {});
-  onTestFinished(() => log.mockRestore());
-  return () => log.mock.calls.map((call) => call.join(" "));
 }
 
 test("waking a lead runs the routine whose prompt runs inbox, and lets go of the channel's stream", async () => {

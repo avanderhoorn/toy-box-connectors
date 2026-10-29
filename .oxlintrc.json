@@ -6,6 +6,14 @@
   },
   "overrides": [
     {
+      // Bun colors what `console.error` writes to a terminal red, so the bridge says what it's
+      // doing through `log` in src/shared/log.ts.
+      "files": ["src/**/*.ts", "cli/**/*.ts"],
+      "rules": {
+        "no-console": ["error", { "allow": ["log"] }]
+      }
+    },
+    {
       "files": ["**/*.test.ts"],
       "rules": {
         "typescript/await-thenable": "off",

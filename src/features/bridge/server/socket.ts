@@ -8,6 +8,7 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { COMMAND_TIMEOUT } from "@commands/model/protocol";
+import { log } from "@/shared/log";
 
 /** Where the bridge for `dataFolder` takes calls. */
 export function commandSocketPath(dataFolder: string): string {
@@ -49,7 +50,7 @@ export function listenForCommands(
       ...idleSeconds(idleTimeout),
       fetch: answer,
       error(error) {
-        console.error("Couldn't answer a call on the bridge's socket:", error);
+        log("Couldn't answer a call on the bridge's socket:", error);
         return Response.json(
           {
             error:

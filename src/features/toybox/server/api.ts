@@ -11,6 +11,7 @@ import {
   type RoutineRunOutcome,
   type ToyBoxChannel,
 } from "@toybox/model";
+import { log } from "@/shared/log";
 import { readServerSentEvents } from "./sse";
 
 // Toy Box answers on loopback, so a call this slow has failed rather than queued.
@@ -67,7 +68,7 @@ export async function runToyBoxRoutine(
     await response.body?.cancel();
   } else {
     const answer = (await response.text()).slice(0, 500);
-    console.error(
+    log(
       `Toy Box answered ${response.status} to running routine ${routineId} in channel ${channelId}: ${answer}`,
     );
   }

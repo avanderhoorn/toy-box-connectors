@@ -1,4 +1,4 @@
-import { onTestFinished } from "bun:test";
+import { onTestFinished, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { openBridgeDatabase, type BridgeDatabase } from "./database";
@@ -15,4 +15,11 @@ export async function openTestDatabase(): Promise<BridgeDatabase> {
   const database = await openBridgeDatabase(join(createTestFolder(), "bridge.db"));
   onTestFinished(() => database.close());
   return database;
+}
+
+/** Keep what the test logs, unprinted, as a string for each `log` without its newline. */
+export function captureLog(): () => string[] {
+  const write = spyOn(process.stderr, "write").mockImplementation(() => true);
+  onTestFinished(() => write.mockRestore());
+  return () => write.mock.calls.map(([text]) => String(text).replace(/\n$/, ""));
 }

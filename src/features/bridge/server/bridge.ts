@@ -39,6 +39,7 @@ import { createBotClient, type BotClient } from "@slackapi/server/botClient";
 import { wakeLead } from "@toybox/server";
 import { readToyBoxChannel } from "@toybox/server/api";
 import { startWakeScheduler, type WakeScheduler } from "@wakes/server";
+import { log } from "@/shared/log";
 import { prepareDataFolder, resolveDataFolder } from "./dataFolder";
 import { openBridgeDatabase, type BridgeDatabase } from "./database";
 import { readCredentialsFile, resolveBridgeSettings } from "./environment";
@@ -60,22 +61,22 @@ export async function serveBridge(): Promise<number> {
     // Only the owner answers these, never a lead, whose shell can be a terminal too.
     if (process.stdin.isTTY && resolveSessionId(process.env) === null) {
       const saved = await askForMissingCredentials(dataFolder, process.env);
-      if (saved) console.error(saved);
+      if (saved) log(saved);
     }
     const bridge = await startBridge(dataFolder);
     // Whoever started the bridge may stop it as soon as it says it's running, so it listens first.
     const stopped = shutdownSignal(bridge.failed);
     // Only the bridge that holds the lock installs the skill, so leads read the one it ships.
-    console.error(await refreshSkill());
-    console.error(`toy-box-slack is running for ${dataFolder}`);
+    log(await refreshSkill());
+    log(`toy-box-slack is running for ${dataFolder}`);
 
     const signal = await stopped;
-    console.error(`toy-box-slack is stopping after ${signal ?? "an error"}`);
+    log(`toy-box-slack is stopping after ${signal ?? "an error"}`);
     await bridge.stop();
     return signal ? 0 : 1;
   } catch (error) {
     if (!(error instanceof BridgeRefusedError)) throw error;
-    console.error(error.message);
+    log(error.message);
     return 1;
   }
 }
@@ -201,7 +202,7 @@ async function startRetention(
   await forget();
   return setInterval(() => {
     forget().catch((error: unknown) => {
-      console.error("Couldn't forget old messages:", error);
+      log("Couldn't forget old messages:", error);
       onError(error);
     });
   }, 60 * 60_000);

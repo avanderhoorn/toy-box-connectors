@@ -6,6 +6,7 @@
 // runs inbox, rather than an ID the bridge stored.
 
 import { findRoutine, REQUESTS_COMMAND, type RoutineRunOutcome } from "@toybox/model";
+import { log } from "@/shared/log";
 import { readToyBoxChannel, runToyBoxRoutine } from "./api";
 
 /** Runs the channel's routine that reads Slack requests, which wakes the channel's lead. */
@@ -15,7 +16,7 @@ export async function wakeLead(origin: URL, channelId: string): Promise<RoutineR
     const routine = channel && findRoutine(channel.routines, REQUESTS_COMMAND);
     return routine ? await runToyBoxRoutine(origin, channelId, routine.id) : "missing";
   } catch (error) {
-    console.error(`Calling Toy Box for channel ${channelId} failed:`, error);
+    log(`Calling Toy Box for channel ${channelId} failed:`, error);
     return "failed";
   }
 }

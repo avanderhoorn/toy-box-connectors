@@ -12,6 +12,7 @@ import {
   CommandRefusedError,
   type CommandAnswer,
 } from "@commands/model/protocol";
+import { log } from "@/shared/log";
 import { checkOwner } from "./owner";
 
 const ANOTHER_RELEASE =
@@ -84,7 +85,7 @@ export function serveCommands(
       }
     } catch (error) {
       if (error instanceof CommandRefusedError) return answerError(409, error.message);
-      console.error(`Couldn't finish \`${name}\`:`, error);
+      log(`Couldn't finish \`${name}\`:`, error);
       return answerError(
         500,
         `The bridge couldn't finish \`${name}\`, so it may or may not have run. Its log says why. Run \`toy-box-slack status\` before you try again.`,

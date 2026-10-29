@@ -3,7 +3,7 @@ import { expect, onTestFinished, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import { ACK_DEADLINE_MS } from "@activity/model/receiver";
 import { openBridgeDatabase } from "@bridge/server/database";
-import { createTestFolder } from "@bridge/server/testFixtures";
+import { captureLog, createTestFolder } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { readFrame } from "@slackapi/model/envelopes";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
@@ -98,7 +98,7 @@ function eventFrame(id: string, event: object) {
 
 test("a delivery is acked once everything it changed has committed, and one that fails to commit stops the receiver unacked", async () => {
   const { database, receive, events } = await openReceiver();
-  spyOn(console, "error").mockImplementation(() => {});
+  captureLog();
   await receive("1", asked);
   spyOn(database, "write").mockImplementationOnce(() => Promise.reject(new Error("disk full")));
   await receive("2", { ...asked, ts: "1700000200.000100" });
@@ -113,21 +113,21 @@ test("a delivery is acked once everything it changed has committed, and one that
 
 test("a delivery stored too late to ack is left for Slack to send again, which changes nothing", async () => {
   const { receive, events, lag } = await openReceiver();
-  const error = spyOn(console, "error").mockImplementation(() => {});
+  const logged = captureLog();
   lag(ACK_DEADLINE_MS + 1);
   await receive("1", asked);
   lag(100);
   await receive("2", asked);
 
   expect(events).toEqual(["changed", "acked env-2 after 1 messages and 1 requests"]);
-  expect(error).toHaveBeenCalledWith(
+  expect(logged()).toContain(
     "Stored a delivery from Slack too late to ack it, so Slack will resend it.",
   );
 });
 
 test("each hello, a minute Slack held back and what can't be read note a gap to catch up on", async () => {
   const { database, receiver, receive, events } = await openReceiver();
-  spyOn(console, "error").mockImplementation(() => {});
+  captureLog();
   await receiver.connected(arrivedAt - 60_000);
   await receiver.connected(arrivedAt);
   await receiver.receive({ kind: "rate_limited", envelopeId: null }, arrivedAt, () => {});

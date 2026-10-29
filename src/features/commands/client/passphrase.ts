@@ -8,6 +8,7 @@ import { prepareDataFolder } from "@bridge/server/dataFolder";
 import { readCredentialsFile, writeCredential } from "@bridge/server/environment";
 import { BridgeRefusedError } from "@bridge/server/refusal";
 import { resolveSessionId } from "@commands/model/callers";
+import { log } from "@/shared/log";
 
 /** Reads what the owner types a line at a time without showing it. */
 export interface SecretReader {
@@ -84,6 +85,6 @@ export async function choosePassphrase(
 }
 
 function refused(message: string): 1 {
-  console.error(message);
+  log(message);
   return 1;
 }

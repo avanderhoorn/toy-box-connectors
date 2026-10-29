@@ -1,5 +1,5 @@
-import { expect, mock, onTestFinished, spyOn, test } from "bun:test";
-import { openTestDatabase } from "@bridge/server/testFixtures";
+import { expect, mock, test } from "bun:test";
+import { captureLog, openTestDatabase } from "@bridge/server/testFixtures";
 import { COMMANDS_PATH, CommandRefusedError } from "@commands/model/protocol";
 import { createStoredLink } from "@links/server/testFixtures";
 import { serveCommands, type CommandHandlers } from "./serve";
@@ -83,8 +83,7 @@ test.each<[string, string, unknown, number, unknown]>([
 });
 
 test("logs why a command failed and says it may or may not have run", async () => {
-  const log = spyOn(console, "error").mockImplementation(() => {});
-  onTestFinished(() => log.mockRestore());
+  const logged = captureLog();
 
   const failed = await call("dismiss", { caller: LEAD, input: { request: "r1", reason: "Done" } });
   expect(failed).toEqual({
@@ -94,12 +93,13 @@ test("logs why a command failed and says it may or may not have run", async () =
         "The bridge couldn't finish `dismiss`, so it may or may not have run. Its log says why. Run `toy-box-slack status` before you try again.",
     },
   });
-  expect(log).toHaveBeenCalledWith("Couldn't finish `dismiss`:", new Error("The disk is full."));
+  const [line] = logged();
+  expect(line).toStartWith("Couldn't finish `dismiss`: ");
+  expect(line).toContain("error: The disk is full.");
 });
 
 test("reports a change once a command has run, whether it answered, refused or failed", async () => {
-  const log = spyOn(console, "error").mockImplementation(() => {});
-  onTestFinished(() => log.mockRestore());
+  captureLog();
   const onChange = mock(() => {});
   const dismiss = { caller: LEAD, input: { request: "r1", reason: "Done" } };
 

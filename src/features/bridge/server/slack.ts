@@ -11,6 +11,7 @@ import {
 import type { BotClient, CallFailure } from "@slackapi/server/botClient";
 import { openSlackSocket, type SlackSocket } from "@slackapi/server/socketMode";
 import { retryDelay, type WakeTimings } from "@wakes/model";
+import { log } from "@/shared/log";
 import { sleep } from "@/shared/sleep";
 import type { BridgeDatabase } from "./database";
 import { confirmIdentity } from "./identity";
@@ -172,7 +173,7 @@ export function startSlackSupervisor(
     // The hello's note commits before anything the connection delivers.
     await hello;
     if (!signal.aborted) {
-      console.error("Connected to Slack.");
+      log("Connected to Slack.");
       connected = true;
       everConnected = true;
       problem = null;
@@ -180,7 +181,7 @@ export function startSlackSupervisor(
     await current.closed;
     connected = false;
     if (signal.aborted) return null;
-    console.error(`${connectionLoss(reason)}, so the bridge is reconnecting.`);
+    log(`${connectionLoss(reason)}, so the bridge is reconnecting.`);
     return { connected: true };
   }
 
@@ -206,13 +207,13 @@ export function startSlackSupervisor(
     if (!signal.aborted && !rejected.has(token)) {
       const rejection = rejectedTokenProblem(token, error);
       rejected.set(token, rejection);
-      console.error(rejection);
+      log(rejection);
     }
     return null;
   }
 
   function trouble(found: string, retryAfterMs?: number): Ended {
-    if (problem !== found) console.error(`Can't connect to Slack. ${found}`);
+    if (problem !== found) log(`Can't connect to Slack. ${found}`);
     problem = found;
     return { connected: false, retryAfterMs };
   }
@@ -223,11 +224,11 @@ export function startSlackSupervisor(
     refusal = found;
     stopping.abort();
     socket?.close();
-    console.error(refusalProblem(found));
+    log(refusalProblem(found));
   }
 
   function fail(error: unknown) {
-    if (!failed) console.error("Stopped connecting to Slack:", error);
+    if (!failed) log("Stopped connecting to Slack:", error);
     halt(error);
   }
 

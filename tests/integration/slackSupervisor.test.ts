@@ -1,11 +1,11 @@
-import { describe, expect, onTestFinished, spyOn, test } from "bun:test";
+import { describe, expect, onTestFinished, test } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
 import {
   startSlackSupervisor,
   type SlackSupervisor,
   type SlackSupervisorOptions,
 } from "@bridge/server/slack";
-import { openTestDatabase } from "@bridge/server/testFixtures";
+import { captureLog, openTestDatabase } from "@bridge/server/testFixtures";
 import type { SlackState } from "@commands/model/status";
 import { createStoredLink } from "@links/server/testFixtures";
 import {
@@ -144,12 +144,6 @@ async function callTimes(fake: FakeSlack, method: string, count: number): Promis
   return times;
 }
 
-function silenceLog() {
-  const log = spyOn(console, "error").mockImplementation(() => {});
-  onTestFinished(() => log.mockRestore());
-  return log;
-}
-
 /** Stops `supervisor` while what it waits for is held, checking it waits until `release`. */
 async function stopHeld(supervisor: SlackSupervisor, release: () => unknown) {
   let stopped = false;
@@ -209,7 +203,7 @@ function proxySlack(
 
 describe("connecting", () => {
   test("Slack connects once the tokens are confirmed and Slack says hello, and takes what follows it", async () => {
-    const log = silenceLog();
+    const logged = captureLog();
     const link = await linkFakeSlack();
     const late = link.fake.envelope(post("1700000200.000100"));
     const slack = proxySlack(link.fake, {
@@ -226,11 +220,11 @@ describe("connecting", () => {
     expect(methodsCalled(link.fake)).toEqual(["auth.test", "bots.info", "apps.connections.open"]);
     // A frame before hello is left for Slack to send again.
     expect(await readMessages(link.database)).toEqual([{ ts: "1700000200.000100" }]);
-    expect(log.mock.calls).toEqual([["Connected to Slack."]]);
+    expect(logged()).toEqual(["Connected to Slack."]);
   });
 
   test("Slack that can't connect yet is asked again, less often each time, saying why once", async () => {
-    const log = silenceLog();
+    const logged = captureLog();
     const link = await linkFakeSlack();
     link.fake.failNext("auth.test", { status: 503 });
     link.fake.failNext("auth.test", { status: 503 });
@@ -252,11 +246,11 @@ describe("connecting", () => {
       ...["auth.test", "auth.test", "auth.test", "bots.info"],
       ...["apps.connections.open", "apps.connections.open", "apps.connections.open"],
     ]);
-    expect(log.mock.calls).toEqual([
-      ["Can't connect to Slack. Slack didn't answer auth.test: HTTP 503."],
-      ["Can't connect to Slack. Slack refused apps.connections.open with access_denied."],
-      ["Can't connect to Slack. Slack didn't answer apps.connections.open: HTTP 503."],
-      ["Connected to Slack."],
+    expect(logged()).toEqual([
+      "Can't connect to Slack. Slack didn't answer auth.test: HTTP 503.",
+      "Can't connect to Slack. Slack refused apps.connections.open with access_denied.",
+      "Can't connect to Slack. Slack didn't answer apps.connections.open: HTTP 503.",
+      "Connected to Slack.",
     ]);
     // Once Slack has said hello, losing the connection reconnects without waiting out the backoff
     // the failures before it reached.
@@ -269,7 +263,7 @@ describe("connecting", () => {
   test.each(["auth.test", "apps.connections.open"])(
     "Slack holding back %s is asked again only once the time it named is up",
     async (method) => {
-      const log = silenceLog();
+      const logged = captureLog();
       const link = await linkFakeSlack();
       link.fake.failNext(method, { retryAfter: 1 });
 
@@ -283,15 +277,12 @@ describe("connecting", () => {
       expect(called(link.fake, method)).toBe(1);
 
       await waitFor(() => expect(supervisor.state()).toEqual(connected));
-      expect(log.mock.calls).toEqual([
-        [`Can't connect to Slack. ${problem}`],
-        ["Connected to Slack."],
-      ]);
+      expect(logged()).toEqual([`Can't connect to Slack. ${problem}`, "Connected to Slack."]);
     },
   );
 
   test("a connection Slack never says hello on is replaced, saying why once", async () => {
-    const log = silenceLog();
+    const logged = captureLog();
     const link = await linkFakeSlack();
     const slack = proxySlack(link.fake, { frames: [] });
 
@@ -300,7 +291,7 @@ describe("connecting", () => {
     await waitFor(() => expect(supervisor.state()).toEqual({ connection: "connecting", problem }));
     await waitFor(() => expect(called(link.fake, "apps.connections.open")).toBe(3));
 
-    expect(log.mock.calls).toEqual([[`Can't connect to Slack. ${problem}`]]);
+    expect(logged()).toEqual([`Can't connect to Slack. ${problem}`]);
   });
 
   test.each([
@@ -319,7 +310,7 @@ describe("connecting", () => {
   ])(
     "%s that can't be stored stops Slack with the error before it takes anything",
     async (_, change, stopped, methods) => {
-      const log = silenceLog();
+      const logged = captureLog();
       const link = await linkFakeSlack();
       await link.database.write((transaction) =>
         transaction.unsafe(`
@@ -338,14 +329,14 @@ describe("connecting", () => {
       expect(errors).toHaveLength(1);
       expect(methodsCalled(link.fake)).toEqual(methods);
       expect(supervisor.state()).toEqual({ connection: "connecting", problem: null });
-      expect(log.mock.calls).toEqual([[stopped, errors[0]]]);
+      expect(logged()).toEqual([`${stopped} ${Bun.inspect(errors[0])}`]);
     },
   );
 });
 
 describe("losing the connection", () => {
   test("a lost connection reconnects at once, and catches up on what was said while it was down", async () => {
-    const log = silenceLog();
+    const logged = captureLog();
     const link = await linkFakeSlack();
     const { supervisor } = link.supervise({ timings: STUCK });
     await caughtUp(link, 1);
@@ -363,19 +354,19 @@ describe("losing the connection", () => {
     await waitFor(() =>
       expect(supervisor.state()).toEqual({ connection: "reconnecting", problem }),
     );
-    expect(log.mock.calls).toEqual([
-      ["Connected to Slack."],
-      ["Lost the connection to Slack, so the bridge is reconnecting."],
-      ["Connected to Slack."],
-      ["Slack ended the connection with refresh_requested, so the bridge is reconnecting."],
-      [`Can't connect to Slack. ${problem}`],
+    expect(logged()).toEqual([
+      "Connected to Slack.",
+      "Lost the connection to Slack, so the bridge is reconnecting.",
+      "Connected to Slack.",
+      "Slack ended the connection with refresh_requested, so the bridge is reconnecting.",
+      `Can't connect to Slack. ${problem}`,
     ]);
   });
 });
 
 describe("rejected tokens", () => {
   test("a bot token Slack rejects at startup opens no connection, and is named once until a restart", async () => {
-    const log = silenceLog();
+    const logged = captureLog();
     const link = await linkFakeSlack();
     await link.database.write((transaction) => recordInstallation(transaction, link.fake.identity));
     link.fake.failNext("auth.test", { error: "invalid_auth" });
@@ -386,7 +377,7 @@ describe("rejected tokens", () => {
     await Bun.sleep(TIMINGS.retryLimit * 2);
     expect(methodsCalled(link.fake)).toEqual(["auth.test"]);
     // The bot's client and the identity check each found the rejection.
-    expect(log.mock.calls).toEqual([[problem]]);
+    expect(logged()).toEqual([problem]);
 
     await supervisor.stop();
     const restarted = link.supervise();
@@ -395,7 +386,7 @@ describe("rejected tokens", () => {
   });
 
   test("a bot token Slack rejects once connected leaves the connection up, and both rejected tokens are named", async () => {
-    const log = silenceLog();
+    const logged = captureLog();
     const link = await linkFakeSlack();
     const { supervisor, bot } = link.supervise();
     await waitFor(() => expect(supervisor.state()).toEqual(connected));
@@ -424,18 +415,18 @@ describe("rejected tokens", () => {
       ...["auth.test", "bots.info", "apps.connections.open"],
       ...["conversations.info", "apps.connections.open"],
     ]);
-    expect(log.mock.calls).toEqual([
-      ["Connected to Slack."],
-      [botRejected],
-      ["Lost the connection to Slack, so the bridge is reconnecting."],
-      [appRejected],
+    expect(logged()).toEqual([
+      "Connected to Slack.",
+      botRejected,
+      "Lost the connection to Slack, so the bridge is reconnecting.",
+      appRejected,
     ]);
   });
 
   test.each(["invalid_auth", "not_allowed_token_type", "missing_scope"])(
     "an app token Slack rejects with %s is named, and isn't tried again",
     async (error) => {
-      const log = silenceLog();
+      const logged = captureLog();
       const link = await linkFakeSlack();
       link.fake.failNext("apps.connections.open", { error });
 
@@ -447,14 +438,14 @@ describe("rejected tokens", () => {
       await Bun.sleep(TIMINGS.retryLimit * 2);
 
       expect(called(link.fake, "apps.connections.open")).toBe(1);
-      expect(log.mock.calls).toEqual([[problem]]);
+      expect(logged()).toEqual([problem]);
     },
   );
 });
 
 describe("refusing Slack", () => {
   test("a hello naming another app closes the connection before anything is taken, and Slack stays off", async () => {
-    const log = silenceLog();
+    const logged = captureLog();
     const link = await linkFakeSlack();
     link.fake.setNextHelloAppId("A-other");
 
@@ -472,11 +463,11 @@ describe("refusing Slack", () => {
     expect(await link.database.read((sql) => sql`SELECT connected_at FROM installation`)).toEqual([
       { connected_at: null },
     ]);
-    expect(log.mock.calls).toEqual([[refusalProblem(refusal)]]);
+    expect(logged()).toEqual([refusalProblem(refusal)]);
   });
 
   test("tokens for another workspace than the stored one turn Slack off before it connects", async () => {
-    const log = silenceLog();
+    const logged = captureLog();
     const link = await linkFakeSlack();
     await createStoredInstallation(link.database);
 
@@ -487,11 +478,11 @@ describe("refusing Slack", () => {
     await Bun.sleep(TIMINGS.retryLimit * 2);
 
     expect(methodsCalled(link.fake)).toEqual(["auth.test", "bots.info"]);
-    expect(log.mock.calls).toEqual([[refusalProblem(refusal)]]);
+    expect(logged()).toEqual([refusalProblem(refusal)]);
   });
 
   test("an uninstall closes the connection, and Slack stays off", async () => {
-    const log = silenceLog();
+    const logged = captureLog();
     const link = await linkFakeSlack();
     const { supervisor } = link.supervise();
     await waitFor(() => expect(supervisor.state()).toEqual(connected));
@@ -505,13 +496,13 @@ describe("refusing Slack", () => {
     await Bun.sleep(TIMINGS.retryLimit * 2);
     expect(called(link.fake, "apps.connections.open")).toBe(1);
     expect(await link.database.read(readInstallation)).toMatchObject({ status: "uninstalled" });
-    expect(log.mock.calls).toEqual([["Connected to Slack."], [problem]]);
+    expect(logged()).toEqual(["Connected to Slack.", problem]);
   });
 });
 
 describe("stopping", () => {
   test("stopping closes the connection, and waits for the delivery in hand without acking it", async () => {
-    const log = silenceLog();
+    const logged = captureLog();
     const link = await linkFakeSlack();
     const { supervisor } = link.supervise();
     await waitFor(() => expect(supervisor.state()).toEqual(connected));
@@ -529,11 +520,11 @@ describe("stopping", () => {
 
     expect(await readMessages(link.database)).toEqual([{ ts: "1700000200.000100" }]);
     expect(await link.fake.waitForAck(sent.envelopeId, 100)).toBeNull();
-    expect(log.mock.calls).toEqual([["Connected to Slack."]]);
+    expect(logged()).toEqual(["Connected to Slack."]);
   });
 
   test("stopping while Slack is asked whose tokens these are waits for what its answer stores", async () => {
-    silenceLog();
+    captureLog();
     const link = await linkFakeSlack();
     await link.database.write((transaction) => recordInstallation(transaction, link.fake.identity));
     link.fake.failNext("auth.test", { error: "invalid_auth" });
@@ -551,7 +542,7 @@ describe("stopping", () => {
   });
 
   test("stopping while Slack is asked for a connection waits for its answer, and connects nothing", async () => {
-    const log = silenceLog();
+    const logged = captureLog();
     const link = await linkFakeSlack();
     const answering = Promise.withResolvers<void>();
     const slack = proxySlack(link.fake, {
@@ -563,11 +554,11 @@ describe("stopping", () => {
     await stopHeld(supervisor, () => answering.resolve());
 
     expect(supervisor.state()).toEqual({ connection: "connecting", problem: null });
-    expect(log).not.toHaveBeenCalled();
+    expect(logged()).toEqual([]);
   });
 
   test("stopping while waiting to ask Slack again asks nothing more", async () => {
-    silenceLog();
+    captureLog();
     const link = await linkFakeSlack();
     link.fake.failNext("auth.test", { status: 503 });
     const { supervisor } = link.supervise({ timings: STUCK });

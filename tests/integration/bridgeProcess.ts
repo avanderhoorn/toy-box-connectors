@@ -103,8 +103,8 @@ export function serveAtTerminal(home: string, env: Record<string, string> = {}) 
   const drained = (async () => {
     for await (const chunk of terminal.stdout) shown += decoder.decode(chunk, { stream: true });
   })();
-  /** What the terminal showed, without the colors Bun gives stderr, with a file's line endings. */
-  const transcript = () => Bun.stripANSI(shown).replaceAll("\r\n", "\n");
+  /** What the terminal showed, colors and all, with a file's line endings. */
+  const transcript = () => shown.replaceAll("\r\n", "\n");
 
   return {
     /** Resolves once the terminal shows `text`, and rejects if the bridge exits or takes too long. */

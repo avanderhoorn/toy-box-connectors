@@ -1,4 +1,5 @@
-import { expect, onTestFinished, spyOn, test } from "bun:test";
+import { expect, onTestFinished, test } from "bun:test";
+import { captureLog } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { startOutboxWorker, type OutboxWorker } from "@outbox/server";
 import { queuePublication, queueReply } from "@outbox/server/database";
@@ -118,8 +119,7 @@ test("a storage failure stops the worker and reports why without sending", async
       BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END
     `,
   );
-  const errorLog = spyOn(console, "error").mockImplementation(() => {});
-  onTestFinished(() => errorLog.mockRestore());
+  const logged = captureLog();
   const failure = Promise.withResolvers<unknown>();
   worker = startOutboxWorker(world.database, world.bot, {
     ready: () => true,
@@ -128,10 +128,10 @@ test("a storage failure stops the worker and reports why without sending", async
     now: world.now,
   });
   const error = await failure.promise;
-  expect(error).toMatchObject({ message: expect.stringContaining("database or disk is full") });
+  expect(String(error)).toContain("database or disk is full");
   worker.poke();
   await worker.stop();
-  expect(errorLog.mock.calls).toEqual([["Stopped delivering Slack posts:", error]]);
+  expect(logged()).toEqual([`Stopped delivering Slack posts: ${Bun.inspect(error)}`]);
   expect(await world.read(item.id)).toMatchObject({ state: "queued" });
   expect(world.slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(0);
 });

@@ -9,6 +9,7 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { expireRequests } from "@requests/server/lifecycle";
 import { REQUESTS_COMMAND, type RoutineRunOutcome } from "@toybox/model";
 import { decideWake, defaultWakeTimings, type WakeTimings } from "@wakes/model";
+import { log } from "@/shared/log";
 import { pruneWakes, readLinkWakes, recordWake } from "./database";
 
 export interface WakeScheduler {
@@ -86,9 +87,7 @@ export function startWakeScheduler(
       const outcome = await wakeLead(link.channelId);
       await database.write((transaction) => recordWake(transaction, link.id, startedAt, outcome));
       if (outcome !== "ran") {
-        console.error(
-          `Couldn't wake the lead of Toy Box channel ${link.channelId}: ${unwoken[outcome]}.`,
-        );
+        log(`Couldn't wake the lead of Toy Box channel ${link.channelId}: ${unwoken[outcome]}.`);
       }
       again = true;
     }
@@ -99,7 +98,7 @@ export function startWakeScheduler(
     if (stopped) return;
     stopped = true;
     clearTimeout(timer);
-    console.error("Stopped waking leads:", error);
+    log("Stopped waking leads:", error);
     onError(error);
   }
 

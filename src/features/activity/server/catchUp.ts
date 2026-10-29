@@ -15,6 +15,7 @@ import type { BotClient } from "@slackapi/server/botClient";
 import { fetchHistoryPage, fetchThreadPage } from "@slackapi/server/history";
 import { markConnected, readConnectedAt, readInstallation } from "@slackapi/server/installation";
 import { defaultWakeTimings, retryDelay, type WakeTimings } from "@wakes/model";
+import { log } from "@/shared/log";
 import { sleep } from "@/shared/sleep";
 import { ingestMessageEvent } from "./ingest";
 
@@ -120,12 +121,12 @@ export function startCatchUp(
         if (signal.aborted) return;
         failures += 1;
         const found = `Can't catch up on messages the bridge may have missed. ${error.message}`;
-        if (problem !== found) console.error(found);
+        if (problem !== found) log(found);
         problem = found;
         timer = setTimeout(poke, retryDelay(failures, timings));
         return;
       }
-      if (problem !== null) console.error("Caught up on messages the bridge may have missed.");
+      if (problem !== null) log("Caught up on messages the bridge may have missed.");
       failures = 0;
       problem = null;
     }
@@ -196,7 +197,7 @@ export function startCatchUp(
       for (const raw of page.messages) {
         const message = slackMessageSchema.safeParse(raw);
         if (message.success) messages.push(message.data);
-        else console.error(`Skipped a ${method} message: ${issuesOf(message.error).join(", ")}`);
+        else log(`Skipped a ${method} message: ${issuesOf(message.error).join(", ")}`);
       }
       const next = continueHistory(page, used);
       if (next.kind === "done") return messages;
@@ -247,7 +248,7 @@ export function startCatchUp(
     if (signal.aborted) return;
     stopping.abort();
     clearTimeout(timer);
-    console.error("Stopped catching up with Slack:", error);
+    log("Stopped catching up with Slack:", error);
     onError(error);
   }
 
