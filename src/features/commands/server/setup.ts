@@ -7,11 +7,18 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { CommandRefusedError, type CommandAnswer } from "@commands/model/protocol";
 import { admissionRefusal, approvalRefusal, linkPreview } from "@commands/model/setup";
 import { channelName, oneLine, personName } from "@commands/model/slackText";
+import { presentLinkState } from "@commands/model/status";
 import { count } from "@commands/model/wording";
 import { admissionProblem } from "@links/model/admission";
 import { approvableAudience } from "@links/model/audience";
 import { suspensions } from "@links/model/status";
-import { allowPerson, denyPeople, readChannelLink, readToyBoxLink } from "@links/server/database";
+import {
+  allowPerson,
+  denyPeople,
+  readChannelLink,
+  readToyBoxLink,
+  type ChannelLink,
+} from "@links/server/database";
 import { approveLink, deleteLink, pauseLink } from "@links/server/status";
 import { deleteLinkRequests, readActiveRequests } from "@requests/server/database";
 import { cancelStoredRequest } from "@requests/server/lifecycle";
@@ -37,18 +44,14 @@ export function linkCommand(options: SetupCommandOptions): CommandHandler<"link"
     linkChannel(options, context, slackChannel, { requestMode: requests, observe });
 }
 
-/** Refuses a link Slack gave a new channel ID, which only unlink and a new link end. */
 export function resumeCommand(options: SetupCommandOptions): CommandHandler<"resume"> {
   return async (_input, context) => {
     const link = await options.database.read((sql) => readCallerLink(sql, context.channelId));
-    if (link.statusReason === "channel_id_changed") {
-      const { because, fix } = suspensions.channel_id_changed;
-      throw new CommandRefusedError(`The link to ${link.channel} is suspended ${because}. ${fix}`);
-    }
     return linkChannel(options, context, link.slackChannelId, {});
   };
 }
 
+/** Pauses an active link. One already paused or suspended stays as it is, and says what ends it. */
 export function pauseCommand({ database }: SetupCommandOptions): CommandHandler<"pause"> {
   return async (_input, { channelId, at }) => {
     const link = await database.write(async (transaction) => {
@@ -57,9 +60,10 @@ export function pauseCommand({ database }: SetupCommandOptions): CommandHandler<
       return link;
     });
     const status = link.status === "active" ? "paused" : link.status;
+    const already = link.status === "paused" ? "already " : "";
     return {
       result: { status },
-      text: `The link to ${link.channel} is ${status}, so the lead won't answer or post there until the owner runs \`toy-box-slack resume\`.`,
+      text: `The link to ${link.channel} is ${already}${presentLinkState({ ...link, status })}`,
     };
   };
 }
@@ -142,6 +146,8 @@ export function denyCommand({ database }: SetupCommandOptions): CommandHandler<"
 /**
  * Links the caller's Toy Box channel to `slackChannelId` and makes the link active, with the
  * settings `wanted` names, else the link's own, and the channel's audience as Slack says it is now.
+ * A link Slack moved is refused before Toy Box or Slack is asked, and again as it writes, since
+ * Slack can move it while they're asked.
  */
 async function linkChannel(
   { database, bot, toyBoxOrigin }: SetupCommandOptions,
@@ -150,6 +156,7 @@ async function linkChannel(
   wanted: Partial<Pick<CallerLink, "requestMode" | "observe">>,
 ): Promise<CommandAnswer> {
   const toyBoxChannelId = callerChannel(channelId);
+  refuseMoved(await database.read((sql) => readToyBoxLink(sql, toyBoxChannelId)));
   const toyBox = await readLinkableChannel(toyBoxOrigin, toyBoxChannelId);
   const { slack, home } = await readSlackHome(database, bot);
   const facts = await askSlack(slack, "conversations.info", (client) =>
@@ -162,6 +169,7 @@ async function linkChannel(
   }
   return database.write(async (transaction) => {
     const link = await readToyBoxLink(transaction, toyBoxChannelId);
+    refuseMoved(link);
     if (link && link.slackChannelId !== slackChannelId) {
       throw new CommandRefusedError(
         `This Toy Box channel is linked to ${channelName(null, link.slackChannelId)}. Run \`toy-box-slack unlink\` before you link it to another channel.`,
@@ -184,6 +192,14 @@ async function linkChannel(
       text: `The lead of ${toyBox} answers in ${channel} now, for the people \`toy-box-slack allow\` names.`,
     };
   });
+}
+
+/** Refuses a link Slack gave a new channel ID, which only unlink and a new link end. */
+function refuseMoved(link: ChannelLink | null): void {
+  if (link?.statusReason !== "channel_id_changed") return;
+  const { because, fix } = suspensions.channel_id_changed;
+  const channel = channelName(null, link.slackChannelId);
+  throw new CommandRefusedError(`The link to ${channel} is suspended ${because}. ${fix}`);
 }
 
 /** The Toy Box channel's name, refusing one that's missing or whose lead isn't on Copilot. */

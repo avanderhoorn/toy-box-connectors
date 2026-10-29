@@ -108,7 +108,11 @@ function presentUnconfirmed(posts: UnconfirmedPost[], at: number): string[] {
   ];
 }
 
-function presentLinkState({ status, statusReason }: LinkStatus): string {
+/** A link's state as it reads after "is", and what ends it when it isn't active. */
+export function presentLinkState({
+  status,
+  statusReason,
+}: Pick<LinkStatus, "status" | "statusReason">): string {
   if (status === "active") return "active.";
   const suspension = status === "suspended" ? suspensions[statusReason as SuspendReason] : null;
   if (!suspension) return `${status}, ${halted} ${resume}`;
