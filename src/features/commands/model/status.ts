@@ -1,5 +1,6 @@
 // Status is where the lead or the owner looks when Slack goes quiet, so everything wrong it shows
-// comes with what to do about it.
+// comes with what to do about it. A bridge that hosts several apps shows each one's under its name,
+// and one that hosts only the default app shows it as it did before the bridge hosted several.
 
 import { suspensions, type SuspendReason } from "@links/model/status";
 import { missingTokensProblem } from "@slackapi/model/identity";
@@ -65,6 +66,9 @@ export type UnconfirmedPost = {
 
 export type Status = { slack: SlackState; links: LinkStatus[] };
 
+/** One app's status, in a bridge that hosts several. */
+export type AppStatus = Status & { app: string };
+
 const halted = "so nothing new opens and nothing posts.";
 const resume = "Have the owner run `toy-box-slack resume`.";
 
@@ -76,10 +80,24 @@ const unwoken: Record<Exclude<WakeRun["outcome"], "ran">, string> = {
 };
 
 /** Status as Markdown, a section for Slack and one for each link. */
-export function presentStatus({ slack, links }: Status, at: number): string {
+export function presentStatus(status: Status, at: number): string {
+  return presentSections(status, at, "No Toy Box channel is linked to Slack yet.");
+}
+
+/** Several apps' status as Markdown, each app's sections under its name. */
+export function presentAppStatuses(apps: readonly AppStatus[], at: number): string {
+  return apps
+    .map(({ app, ...status }) => {
+      const unlinked = `No Toy Box channel links through the ${app} app yet.`;
+      return `# The ${app} app\n\n${presentSections(status, at, unlinked)}`;
+    })
+    .join("\n\n");
+}
+
+function presentSections({ slack, links }: Status, at: number, unlinked: string): string {
   const connection = [connections[slack.connection], slack.problem].filter(Boolean).join(" ");
   const sections = [`## Slack\n${connection}`, ...links.map((link) => presentLink(link, at))];
-  if (links.length === 0) sections.push("No Toy Box channel is linked to Slack yet.");
+  if (links.length === 0) sections.push(unlinked);
   return sections.join("\n\n");
 }
 

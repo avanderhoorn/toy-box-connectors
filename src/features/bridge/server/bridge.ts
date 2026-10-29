@@ -21,6 +21,7 @@ import { askForMissingCredentials } from "@commands/client/firstRun";
 import { installSkill } from "@commands/client/skill";
 import { resolveSessionId } from "@commands/model/callers";
 import { serveCommands } from "@commands/server/serve";
+import { statusCommand } from "@commands/server/status";
 import { log } from "@/shared/log";
 import { listApps, readAppTokens } from "./apps";
 import { prepareDataFolder, resolveDataFolder } from "./dataFolder";
@@ -95,17 +96,15 @@ export async function startBridge(
       apps.push(await openApp(app, tokens, { settings, onError: failure.resolve }));
     }
     const claims = slackAppClaims(apps);
-    const running = apps.map((app) => app.start({ claim: claims(app.name) }));
-    // listApps puts the default app first.
-    const main = running[0]!;
+    const nameApps = apps.length > 1;
+    const served = apps.map((app) => app.start({ claim: claims(app.name), nameApps }));
     socket = listenForCommands(
       commandSocketPath(dataFolder),
-      serveCommands(
-        main.database,
-        main.handlers,
-        () => readCredentialsFile(dataFolder).OWNER_PASSPHRASE_HASH ?? null,
-        () => main.onChange(),
-      ),
+      serveCommands({
+        apps: served,
+        status: statusCommand({ nameApps, timings: settings.wakeTimings }),
+        ownerHash: () => readCredentialsFile(dataFolder).OWNER_PASSPHRASE_HASH ?? null,
+      }),
     );
     return { failed: failure.promise, stop };
   } catch (error) {

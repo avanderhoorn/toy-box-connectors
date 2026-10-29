@@ -36,12 +36,13 @@ export function admissionRefusal(who: string, problem: AdmissionProblem): string
   return `Nobody was allowed, since only full members of the bot's workspace or its Enterprise org can be, and ${who} isn't: ${admissionProblems[problem]}.`;
 }
 
-/** Everything the owner approves by linking `toyBox` to `channel`. */
+/** Everything the owner approves by linking `toyBox` to `channel`, through `app` if it's named. */
 export function linkPreview(
   toyBox: string,
   channel: string,
   audience: Audience,
   { requestMode, observe }: Pick<LinkStatus, "requestMode" | "observe">,
+  app: string | null = null,
 ): string {
   const workspaces = new Intl.ListFormat("en").format(audience.workspaces);
   const readers =
@@ -56,7 +57,8 @@ export function linkPreview(
     observe === "channel"
       ? `everything said in ${channel}`
       : "what allowed people say, and everyone's replies in request threads";
-  return `Linking ${toyBox} to ${channel} would let the people you allow ask its lead to act, and it would answer them there.
+  const asBot = app ? ` as the ${app} app's bot` : "";
+  return `Linking ${toyBox} to ${channel} would let the people you allow ask its lead to act, and it would answer them there${asBot}.
 
 - Who reads the lead's answers: ${channel} is ${audience.kind}, so ${readers} can.
 - What asks the lead: an allowed person ${asks}.

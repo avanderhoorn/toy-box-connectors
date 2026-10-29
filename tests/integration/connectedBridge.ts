@@ -18,7 +18,7 @@ export const ALICE = "U0ALICE";
 export const MALLORY = "U0MALLORY";
 
 /** Wakes the lead 50 ms after a request changes, so no test waits out the real debounce. */
-const PROMPTLY: Partial<WakeTimings> = { debounce: 50, debounceLimit: 200 };
+export const PROMPTLY: Partial<WakeTimings> = { debounce: 50, debounceLimit: 200 };
 
 /**
  * A bridge connected to a fake Slack whose workspace and app are its installation's, once Slack

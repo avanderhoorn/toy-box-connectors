@@ -1,9 +1,13 @@
 // The bridge works out who's calling before anything else, so a caller it won't act for learns
-// nothing about any channel. Then it parses the input with the command's schema, checks the
-// owner's passphrase when the call brings one, and runs it.
+// nothing about any channel. Then it parses the input with the command's schema, finds the app the
+// command runs in (see ../model/routing), checks the owner's passphrase when the call brings one,
+// and runs it there.
+//
+// A Toy Box channel links through at most one app. Link and resume are the only commands that make
+// a link, so they run one at a time across every app, each finding the app it runs in once those
+// before it are done.
 
 import type { z } from "zod";
-import type { BridgeDatabase } from "@bridge/server/database";
 import { commands, inputProblem, type CommandName, type CommandSpec } from "@commands/model";
 import { resolveCaller } from "@commands/model/callers";
 import {
@@ -11,12 +15,18 @@ import {
   commandCallSchema,
   CommandRefusedError,
   type CommandAnswer,
+  type CommandCall,
 } from "@commands/model/protocol";
-import { log } from "@/shared/log";
+import { routeCommand } from "@commands/model/routing";
+import { log, type Log } from "@/shared/log";
+import { SerialTaskQueue } from "@/shared/serialTaskQueue";
 import { checkOwner } from "./owner";
+import type { StatusCommand, StatusSource } from "./status";
 
 const ANOTHER_RELEASE =
   "That happens when the CLI runs another release of toy-box-slack, which restarting the bridge fixes.";
+
+const LINKING = new Set<CommandName>(["link", "resume"]);
 
 /** What a command learns about its call besides its input. */
 export type CommandContext = {
@@ -33,20 +43,42 @@ export type CommandHandler<Name extends CommandName> = (
   context: CommandContext,
 ) => Promise<CommandAnswer>;
 
-export type CommandHandlers = { [Name in CommandName]: CommandHandler<Name> };
+/** The commands that run in one app. Status runs across them (see ./status). */
+export type AppCommandHandlers = {
+  [Name in Exclude<CommandName, "status">]: CommandHandler<Name>;
+};
+
+/** One app the bridge hosts, as its commands reach it. */
+export type ServedApp = StatusSource & {
+  handlers: AppCommandHandlers;
+  /** Where the app's lines in the bridge's log go. */
+  log: Log;
+  /** Called once a command ran in the app, since it may have changed a link or request. */
+  onChange(): void;
+};
+
+export type ServeCommandsOptions = {
+  /** The apps the bridge hosts, the default app first. */
+  apps: readonly ServedApp[];
+  status: StatusCommand;
+  /** The argon2id hash of the owner's passphrase, if they set one, which passphrases check against. */
+  ownerHash: () => string | null;
+  now?: () => number;
+};
 
 /**
- * Serves `handlers`, checking passphrases against the argon2id hash `ownerHash` reads, if any.
- * Calls `onChange` once each command has run, even one that refused or failed, since it may have
- * written first.
+ * Serves the commands of `apps`. Calls an app's `onChange` once a command ran in it, even one that
+ * refused or failed, since it may have written first.
  */
-export function serveCommands(
-  database: BridgeDatabase,
-  handlers: CommandHandlers,
-  ownerHash: () => string | null,
-  onChange: () => void,
+export function serveCommands({
+  apps,
+  status,
+  ownerHash,
   now = Date.now,
-): (request: Request) => Promise<Response> {
+}: ServeCommandsOptions): (request: Request) => Promise<Response> {
+  const linking = new SerialTaskQueue();
+  const hosted = apps.map((app) => app.name);
+
   return async (request) => {
     const { pathname } = new URL(request.url);
     const name = pathname.slice(COMMANDS_PATH.length);
@@ -60,38 +92,68 @@ export function serveCommands(
         `The bridge couldn't read the call to \`${name}\`, so it didn't run. ${ANOTHER_RELEASE}`,
       );
     }
+    const serve = () => serveCall(name as CommandName, call.data);
+    return LINKING.has(name as CommandName) ? linking.enqueue(serve) : serve();
+  };
 
-    const spec: CommandSpec = commands[name as CommandName];
+  async function serveCall(name: CommandName, call: CommandCall): Promise<Response> {
+    const spec: CommandSpec = commands[name];
+    let ran: readonly ServedApp[] = [];
     try {
-      const links = await database.read(
-        (sql) => sql<{ id: string }[]>`SELECT toybox_channel_id AS id FROM links`,
+      const linkedThrough = await readLinkedThrough(apps);
+      const resolved = resolveCaller(
+        call.caller,
+        new Set(linkedThrough.keys()),
+        name,
+        spec.callers,
       );
-      const linked = new Set(links.map((link) => link.id));
-      const resolved = resolveCaller(call.data.caller, linked, name, spec.callers);
       if (resolved.kind === "refused") return answerError(403, resolved.message);
-      const input = spec.input.safeParse(call.data.input);
+      const input = spec.input.safeParse(call.input);
       if (!input.success) {
-        return answerError(422, inputProblem(name, spec, call.data.input, input.error));
+        return answerError(422, inputProblem(name, spec, call.input, input.error));
       }
-      const { owner } = call.data;
+      const { channelId } = resolved;
+      const route = routeCommand({
+        name,
+        channelId,
+        app: typeof input.data.app === "string" ? input.data.app : undefined,
+        linkedThrough: channelId === null ? null : (linkedThrough.get(channelId) ?? null),
+        hosted,
+      });
+      if (route.kind === "refused") return answerError(409, route.message);
+      const { owner } = call;
       if (owner) await checkOwner(owner.passphrase, ownerHash());
-      // The schema that parsed the input is the one the handler's type reads.
-      const handler = handlers[name as CommandName] as CommandHandler<CommandName>;
-      const context = { channelId: resolved.channelId, at: now(), confirmed: owner?.confirms };
+      const context = { channelId, at: now(), confirmed: owner?.confirms };
+      ran = route.kind === "every" ? apps : apps.filter((app) => app.name === route.app);
       try {
+        if (name === "status") return Response.json(await status(ran, context));
+        // The schema that parsed the input is the one the handler's type reads.
+        const handler = ran[0]!.handlers[name] as CommandHandler<typeof name>;
         return Response.json(await handler(input.data as never, context));
       } finally {
-        onChange();
+        for (const app of ran) app.onChange();
       }
     } catch (error) {
       if (error instanceof CommandRefusedError) return answerError(409, error.message);
-      log(`Couldn't finish \`${name}\`:`, error);
+      (ran.length === 1 ? ran[0]!.log : log)(`Couldn't finish \`${name}\`:`, error);
       return answerError(
         500,
         `The bridge couldn't finish \`${name}\`, so it may or may not have run. Its log says why. Run \`toy-box-slack status\` before you try again.`,
       );
     }
-  };
+  }
+}
+
+/** The app each linked Toy Box channel links through, by the channel's ID. */
+async function readLinkedThrough(apps: readonly ServedApp[]): Promise<Map<string, string>> {
+  const linkedThrough = new Map<string, string>();
+  for (const app of apps) {
+    const links = await app.database.read(
+      (sql) => sql<{ id: string }[]>`SELECT toybox_channel_id AS id FROM links`,
+    );
+    for (const { id } of links) if (!linkedThrough.has(id)) linkedThrough.set(id, app.name);
+  }
+  return linkedThrough;
 }
 
 function answerError(status: number, error: string): Response {

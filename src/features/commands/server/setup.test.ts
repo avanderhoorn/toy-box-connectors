@@ -9,7 +9,14 @@ import { createStoredRequest } from "@requests/server/testFixtures";
 import { askMessage } from "@slackapi/model/testFixtures";
 import type { BotClient } from "@slackapi/server/botClient";
 import { startFakeToyBox } from "../../../../tests/fakes/toybox";
-import { linkCommand, pauseCommand, resumeCommand, unlinkCommand } from "./setup";
+import {
+  allowCommand,
+  linkCommand,
+  pauseCommand,
+  resumeCommand,
+  unlinkCommand,
+  type SetupCommandOptions,
+} from "./setup";
 import { refusal } from "./testFixtures";
 
 const MOVED =
@@ -110,4 +117,70 @@ test("unlink deletes what the bridge kept for its link, and nothing of another l
   await unlinkCommand(offline(database))({}, { channelId: "toybox-gone", at: 1_000 });
 
   expect(await countRows(database)).toEqual(before);
+});
+
+test("names the app it runs in, once the bridge hosts several, when that app isn't connected to Slack", async () => {
+  const database = await openTestDatabase();
+  await createStoredLink(database);
+  const allow = (app: string | null) =>
+    allowCommand({ ...offline(database), app })({ users: ["U-new"] }, OWNER);
+
+  expect(await refusal(allow(null))).toBe(
+    "The bridge isn't connected to Slack, so nothing changed. Run `toy-box-slack status` to see why.",
+  );
+  expect(await refusal(allow("releases"))).toBe(
+    "The releases app isn't connected to Slack, so nothing changed. Run `toy-box-slack status` to see why.",
+  );
+});
+
+/** Link commands that reach Slack and a Toy Box with one channel the stored link doesn't name. */
+async function linking() {
+  const { database, bot } = await createOutboxWorld();
+  const toyBox = startFakeToyBox();
+  onTestFinished(() => toyBox.stop());
+  const channelId = toyBox.addChannel();
+  const options: SetupCommandOptions = { database, bot, toyBoxOrigin: new URL(toyBox.url) };
+  return { database, channelId, options };
+}
+
+test("a link through a named app says whose bot answers, in what the owner confirms and in its answer", async () => {
+  const { database, channelId, options } = await linking();
+  await database.write(
+    (transaction) => transaction`UPDATE links SET toybox_channel_id = ${channelId}`,
+  );
+  const owner = { channelId, at: 1_000 };
+  const link = (app: string | null) => linkCommand({ ...options, app });
+
+  const asked = await link("releases")({ slackChannel: "C-link" }, owner);
+  const linked = await link("releases")(
+    { slackChannel: "C-link" },
+    {
+      ...owner,
+      confirmed: asked.confirm,
+    },
+  );
+  const before = await link(null)({ slackChannel: "C-link" }, owner);
+
+  expect(asked.text.split("\n")[0]).toBe(
+    'Linking "Linked" to #fake-channel would let the people you allow ask its lead to act, and it would answer them there as the releases app\'s bot.',
+  );
+  expect(linked.text).toBe(
+    'The lead of "Linked" answers in #fake-channel now as the releases app\'s bot, for the people `toy-box-slack allow` names.',
+  );
+  expect(before.text.split("\n")[0]).toBe(
+    'Linking "Linked" to #fake-channel would let the people you allow ask its lead to act, and it would answer them there.',
+  );
+});
+
+test("a Slack channel linked to another Toy Box channel through a named app is refused, saying another app can link it", async () => {
+  const { channelId, options } = await linking();
+  const link = (app: string | null) =>
+    linkCommand({ ...options, app })({ slackChannel: "C-link" }, { channelId, at: 1_000 });
+
+  expect(await refusal(link(null))).toBe(
+    "#fake-channel is linked to another Toy Box channel. Unlink it there before you link it here.",
+  );
+  expect(await refusal(link("releases"))).toBe(
+    "#fake-channel is linked to another Toy Box channel through the releases app. Unlink it there, or link this one through another app with `--app`.",
+  );
 });

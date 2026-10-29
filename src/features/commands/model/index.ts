@@ -3,6 +3,7 @@
 // command can't mean one thing to the lead and another to the bridge.
 
 import { z } from "zod";
+import { appNameSchema } from "@bridge/model/apps";
 import type { CallerRole } from "./callers";
 
 export type CommandSpec = {
@@ -135,6 +136,11 @@ export const commands = {
           .enum(["requesters", "channel"])
           .optional()
           .describe("What the lead reads: requesters' threads (the default) or the whole channel"),
+        app: appNameSchema
+          .optional()
+          .describe(
+            "The app whose bot answers there, such as releases: the one it links through, or default",
+          ),
       })
       .strict(),
   },

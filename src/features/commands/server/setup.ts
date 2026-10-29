@@ -37,6 +37,8 @@ export type SetupCommandOptions = {
   database: BridgeDatabase;
   bot: BotClient | null;
   toyBoxOrigin: URL;
+  /** The app the commands run in, which they name once the bridge hosts several. */
+  app?: string | null;
 };
 
 export function linkCommand(options: SetupCommandOptions): CommandHandler<"link"> {
@@ -86,9 +88,10 @@ export function unlinkCommand({ database }: SetupCommandOptions): CommandHandler
 }
 
 /** Admits only full members, as Slack describes them now. */
-export function allowCommand({ database, bot }: SetupCommandOptions): CommandHandler<"allow"> {
+export function allowCommand(options: SetupCommandOptions): CommandHandler<"allow"> {
+  const { database } = options;
   return async ({ users }, { channelId, at, confirmed }) => {
-    const { slack, home } = await readSlackHome(database, bot);
+    const { slack, home } = await readSlackHome(options);
     // An Enterprise member can be named by either of their IDs, and is allowed once.
     const people = new Map<string, SlackPerson>();
     for (const userId of users) {
@@ -150,15 +153,16 @@ export function denyCommand({ database }: SetupCommandOptions): CommandHandler<"
  * Slack can move it while they're asked.
  */
 async function linkChannel(
-  { database, bot, toyBoxOrigin }: SetupCommandOptions,
+  options: SetupCommandOptions,
   { channelId, at, confirmed }: CommandContext,
   slackChannelId: string,
   wanted: Partial<Pick<CallerLink, "requestMode" | "observe">>,
 ): Promise<CommandAnswer> {
+  const { database, toyBoxOrigin, app = null } = options;
   const toyBoxChannelId = callerChannel(channelId);
   refuseMoved(await database.read((sql) => readToyBoxLink(sql, toyBoxChannelId)));
   const toyBox = await readLinkableChannel(toyBoxOrigin, toyBoxChannelId);
-  const { slack, home } = await readSlackHome(database, bot);
+  const { slack, home } = await readSlackHome(options);
   const facts = await askSlack(slack, "conversations.info", (client) =>
     fetchChannelFacts(client, slackChannelId),
   );
@@ -177,19 +181,22 @@ async function linkChannel(
     }
     if (!link && (await readChannelLink(transaction, slackChannelId))) {
       throw new CommandRefusedError(
-        `${channel} is linked to another Toy Box channel. Unlink it there before you link it here.`,
+        app
+          ? `${channel} is linked to another Toy Box channel through the ${app} app. Unlink it there, or link this one through another app with \`--app\`.`
+          : `${channel} is linked to another Toy Box channel. Unlink it there before you link it here.`,
       );
     }
     const requestMode = wanted.requestMode ?? link?.requestMode ?? "mention";
     const observe = wanted.observe ?? link?.observe ?? "requesters";
-    const preview = linkPreview(toyBox, channel, approved, { requestMode, observe });
+    const preview = linkPreview(toyBox, channel, approved, { requestMode, observe }, app);
     const ask = confirmWidening(preview, confirmed);
     if (ask) return ask;
     const settings = { requestMode, observe };
     await approveLink(transaction, { toyBoxChannelId, slackChannelId, ...settings, approved }, at);
+    const asBot = app ? ` as the ${app} app's bot` : "";
     return {
       result: { slackChannel: slackChannelId, status: "active", ...settings },
-      text: `The lead of ${toyBox} answers in ${channel} now, for the people \`toy-box-slack allow\` names.`,
+      text: `The lead of ${toyBox} answers in ${channel} now${asBot}, for the people \`toy-box-slack allow\` names.`,
     };
   });
 }
@@ -218,11 +225,11 @@ async function readLinkableChannel(origin: URL, channelId: string): Promise<stri
 }
 
 /** The bot, and the installation it acts in, refusing while the bridge can't ask Slack. */
-async function readSlackHome(database: BridgeDatabase, bot: BotClient | null) {
+async function readSlackHome({ database, bot, app = null }: SetupCommandOptions) {
   const home = await database.read(readInstallation);
   if (!bot || home?.status !== "active") {
     throw new CommandRefusedError(
-      "The bridge isn't connected to Slack, so nothing changed. Run `toy-box-slack status` to see why.",
+      `${app ? `The ${app} app` : "The bridge"} isn't connected to Slack, so nothing changed. Run \`toy-box-slack status\` to see why.`,
     );
   }
   return { slack: bot, home };

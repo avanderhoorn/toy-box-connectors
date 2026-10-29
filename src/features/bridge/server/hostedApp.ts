@@ -7,7 +7,8 @@
 // learn which Slack app each one records, before any app talks to Slack.
 //
 // The default app's lines in the bridge's log read as they did before the bridge hosted several,
-// and an added app's start with its name.
+// and an added app's start with its name. What its commands say names it once the bridge hosts
+// several.
 
 import { DEFAULT_APP } from "@bridge/model/apps";
 import type { ClaimSlackApp } from "@bridge/model/claims";
@@ -16,7 +17,7 @@ import { activityCommand, markReadCommand } from "@commands/server/activity";
 import { dismissCommand } from "@commands/server/dismiss";
 import { inboxCommand } from "@commands/server/inbox";
 import { publishCommand, replyCommand, retractCommand } from "@commands/server/posts";
-import type { CommandHandlers } from "@commands/server/serve";
+import type { ServedApp } from "@commands/server/serve";
 import {
   allowCommand,
   denyCommand,
@@ -25,7 +26,6 @@ import {
   resumeCommand,
   unlinkCommand,
 } from "@commands/server/setup";
-import { statusCommand } from "@commands/server/status";
 import { startOutboxWorker, type OutboxWorker } from "@outbox/server";
 import { recoverOutboxAttempts } from "@outbox/server/database";
 import { createBotClient, type BotClient } from "@slackapi/server/botClient";
@@ -35,7 +35,7 @@ import { readToyBoxChannel } from "@toybox/server/api";
 import { startWakeScheduler, type WakeScheduler } from "@wakes/server";
 import { labeledLog, log as bridgeLog } from "@/shared/log";
 import type { App, AppTokens } from "./apps";
-import { openBridgeDatabase, type BridgeDatabase } from "./database";
+import { openBridgeDatabase } from "./database";
 import type { BridgeSettings } from "./environment";
 import { startRetention } from "./retention";
 import { startSlackSupervisor, type SlackSupervisor } from "./slack";
@@ -45,18 +45,13 @@ export interface HostedApp {
   readonly name: string;
   /** The Slack app its bridge.db records, or null before Slack first confirmed its tokens. */
   readonly slackAppId: string | null;
-  /** Starts its work, connecting to Slack only through a Slack app `claim` gives it. */
-  start(options: { claim: ClaimSlackApp }): RunningApp;
+  /**
+   * Starts its work, connecting to Slack only through a Slack app `claim` gives it, and answers
+   * what its commands reach. They name the app when `nameApps` says the bridge hosts several.
+   */
+  start(options: { claim: ClaimSlackApp; nameApps: boolean }): ServedApp;
   /** Stops whatever it started, and then closes its bridge.db. */
   stop(): Promise<void>;
-}
-
-/** What the bridge's commands reach in an app that's running. */
-export interface RunningApp {
-  readonly database: BridgeDatabase;
-  readonly handlers: CommandHandlers;
-  /** Called once a command ran in the app, since it may have changed a link or request. */
-  onChange(): void;
 }
 
 /**
@@ -85,7 +80,7 @@ export async function openApp(
   let slack: SlackSupervisor | undefined;
   let outbox: OutboxWorker | undefined;
 
-  function start({ claim }: { claim: ClaimSlackApp }): RunningApp {
+  function start({ claim, nameApps }: { claim: ClaimSlackApp; nameApps: boolean }): ServedApp {
     // Slack is supervised exactly when both tokens are set.
     const slackState = (): SlackState => unconfiguredSlack(tokens, app.name) ?? slack!.state();
     const { botToken, appToken } = tokens;
@@ -122,9 +117,13 @@ export async function openApp(
       });
     }
     const workspaceUrl = () => slack?.workspaceUrl() ?? null;
-    const setup = { database, bot, toyBoxOrigin: origin };
+    const setup = { database, bot, toyBoxOrigin: origin, app: nameApps ? app.name : null };
     return {
+      name: app.name,
       database,
+      slack: slackState,
+      workspaceUrl,
+      log,
       handlers: {
         inbox: inboxCommand({
           database,
@@ -142,7 +141,6 @@ export async function openApp(
           outbox,
         }),
         retract: retractCommand({ database, bot }),
-        status: statusCommand({ database, slack: slackState, workspaceUrl, timings }),
         link: linkCommand(setup),
         allow: allowCommand(setup),
         deny: denyCommand(setup),
