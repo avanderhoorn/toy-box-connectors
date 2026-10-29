@@ -490,7 +490,7 @@ describe("refusing Slack", () => {
     link.fake.setNextHelloAppId("A-other");
 
     const { supervisor } = link.supervise();
-    const refusal: IdentityRefusal = { reason: "other_app", stored: "AFAKE", found: "A-other" };
+    const refusal: IdentityRefusal = { reason: "other_app" };
     const refused: SlackState = { connection: "refused", problem: refusalProblem(refusal) };
     await waitFor(() => expect(supervisor.state()).toEqual(refused));
     await waitFor(() => expect(link.fake.activeConnections).toBe(0));
@@ -512,12 +512,7 @@ describe("refusing Slack", () => {
     await createStoredInstallation(link.database);
 
     const { supervisor } = link.supervise();
-    const refusal: IdentityRefusal = {
-      reason: "mismatch",
-      field: "teamId",
-      stored: "T-home",
-      found: "TFAKE",
-    };
+    const refusal: IdentityRefusal = { reason: "mismatch", field: "teamId", found: "TFAKE" };
     const refused: SlackState = { connection: "refused", problem: refusalProblem(refusal) };
     await waitFor(() => expect(supervisor.state()).toEqual(refused));
     await Bun.sleep(TIMINGS.retryLimit * 2);

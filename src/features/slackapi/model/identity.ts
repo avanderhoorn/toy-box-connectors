@@ -18,16 +18,8 @@ export type TokenOwner = {
 export type BotOwner = TokenOwner & { botId: string };
 export type BotInfo = { appId: string; userId: string };
 export type IdentityRefusal =
-  | { reason: "uninstalled" | "org_wide" | "not_bot" }
-  | { reason: "rotating"; tokens: readonly TokenName[] }
-  | {
-      reason: "mismatch";
-      field: "teamId" | "appId" | "botId" | "botUserId";
-      stored: string;
-      found: string;
-    }
-  | { reason: "moved_org"; stored: string | null; found: string | null }
-  | { reason: "other_app"; stored: string; found: string | null };
+  | { reason: "uninstalled" | "org_wide" | "not_bot" | "rotating" | "moved_org" | "other_app" }
+  | { reason: "mismatch"; field: "teamId" | "appId" | "botId" | "botUserId"; found: string };
 
 export const authTestSchema = z
   .object({
@@ -61,17 +53,15 @@ export function tokensRefusal(tokens: {
   botToken: string;
   appToken: string;
 }): IdentityRefusal | null {
-  const rotating: TokenName[] = [];
-  if (tokens.botToken.startsWith("xoxe.")) rotating.push("SLACK_BOT_TOKEN");
-  if (tokens.appToken.startsWith("xoxe.")) rotating.push("SLACK_APP_TOKEN");
-  return rotating.length ? { reason: "rotating", tokens: rotating } : null;
+  return tokens.botToken.startsWith("xoxe.") || tokens.appToken.startsWith("xoxe.")
+    ? { reason: "rotating" }
+    : null;
 }
 
 export function checkOwner(
   owner: TokenOwner,
 ): { kind: "bot"; owner: BotOwner } | { kind: "refused"; refusal: IdentityRefusal } {
-  if (owner.rotates)
-    return { kind: "refused", refusal: { reason: "rotating", tokens: ["SLACK_BOT_TOKEN"] } };
+  if (owner.rotates) return { kind: "refused", refusal: { reason: "rotating" } };
   if (owner.orgWide) return { kind: "refused", refusal: { reason: "org_wide" } };
   if (owner.botId === null) return { kind: "refused", refusal: { reason: "not_bot" } };
   return { kind: "bot", owner: { ...owner, botId: owner.botId } };
@@ -94,16 +84,13 @@ export function identityRefusal(
   found: SlackIdentity,
 ): IdentityRefusal | null {
   for (const field of ["teamId", "appId", "botId", "botUserId"] as const) {
-    if (stored[field] !== found[field])
-      return { reason: "mismatch", field, stored: stored[field], found: found[field] };
+    if (stored[field] !== found[field]) return { reason: "mismatch", field, found: found[field] };
   }
-  return stored.enterpriseId === found.enterpriseId
-    ? null
-    : { reason: "moved_org", stored: stored.enterpriseId, found: found.enterpriseId };
+  return stored.enterpriseId === found.enterpriseId ? null : { reason: "moved_org" };
 }
 
 export function helloRefusal(appId: string, helloAppId: string | null): IdentityRefusal | null {
-  return helloAppId === appId ? null : { reason: "other_app", stored: appId, found: helloAppId };
+  return helloAppId === appId ? null : { reason: "other_app" };
 }
 
 export function refusalProblem(refusal: IdentityRefusal): string {

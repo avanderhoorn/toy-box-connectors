@@ -88,7 +88,7 @@ describe("confirming the tokens", () => {
 
       expect(await confirm(database, fakeSlack({ [field]: found }))).toEqual({
         kind: "refused",
-        refusal: { reason: "mismatch", field, stored: fakeInstallation[field], found },
+        refusal: { reason: "mismatch", field, found },
       });
       expect(await database.read(readInstallation)).toEqual(fakeInstallation);
     }
@@ -100,7 +100,7 @@ describe("confirming the tokens", () => {
 
     expect(await confirm(database, fakeSlack({ enterpriseId: "EFAKE" }))).toEqual({
       kind: "refused",
-      refusal: { reason: "moved_org", stored: null, found: "EFAKE" },
+      refusal: { reason: "moved_org" },
     });
     expect(await database.read(readInstallation)).toEqual(fakeInstallation);
   });
@@ -114,14 +114,14 @@ describe("refusing credentials v1 doesn't support", () => {
 
     expect(await confirm(database, slack, { tokens })).toEqual({
       kind: "refused",
-      refusal: { reason: "rotating", tokens: ["SLACK_APP_TOKEN"] },
+      refusal: { reason: "rotating" },
     });
     expect(slack.calls).toEqual([]);
   });
 
   test("a token that expires, an org-wide install's or a user's is refused unrecorded", async () => {
     for (const [changes, refusal] of [
-      [{ expires_in: 43_200 }, { reason: "rotating", tokens: ["SLACK_BOT_TOKEN"] }],
+      [{ expires_in: 43_200 }, { reason: "rotating" }],
       [{ is_enterprise_install: true }, { reason: "org_wide" }],
       [{ bot_id: undefined }, { reason: "not_bot" }],
     ] as const) {
