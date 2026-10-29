@@ -17,7 +17,7 @@ test("queueing atomically begins answering and reserves the request key in every
   expect(await world.database.read((sql) => readRequest(sql, world.request.id))).toMatchObject({
     state: "answering",
   });
-  for (const state of ["queued", "sent", "failed", "delivery_unknown", "retracted", "cancelled"]) {
+  for (const state of ["queued", "sent", "failed", "delivery_unknown", "retracted"]) {
     await world.database.write((tx) => tx`UPDATE outbox SET state = ${state}`);
     await expect(createStoredOutboxItem(world.database, 2)).rejects.toThrow("UNIQUE");
   }

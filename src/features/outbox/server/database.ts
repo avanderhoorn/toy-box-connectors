@@ -19,8 +19,7 @@ export type OutboxState =
   | "sent"
   | "failed"
   | "delivery_unknown"
-  | "retracted"
-  | "cancelled";
+  | "retracted";
 export type OutboxItem = {
   id: string;
   number: number;
@@ -263,17 +262,6 @@ export async function recoverOutboxAttempts(tx: Bun.SQL, now: number): Promise<s
     WHERE state = 'sending' RETURNING id
   `;
   return rows.map((row) => row.id);
-}
-
-export async function cancelQueuedRequestItems(
-  tx: Bun.SQL,
-  requestId: number,
-  now: number,
-): Promise<void> {
-  await tx`
-    UPDATE outbox SET state = 'cancelled', error = 'request_cancelled', next_attempt_at = NULL, updated_at = ${now}
-    WHERE request_id = ${requestId} AND state = 'queued'
-  `;
 }
 
 function rendered(text: string): RenderedMessage {

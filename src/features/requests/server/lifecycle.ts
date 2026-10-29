@@ -1,4 +1,3 @@
-import { cancelQueuedRequestItems } from "@outbox/server/database";
 import {
   cancelRequest,
   changeRequest,
@@ -9,8 +8,8 @@ import { readOverdueRequests, saveRequest, type StoredRequest } from "./database
 
 // The request lifecycle on stored requests.
 //
-// Each change applies a lifecycle function to what's stored and saves the result, along with
-// anything else the change owes, in the caller's transaction.
+// Each change applies a lifecycle function to what's stored and saves the result in the caller's
+// transaction.
 
 /** Records that one of an active request's messages changed. Returns whether the request did. */
 export async function changeStoredRequest(
@@ -24,15 +23,13 @@ export async function changeStoredRequest(
   return true;
 }
 
-/** Cancels a request along with its reply, while that's still queued. */
+/** Cancels a request. A reply still queued for it fails when the outbox rechecks it at send time. */
 export async function cancelStoredRequest(
   transaction: Bun.SQL,
   request: StoredRequest,
   reason: CancelReason,
-  now: number,
 ): Promise<void> {
   await saveRequest(transaction, cancelRequest(request, reason));
-  await cancelQueuedRequestItems(transaction, request.id, now);
 }
 
 /**

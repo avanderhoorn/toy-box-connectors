@@ -42,7 +42,7 @@ export async function takeMessage(
   if (current !== null && isActive(current.state)) {
     if (current.state === "answering") return false;
     if (current.reason === "mention" && current.sourceTs === ts && !message.mentionsBot) {
-      await cancelStoredRequest(transaction, current, "mention_removed", now);
+      await cancelStoredRequest(transaction, current, "mention_removed");
       return true;
     }
     return changeStoredRequest(transaction, current, now);
@@ -100,7 +100,7 @@ export async function takeDelete(
   const request = await readMessageRequest(transaction, channelId, ts);
   if (request === null || !isActive(request.state)) return false;
   if (request.sourceTs === ts) {
-    await cancelStoredRequest(transaction, request, "source_deleted", now);
+    await cancelStoredRequest(transaction, request, "source_deleted");
     return true;
   }
   return changeStoredRequest(transaction, request, now);

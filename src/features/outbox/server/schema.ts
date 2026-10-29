@@ -9,7 +9,7 @@ export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
       channel_id TEXT NOT NULL, thread_ts TEXT, series TEXT, scheduled_at INTEGER,
       payload TEXT NOT NULL CHECK (json_valid(payload)), payload_hash TEXT NOT NULL,
       state TEXT NOT NULL CHECK (state IN (
-        'queued', 'sending', 'sent', 'failed', 'delivery_unknown', 'retracted', 'cancelled'
+        'queued', 'sending', 'sent', 'failed', 'delivery_unknown', 'retracted'
       )),
       attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
       attempt_started_at INTEGER, next_attempt_at INTEGER,

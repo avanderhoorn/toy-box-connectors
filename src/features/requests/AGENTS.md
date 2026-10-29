@@ -10,8 +10,6 @@ A request belongs to one link and one Slack thread and is shown to the lead as `
 
 ## Waking the lead
 
-Cancelling a request cancels its replies still queued, in the same transaction.
-
 The wake policy in `src/features/wakes` is a pure decision over a link's open and seen requests and the routine runs the bridge attempted for it, because Toy Box's own wakes live in memory and fire at most once. A burst of new or changed requests earns one wake once it settles. A lead that leaves them unread is woken again after longer and longer waits, then left alone until something new arrives. A request the lead read and left gets one reminder unless the lead is woken first. A run Toy Box couldn't take retries with backoff, one it refused waits for something new, and no lead is woken more than 12 times an hour. A paused or suspended link's requests wait, but a suspension wakes the lead once so it can tell the owner. The scheduler decides again whenever a request changes or the bridge suspends a link, after every run, when the earliest wait ends, and at least every minute, so a Mac that slept is noticed. Each pass first expires the requests that waited their lifetime, so nobody is reminded of them, and records each run's outcome, so a restarted bridge keeps its backoff. A storage error stops the bridge instead of retrying, so launchd restarts it.
 
 ## The CLI contract

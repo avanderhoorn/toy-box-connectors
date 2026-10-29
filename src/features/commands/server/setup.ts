@@ -114,7 +114,7 @@ export function allowCommand({ database, bot }: SetupCommandOptions): CommandHan
 
 /** Cancels whatever the people it removes are still waiting on. */
 export function denyCommand({ database, wakes }: SetupCommandOptions): CommandHandler<"deny"> {
-  return async ({ users }, { caller, at }) => {
+  return async ({ users }, { caller }) => {
     const { link, cancelled } = await database.write(async (transaction) => {
       const link = await readCallerLink(transaction, caller);
       // An Enterprise member can be named by either of their IDs, and each is denied.
@@ -125,7 +125,7 @@ export function denyCommand({ database, wakes }: SetupCommandOptions): CommandHa
         denied.has(request.requesterUserId),
       );
       for (const request of asked) {
-        await cancelStoredRequest(transaction, request, "requester_denied", at);
+        await cancelStoredRequest(transaction, request, "requester_denied");
       }
       return { link, cancelled: asked.length };
     });

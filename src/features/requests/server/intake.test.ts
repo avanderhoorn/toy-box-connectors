@@ -5,8 +5,6 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { readChannelLink } from "@links/server/database";
 import { createStoredLink } from "@links/server/testFixtures";
-import { readOutboxItem } from "@outbox/server/database";
-import { createStoredOutboxItem } from "@outbox/server/testFixtures";
 import { beginAnswer, confirmAnswer, serveRequest } from "@requests/model/lifecycle";
 import type { SlackMessage } from "@slackapi/model/messages";
 import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
@@ -78,16 +76,14 @@ test("the requester's later messages join their request and flag it once the lea
   expect(await take(database, { ...theirs, mentionsBot: false })).toBe(false);
 });
 
-test("losing its mention cancels a request, and losing its question cancels its answer and our copy", async () => {
+test("losing its mention cancels a request, and losing its question cancels it and our copy", async () => {
   const edited = await openIntake(theirs);
   expect(await take(edited, editMessage(theirs, "1700000300.000100", "never mind"))).toBe(true);
   expect(await requestOf(edited, theirs)).toMatchObject({ id: 2, closedReason: "mention_removed" });
   const deleted = await openIntake();
   await advance(deleted, "answering");
-  await createStoredOutboxItem(deleted, 1);
   expect(await takeDeleteOf(deleted, ask)).toBe(true);
   expect(await requestOf(deleted, ask)).toMatchObject({ closedReason: "source_deleted" });
-  expect(await deleted.read((sql) => readOutboxItem(sql, 1))).toMatchObject({ state: "cancelled" });
   expect(await deleted.read((sql) => sql`SELECT text FROM messages`)).toEqual([{ text: null }]);
 });
 

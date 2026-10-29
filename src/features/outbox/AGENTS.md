@@ -8,8 +8,9 @@ A duplicate command refuses with the first item's number and state, rather than 
 
 ## Posting once
 
-Before posting, read fresh channel facts and recheck the installation, link, destination and
-requester's current permission. Commit `sending`, the attempt number and its start time before
+Before posting, read fresh channel facts and recheck the installation, link, destination,
+request and requester's current permission, so a reply whose request was cancelled fails
+instead of posting. Commit `sending`, the attempt number and its start time before
 calling Slack. SDK retries are disabled. Share the client's method cooldowns and defer a 429
 until its Retry-After deadline. Restarting may encounter another 429, never retry an ambiguous post.
 
