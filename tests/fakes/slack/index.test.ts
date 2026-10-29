@@ -10,7 +10,7 @@ async function until(condition: () => boolean) {
   }
 }
 
-test("one-use app tickets, explicit redelivery and strict acknowledgements match the wire", async () => {
+test("one-use app tickets and strict acknowledgements match the wire", async () => {
   let now = 100;
   const fake = startFakeSlack({ now: () => now });
   onTestFinished(() => fake.stop());
@@ -42,23 +42,14 @@ test("one-use app tickets, explicit redelivery and strict acknowledgements match
   });
   expect(frames[1]!.payload).not.toHaveProperty("authorizations");
   expect(await fake.waitForAck(sent.envelopeId, 5)).toBeNull();
-  fake.redeliver(sent.envelopeId, "retry-envelope");
-  await until(() => frames.length === 3);
-  expect(frames[2]).toMatchObject({
-    envelope_id: "retry-envelope",
-    retry_attempt: 1,
-    retry_reason: "timeout",
-    payload: frames[1]!.payload,
-  });
   now = 250;
-  const body = { envelope_id: "retry-envelope" };
+  const body = { envelope_id: sent.envelopeId };
   socket.send(JSON.stringify(body));
   expect(await fake.waitForAck(body.envelope_id)).toEqual({
     envelopeId: body.envelope_id,
     at: 250,
     body,
   });
-  expect(() => fake.redeliver(body.envelope_id)).toThrow("already acked");
   socket.send(JSON.stringify(body));
   socket.send(JSON.stringify({ envelope_id: "never-sent" }));
   socket.close();

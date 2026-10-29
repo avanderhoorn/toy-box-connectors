@@ -3,8 +3,6 @@
 // https://docs.slack.dev/apis/events-api/using-socket-mode/
 // Installation authorizations and globally unique event IDs:
 // https://docs.slack.dev/apis/events-api/#callback-field
-// Retry timing is driven explicitly by tests. Slack does not document a fixed Socket Mode
-// redelivery schedule or promise whether an envelope ID changes between deliveries.
 
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
@@ -40,10 +38,7 @@ export type FakeSlackFailure =
   /** Slack posts a requested thread reply as a new root, and may also lose the response. */
   | { misplacedReply: true; lostResponse?: true };
 
-export type FakeSlackDelivery = {
-  envelopeId: string;
-  frame: Readonly<Record<string, unknown>>;
-};
+export type FakeSlackDelivery = { envelopeId: string };
 
 export type FakeEventOptions = {
   eventId?: string;
@@ -85,7 +80,7 @@ export function startFakeSlack(
   const appToken = "xapp-fake-for-local-tests-only";
   const acks: FakeSlackAck[] = [];
   const connections: number[] = [];
-  const deliveries: FakeSlackDelivery[] = [];
+  const unacked = new Set<string>();
   const problems: string[] = [];
   const tickets = new Set<string>();
   const sockets = new Map<number, ServerWebSocket<SocketData>>();
@@ -129,13 +124,7 @@ export function startFakeSlack(
           problems.push(`Invalid Socket Mode ack: ${ack.error.message}`);
           return;
         }
-        const sent = deliveries.filter(
-          ({ envelopeId }) => envelopeId === ack.data.envelope_id,
-        ).length;
-        const received = acks.filter(
-          ({ envelopeId }) => envelopeId === ack.data.envelope_id,
-        ).length;
-        if (!sent || received >= sent) {
+        if (!unacked.delete(ack.data.envelope_id)) {
           problems.push(`Ack names an unknown or already acked envelope: ${ack.data.envelope_id}`);
           return;
         }
@@ -198,10 +187,9 @@ export function startFakeSlack(
     if (!socket) throw new Error("Fake Slack has no matching open socket.");
     const copy = structuredClone(frame);
     const envelopeId = typeof copy.envelope_id === "string" ? copy.envelope_id : "";
-    const delivery = { envelopeId, frame: copy };
-    deliveries.push(delivery);
+    if (envelopeId) unacked.add(envelopeId);
     socket.send(JSON.stringify(copy));
-    return delivery;
+    return { envelopeId };
   }
 
   function sendEvent(
@@ -255,25 +243,11 @@ export function startFakeSlack(
     calls: api.calls,
     acks,
     connections,
-    deliveries,
     get activeConnections() {
       return sockets.size;
     },
     sendFrame,
     sendEvent,
-    redeliver(envelopeId: string, newEnvelopeId = envelopeId) {
-      const previous = deliveries.findLast((delivery) => delivery.envelopeId === envelopeId);
-      if (!previous) throw new Error(`Unknown envelope ${envelopeId}.`);
-      if (acks.some((ack) => ack.envelopeId === envelopeId))
-        throw new Error(`Envelope ${envelopeId} is already acked.`);
-      const attempt = previous.frame.retry_attempt;
-      return sendFrame({
-        ...previous.frame,
-        envelope_id: newEnvelopeId,
-        retry_attempt: (typeof attempt === "number" ? attempt : 0) + 1,
-        retry_reason: "timeout",
-      });
-    },
     disconnect(reason: "warning" | "refresh_requested" | "link_disabled" = "refresh_requested") {
       sendFrame({ type: "disconnect", reason, debug_info: { host: "fake-slack" } });
     },
