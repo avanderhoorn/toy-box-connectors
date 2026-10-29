@@ -4,6 +4,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { DEFAULT_APP } from "@bridge/model/apps";
 import { prepareDataFolder } from "@bridge/server/dataFolder";
 import { readCredentialsFile, writeCredential } from "@bridge/server/environment";
 import { createTestFolder } from "@bridge/server/testFixtures";
@@ -74,7 +75,7 @@ test("replaces a token Slack rejects the way the bridge says, asking for it whil
   });
   writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", hash);
   const running = serveAtTerminal(home, env);
-  await running.shows(rejectedTokensProblem([["SLACK_BOT_TOKEN", "invalid_auth"]]));
+  await running.shows(rejectedTokensProblem([["SLACK_BOT_TOKEN", "invalid_auth"]], DEFAULT_APP));
 
   const lines = readFileSync(credentials, "utf8").split("\n");
   writeFileSync(

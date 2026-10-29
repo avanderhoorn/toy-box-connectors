@@ -1,6 +1,9 @@
-// The bridge as `serve` runs it without a terminal, with both tokens for a fake Slack.
+// The bridge as `serve` runs it without a terminal, off Slack until it has both tokens, and then
+// with both tokens for a fake Slack.
 
 import { expect, test } from "bun:test";
+import { DEFAULT_APP } from "@bridge/model/apps";
+import { missingTokensProblem } from "@slackapi/model/identity";
 import { startSlackForBridge, started, withDatabase } from "./bridgeProcess";
 import { startLinkedBridge, storeNewRequest } from "./linkedBridge";
 import { waitFor } from "./waitFor";
@@ -41,6 +44,20 @@ test("a bridge with both tokens connects to Slack, and acks an event once it's s
     database.read((sql) => sql`SELECT ts FROM messages`),
   );
   expect(messages).toEqual([{ ts: "1700000200.000100" }]);
+}, 15_000);
+
+test("a bridge missing a token stays off Slack, and status says how the owner gives it", async () => {
+  const linked = await startLinkedBridge({ env: { SLACK_BOT_TOKEN: "xoxb-1" } });
+
+  expect(await linked.status(null)).toMatchObject({
+    exitCode: 0,
+    json: {
+      slack: {
+        connection: "unconfigured",
+        problem: missingTokensProblem(["SLACK_APP_TOKEN"], DEFAULT_APP),
+      },
+    },
+  });
 }, 15_000);
 
 test("a bridge that can't store an event exits 1 without acking it", async () => {

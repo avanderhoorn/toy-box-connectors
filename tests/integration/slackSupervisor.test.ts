@@ -1,4 +1,5 @@
 import { describe, expect, onTestFinished, test } from "bun:test";
+import { DEFAULT_APP } from "@bridge/model/apps";
 import type { BridgeDatabase } from "@bridge/server/database";
 import {
   startSlackSupervisor,
@@ -68,6 +69,7 @@ async function linkFakeSlack() {
       onAuthFailed: (error) => supervisor.botRejected(error),
     });
     const supervisor = startSlackSupervisor(database, bot, {
+      app: DEFAULT_APP,
       tokens: { botToken: fake.botToken, appToken: fake.appToken },
       slackApiUrl,
       onError: (error) => errors.push(error),
@@ -372,7 +374,7 @@ describe("rejected tokens", () => {
     link.fake.failNext("auth.test", { error: "invalid_auth" });
 
     const { supervisor } = link.supervise();
-    const problem = rejectedTokensProblem([["SLACK_BOT_TOKEN", "invalid_auth"]]);
+    const problem = rejectedTokensProblem([["SLACK_BOT_TOKEN", "invalid_auth"]], DEFAULT_APP);
     await waitFor(() => expect(supervisor.state()).toEqual({ connection: "auth_failed", problem }));
     await Bun.sleep(TIMINGS.retryLimit * 2);
     expect(methodsCalled(link.fake)).toEqual(["auth.test"]);
@@ -395,21 +397,24 @@ describe("rejected tokens", () => {
     await bot.call("conversations.info", (client) =>
       client.conversations.info({ channel: "C-link" }),
     );
-    const botRejected = rejectedTokensProblem([["SLACK_BOT_TOKEN", "token_revoked"]]);
+    const botRejected = rejectedTokensProblem([["SLACK_BOT_TOKEN", "token_revoked"]], DEFAULT_APP);
     expect(supervisor.state()).toEqual({ connection: "auth_failed", problem: botRejected });
     const sent = link.fake.sendEvent(post("1700000200.000100"));
     expect(await link.fake.waitForAck(sent.envelopeId)).not.toBeNull();
 
     link.fake.failNext("apps.connections.open", { error: "invalid_auth" });
     link.fake.dropConnections();
-    const appRejected = rejectedTokensProblem([["SLACK_APP_TOKEN", "invalid_auth"]]);
+    const appRejected = rejectedTokensProblem([["SLACK_APP_TOKEN", "invalid_auth"]], DEFAULT_APP);
     await waitFor(() =>
       expect(supervisor.state()).toEqual({
         connection: "auth_failed",
-        problem: rejectedTokensProblem([
-          ["SLACK_BOT_TOKEN", "token_revoked"],
-          ["SLACK_APP_TOKEN", "invalid_auth"],
-        ]),
+        problem: rejectedTokensProblem(
+          [
+            ["SLACK_BOT_TOKEN", "token_revoked"],
+            ["SLACK_APP_TOKEN", "invalid_auth"],
+          ],
+          DEFAULT_APP,
+        ),
       }),
     );
     await Bun.sleep(TIMINGS.retryLimit * 2);
@@ -434,7 +439,7 @@ describe("rejected tokens", () => {
       link.fake.failNext("apps.connections.open", { error });
 
       const { supervisor } = link.supervise();
-      const problem = rejectedTokensProblem([["SLACK_APP_TOKEN", error]]);
+      const problem = rejectedTokensProblem([["SLACK_APP_TOKEN", error]], DEFAULT_APP);
       await waitFor(() =>
         expect(supervisor.state()).toEqual({ connection: "auth_failed", problem }),
       );
@@ -454,7 +459,10 @@ describe("refusing Slack", () => {
 
     const { supervisor } = link.supervise();
     const refusal: IdentityRefusal = { reason: "other_app" };
-    const refused: SlackState = { connection: "refused", problem: refusalProblem(refusal) };
+    const refused: SlackState = {
+      connection: "refused",
+      problem: refusalProblem(refusal, DEFAULT_APP),
+    };
     await waitFor(() => expect(supervisor.state()).toEqual(refused));
     await waitFor(() => expect(link.fake.activeConnections).toBe(0));
     // A call finding the bot token rejected afterwards has nothing left to change.
@@ -466,7 +474,7 @@ describe("refusing Slack", () => {
     expect(await link.database.read((sql) => sql`SELECT connected_at FROM installation`)).toEqual([
       { connected_at: null },
     ]);
-    expect(logged()).toEqual([refusalProblem(refusal)]);
+    expect(logged()).toEqual([refusalProblem(refusal, DEFAULT_APP)]);
   });
 
   test("tokens for another workspace than the stored one turn Slack off before it connects", async () => {
@@ -476,12 +484,15 @@ describe("refusing Slack", () => {
 
     const { supervisor } = link.supervise();
     const refusal: IdentityRefusal = { reason: "mismatch", field: "teamId", found: "TFAKE" };
-    const refused: SlackState = { connection: "refused", problem: refusalProblem(refusal) };
+    const refused: SlackState = {
+      connection: "refused",
+      problem: refusalProblem(refusal, DEFAULT_APP),
+    };
     await waitFor(() => expect(supervisor.state()).toEqual(refused));
     await Bun.sleep(TIMINGS.retryLimit * 2);
 
     expect(methodsCalled(link.fake)).toEqual(["auth.test", "bots.info"]);
-    expect(logged()).toEqual([refusalProblem(refusal)]);
+    expect(logged()).toEqual([refusalProblem(refusal, DEFAULT_APP)]);
   });
 
   test("an uninstall closes the connection, and Slack stays off", async () => {
@@ -492,7 +503,7 @@ describe("refusing Slack", () => {
 
     const uninstall = link.fake.sendEvent({ type: "app_uninstalled" });
 
-    const problem = refusalProblem({ reason: "uninstalled" });
+    const problem = refusalProblem({ reason: "uninstalled" }, DEFAULT_APP);
     expect(await link.fake.waitForAck(uninstall.envelopeId)).not.toBeNull();
     await waitFor(() => expect(supervisor.state()).toEqual({ connection: "refused", problem }));
     await waitFor(() => expect(link.fake.activeConnections).toBe(0));
@@ -500,6 +511,32 @@ describe("refusing Slack", () => {
     expect(called(link.fake, "apps.connections.open")).toBe(1);
     expect(await link.database.read(readInstallation)).toMatchObject({ status: "uninstalled" });
     expect(logged()).toEqual(["Connected to Slack.", problem]);
+  });
+});
+
+describe("an added app", () => {
+  test("a token Slack rejects is named as the app's, in status and the log", async () => {
+    const logged = captureLog();
+    const link = await linkFakeSlack();
+    link.fake.failNext("apps.connections.open", { error: "invalid_auth" });
+
+    const { supervisor } = link.supervise({ app: "releases" });
+
+    const problem = rejectedTokensProblem([["SLACK_APP_TOKEN", "invalid_auth"]], "releases");
+    await waitFor(() => expect(supervisor.state()).toEqual({ connection: "auth_failed", problem }));
+    expect(logged()).toEqual([problem]);
+  });
+
+  test("a refusal is named as the app's, in status and the log", async () => {
+    const logged = captureLog();
+    const link = await linkFakeSlack();
+    link.fake.setNextHelloAppId("A-other");
+
+    const { supervisor } = link.supervise({ app: "releases" });
+
+    const problem = refusalProblem({ reason: "other_app" }, "releases");
+    await waitFor(() => expect(supervisor.state()).toEqual({ connection: "refused", problem }));
+    expect(logged()).toEqual([problem]);
   });
 });
 

@@ -1,3 +1,4 @@
+import { DEFAULT_APP } from "@bridge/model/apps";
 import { z } from "zod";
 import type { Installation } from "./installation";
 
@@ -19,7 +20,9 @@ export type BotOwner = TokenOwner & { botId: string };
 export type BotInfo = { appId: string; userId: string };
 export type IdentityRefusal =
   | { reason: "uninstalled" | "org_wide" | "not_bot" | "rotating" | "moved_org" | "other_app" }
-  | { reason: "mismatch"; field: "teamId" | "appId" | "botId" | "botUserId"; found: string };
+  | { reason: "mismatch"; field: "teamId" | "appId" | "botId" | "botUserId"; found: string }
+  // Another app the bridge hosts, `heldBy`, already connects through the same Slack app.
+  | { reason: "duplicate_app"; heldBy: string };
 
 export const authTestSchema = z
   .object({
@@ -96,39 +99,55 @@ export function helloRefusal(appId: string, helloAppId: string | null): Identity
 // What the owner does about tokens the bridge can't use. Only the owner can, at a terminal, since
 // `serve` never asks in a lead's shell. Deleting a token's line makes `serve` ask for it again, and
 // when a bridge is already running, that `serve` saves the answer and stops, so restarting the
-// running bridge is what reads it.
+// running bridge is what reads it. Each hint names the app whose tokens they are and that app's own
+// files, and the default app's read as they did before the bridge hosted several.
 
-/** What Slack is refusing, and what the owner does about it. */
-export function refusalProblem(refusal: IdentityRefusal): string {
+/** What Slack is refusing about `app`'s tokens, and what the owner does about it. */
+export function refusalProblem(refusal: IdentityRefusal, app: string): string {
+  const its = names(app);
+  const bot = `${upper(its.whose)}SLACK_BOT_TOKEN`;
   switch (refusal.reason) {
-    case "uninstalled":
-      return "Slack was uninstalled. To install it again, have the owner stop the bridge, remove bridge.db and its -wal/-shm files, delete the SLACK_BOT_TOKEN line from the bridge's credentials.env, install the app in Slack again, and run `toy-box-slack serve` at their own terminal, which asks for its new bot token.";
+    case "uninstalled": {
+      const what =
+        app === DEFAULT_APP
+          ? "Slack was uninstalled"
+          : `${upper(its.app)} was uninstalled from Slack`;
+      return `${what}. To install it again, have the owner stop the bridge, remove ${its.database}, delete the SLACK_BOT_TOKEN line from ${its.credentials}, install the app in Slack again, and run \`toy-box-slack serve\` at their own terminal, which asks for its new bot token.`;
+    }
     case "not_bot":
-      return `SLACK_BOT_TOKEN isn't a bot token. Have the owner ${replace(["SLACK_BOT_TOKEN"])}.`;
+      return `${bot} isn't a bot token. Have the owner ${replace(its, ["SLACK_BOT_TOKEN"])}.`;
     case "other_app":
-      return `SLACK_APP_TOKEN belongs to another Slack app than SLACK_BOT_TOKEN. Have the owner ${replace(["SLACK_APP_TOKEN"])}.`;
+      return `${upper(its.whose)}SLACK_APP_TOKEN belongs to another Slack app than SLACK_BOT_TOKEN. Have the owner ${replace(its, ["SLACK_APP_TOKEN"])}.`;
     case "org_wide":
-      return `SLACK_BOT_TOKEN is from an install across an Enterprise org, which the bridge doesn't support. Have the owner install the app in one workspace, ${replace(["SLACK_BOT_TOKEN"])}.`;
+      return `${bot} is from an install across an Enterprise org, which the bridge doesn't support. Have the owner install the app in one workspace, ${replace(its, ["SLACK_BOT_TOKEN"])}.`;
     case "rotating":
-      return `The Slack app's tokens rotate, which the bridge doesn't support, and token rotation can't be turned off once it's on. Have the owner create a Slack app from docs/manifest.yaml, ${replace(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"], "the new app's tokens")}.`;
+      return `${upper(its.slackApp)}'s tokens rotate, which the bridge doesn't support, and token rotation can't be turned off once it's on. Have the owner ${newSlackApp(its)}.`;
     case "moved_org":
-      return `The workspace joined or left an Enterprise org since the bridge was set up. The bridge has to start over, which forgets every link, so have the owner ${startOver}.`;
+      return `The workspace joined or left an Enterprise org since ${its.app} was set up. ${upper(its.app)} has to start over, which forgets ${its.links}, so have the owner ${startOver(its)}.`;
     case "mismatch": {
       const other = belongings[refusal.field];
-      return `SLACK_BOT_TOKEN belongs to another ${other} (${refusal.found}) than the one the bridge was set up for. Have the owner ${replace(["SLACK_BOT_TOKEN"])}. To move the bridge to that ${other} instead, which forgets every link, have the owner ${startOver}.`;
+      return `${bot} belongs to another ${other} (${refusal.found}) than the one ${its.app} was set up for. Have the owner ${replace(its, ["SLACK_BOT_TOKEN"])}. To move ${its.app} to that ${other} instead, which forgets ${its.links}, have the owner ${startOver(its)}.`;
     }
+    // Only another app can hold the same Slack app, so this one names the default app too.
+    case "duplicate_app":
+      return `The ${app} app's SLACK_BOT_TOKEN belongs to the same Slack app as the ${refusal.heldBy} app's, and each app the bridge hosts needs a Slack app of its own. Have the owner ${newSlackApp(its)}.`;
   }
 }
 
-/** What the owner does about the tokens Slack rejected, each with the error Slack gave. */
-export function rejectedTokensProblem(rejected: readonly (readonly [TokenName, string])[]): string {
+/** What the owner does about `app`'s tokens Slack rejected, each with the error Slack gave. */
+export function rejectedTokensProblem(
+  rejected: readonly (readonly [TokenName, string])[],
+  app: string,
+): string {
+  const its = names(app);
   const errors = rejected.map(([token, error]) => `${token} with ${error}`);
-  return `Slack rejected ${list(errors)}. Have the owner ${replace(rejected.map(([token]) => token))}.`;
+  const tokens = rejected.map(([token]) => token);
+  return `Slack rejected ${its.whose}${list(errors)}. Have the owner ${replace(its, tokens)}.`;
 }
 
-/** What the owner does about the tokens the bridge doesn't have. */
-export function missingTokensProblem(missing: readonly TokenName[]): string {
-  return `Have the owner ${askFor(list(missing))}.`;
+/** What the owner does about the tokens `app` doesn't have. */
+export function missingTokensProblem(missing: readonly TokenName[], app: string): string {
+  return `Have the owner ${askFor(`${names(app).whose}${list(missing)}`)}.`;
 }
 
 const belongings = {
@@ -138,15 +157,48 @@ const belongings = {
   botUserId: "bot user",
 } satisfies Record<Extract<IdentityRefusal, { reason: "mismatch" }>["field"], string>;
 
-const startOver = "stop the bridge, remove bridge.db and its -wal/-shm files, and start it again";
+/** How the hints name an app and its files. The default app's are the bridge's own. */
+function names(app: string) {
+  if (app === DEFAULT_APP) {
+    return {
+      whose: "",
+      app: "the bridge",
+      slackApp: "the Slack app",
+      links: "every link",
+      credentials: "the bridge's credentials.env",
+      database: "bridge.db and its -wal/-shm files",
+    };
+  }
+  const folder = `the bridge's apps/${app}`;
+  return {
+    whose: `the ${app} app's `,
+    app: `the ${app} app`,
+    slackApp: `the ${app} app`,
+    links: "every link through it",
+    credentials: `${folder}/credentials.env`,
+    database: `bridge.db and its -wal/-shm files from ${folder} folder`,
+  };
+}
+
+type Names = ReturnType<typeof names>;
+
+function startOver(its: Names): string {
+  return `stop the bridge, remove ${its.database}, and start it again`;
+}
+
+function newSlackApp(its: Names): string {
+  const both = replace(its, ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"], "the new app's tokens");
+  return `create a Slack app from docs/manifest.yaml, ${both}`;
+}
 
 /** Deleting each of `tokens`, so `serve` asks for `asked`, by default each one again. */
 function replace(
+  its: Names,
   tokens: readonly TokenName[],
   asked = tokens.length === 1 ? "it again" : "them again",
 ): string {
   const lines = `${list(tokens)} ${tokens.length === 1 ? "line" : "lines"}`;
-  return `delete the ${lines} from the bridge's credentials.env, ${askFor(asked)}`;
+  return `delete the ${lines} from ${its.credentials}, ${askFor(asked)}`;
 }
 
 function askFor(asked: string): string {
@@ -155,4 +207,8 @@ function askFor(asked: string): string {
 
 function list(items: readonly string[]): string {
   return new Intl.ListFormat("en").format(items);
+}
+
+function upper(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }

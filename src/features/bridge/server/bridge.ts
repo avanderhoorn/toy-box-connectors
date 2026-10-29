@@ -123,7 +123,7 @@ export async function startBridge(
     await database.write((tx) => recoverOutboxAttempts(tx, Date.now()));
     retention = await startRetention(database, failure.resolve);
     // Slack is supervised exactly when both tokens are set.
-    const slackState = (): SlackState => unconfiguredSlack(tokens) ?? slack!.state();
+    const slackState = (): SlackState => unconfiguredSlack(tokens, app.name) ?? slack!.state();
     const { botToken, appToken } = tokens;
     const { slackApiUrl } = settings;
     let bot: BotClient | null = null;
@@ -133,6 +133,7 @@ export async function startBridge(
         onAuthFailed: (error) => slack?.botRejected(error),
       });
       slack = startSlackSupervisor(database, bot, {
+        app: app.name,
         tokens: { botToken, appToken },
         slackApiUrl,
         onChange: () => scheduler?.reconsider(),

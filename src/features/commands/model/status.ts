@@ -20,15 +20,15 @@ export type SlackConnection = keyof typeof connections;
 /** The Slack connection, and what to do about it when something's wrong. */
 export type SlackState = { connection: SlackConnection; problem: string | null };
 
-/** Slack's state while a token is missing, naming each one, or null once both are set. */
-export function unconfiguredSlack({ botToken, appToken }: Tokens): SlackState | null {
+/** Slack's state while one of `app`'s tokens is missing, naming each one, or null once both are set. */
+export function unconfiguredSlack({ botToken, appToken }: Tokens, app: string): SlackState | null {
   const missing = [
     botToken ? null : "SLACK_BOT_TOKEN",
     appToken ? null : "SLACK_APP_TOKEN",
   ] as const;
   const tokens = missing.filter((token) => token !== null);
   if (tokens.length === 0) return null;
-  return { connection: "unconfigured", problem: missingTokensProblem(tokens) };
+  return { connection: "unconfigured", problem: missingTokensProblem(tokens, app) };
 }
 
 type Tokens = { botToken: string | null; appToken: string | null };

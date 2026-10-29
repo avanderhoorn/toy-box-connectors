@@ -44,6 +44,8 @@ export interface SlackSupervisor {
 }
 
 export type SlackSupervisorOptions = {
+  /** The app whose tokens these are, which every hint about them names. */
+  app: string;
   tokens: { botToken: string; appToken: string };
   slackApiUrl?: string;
   /** Called after a delivery changed a link or request. */
@@ -66,6 +68,7 @@ export function startSlackSupervisor(
   database: BridgeDatabase,
   bot: BotClient,
   {
+    app,
     tokens,
     slackApiUrl,
     onChange,
@@ -206,7 +209,7 @@ export function startSlackSupervisor(
   function reject(token: TokenName, error: string): null {
     if (!signal.aborted && !rejected.has(token)) {
       rejected.set(token, error);
-      log(rejectedTokensProblem([[token, error]]));
+      log(rejectedTokensProblem([[token, error]], app));
     }
     return null;
   }
@@ -223,7 +226,7 @@ export function startSlackSupervisor(
     refusal = found;
     stopping.abort();
     socket?.close();
-    log(refusalProblem(found));
+    log(refusalProblem(found, app));
   }
 
   function fail(error: unknown) {
@@ -241,9 +244,9 @@ export function startSlackSupervisor(
   }
 
   function state(): SlackState {
-    if (refusal !== null) return { connection: "refused", problem: refusalProblem(refusal) };
+    if (refusal !== null) return { connection: "refused", problem: refusalProblem(refusal, app) };
     if (rejected.size > 0) {
-      return { connection: "auth_failed", problem: rejectedTokensProblem([...rejected]) };
+      return { connection: "auth_failed", problem: rejectedTokensProblem([...rejected], app) };
     }
     if (connected) return { connection: "connected", problem: catchUp.problem() };
     return { connection: everConnected ? "reconnecting" : "connecting", problem };
