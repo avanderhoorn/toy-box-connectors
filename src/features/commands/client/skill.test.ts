@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { BUNDLED_SKILL, installSkill } from "./skill";
 
-test("replaces its own folder in COPILOT_HOME whole, without touching anyone else's skill", async () => {
+test("replaces its own folder in COPILOT_HOME whole, without touching anyone else's skill", () => {
   const copilotHome = createTestFolder();
   const skills = join(copilotHome, "skills");
   mkdirSync(join(skills, "toy-box-slack", "references"), { recursive: true });
@@ -12,10 +12,17 @@ test("replaces its own folder in COPILOT_HOME whole, without touching anyone els
   mkdirSync(join(skills, "user-skill"));
   writeFileSync(join(skills, "user-skill", "SKILL.md"), "User owned");
 
-  const path = await installSkill({ COPILOT_HOME: copilotHome }, createTestFolder());
+  installSkill({ COPILOT_HOME: copilotHome }, createTestFolder());
 
-  expect(path).toBe(join(skills, "toy-box-slack", "SKILL.md"));
   expect(readdirSync(join(skills, "toy-box-slack"))).toEqual(["SKILL.md"]);
-  expect(await Bun.file(path).text()).toBe(await Bun.file(BUNDLED_SKILL).text());
-  expect(await Bun.file(join(skills, "user-skill", "SKILL.md")).text()).toBe("User owned");
+  expect(readFileSync(join(skills, "user-skill", "SKILL.md"), "utf8")).toBe("User owned");
+});
+
+test("installs the skill before it returns, so Slack can't log before serve says where", () => {
+  const copilotHome = createTestFolder();
+
+  const path = installSkill({ COPILOT_HOME: copilotHome }, createTestFolder());
+
+  expect(path).toBe(join(copilotHome, "skills", "toy-box-slack", "SKILL.md"));
+  expect(readFileSync(path, "utf8")).toBe(readFileSync(BUNDLED_SKILL, "utf8"));
 });

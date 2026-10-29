@@ -70,7 +70,7 @@ export async function startIsolatedToyBox(): Promise<IsolatedToyBox> {
   const log = join(root, "toy-box.log");
   // The README installs the CLI as this link, which its shebang runs with the Bun on PATH.
   symlinkSync(CLI, join(bin, "toy-box-slack"));
-  await installSkill({}, home);
+  installSkill({}, home);
 
   const output = openSync(log, "a");
   const server = Bun.spawn(
