@@ -1,12 +1,43 @@
 import { describe, expect, onTestFinished, test } from "bun:test";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { openBridgeDatabase, type BridgeDatabase } from "./database";
 import { createDatabaseMadeBy, createTestFolder, openTestDatabase } from "./testFixtures";
+
+const schemas = join(import.meta.dir, "schemas");
+const recordedVersions = [...new Bun.Glob("*.sql").scanSync(schemas)]
+  .map((file) => Number(basename(file, ".sql")))
+  .sort((a, b) => a - b);
 
 async function open(path: string): Promise<BridgeDatabase> {
   const database = await openBridgeDatabase(path);
   onTestFinished(() => database.close());
   return database;
+}
+
+/** Leave at `path` a new `bridge.db` as `version` made it, from the tables recorded for it. */
+async function createRecordedDatabase(path: string, version: number): Promise<void> {
+  const sql = new Bun.SQL({ adapter: "sqlite", filename: path });
+  try {
+    await sql.unsafe(await Bun.file(join(schemas, `${version}.sql`)).text());
+    await sql.unsafe(`PRAGMA user_version = ${version}`);
+  } finally {
+    await sql.close();
+  }
+}
+
+/** Each table and index as SQL, leaving out comments, layout, and the quotes a renamed table gets. */
+async function schemaOf(sql: Bun.SQL): Promise<string[]> {
+  const objects = await sql<{ sql: string }[]>`
+    SELECT sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name
+  `;
+  return objects.map((object) =>
+    object.sql
+      .replace(/--.*$/gm, "")
+      .replace(/"(\w+)"/g, "$1")
+      .replace(/\s*([(),])\s*/g, "$1")
+      .replace(/\s+/g, " ")
+      .trim(),
+  );
 }
 
 describe("openBridgeDatabase", () => {
@@ -23,14 +54,40 @@ describe("openBridgeDatabase", () => {
     expect(pragmas).toEqual({ journal_mode: "wal", synchronous: 2, fullfsync: 1, foreign_keys: 1 });
   });
 
-  test.each([1, 3])("refuses a bridge.db that version %d made", async (version) => {
-    const path = join(createTestFolder(), "bridge.db");
-    await createDatabaseMadeBy(path, version);
+  test("gives a new bridge.db a version whose tables are recorded", async () => {
+    const database = await openTestDatabase();
 
-    await expect(openBridgeDatabase(path)).rejects.toThrow(
-      `${path} was made by another version of toy-box-slack. The bridge has to start over, which forgets every link, so stop the bridge, remove bridge.db and its -wal/-shm files, and start it again. Then link each channel and allow its people again.`,
+    const [{ user_version: version }] = await database.read(
+      (sql) => sql<{ user_version: number }[]>`PRAGMA user_version`,
     );
+
+    expect(recordedVersions).toContain(version);
   });
+
+  test.each(recordedVersions)(
+    "opens a bridge.db that version %d made, with the tables a new one gets",
+    async (version) => {
+      const path = join(createTestFolder(), "bridge.db");
+      await createRecordedDatabase(path, version);
+
+      const database = await open(path);
+
+      const created = await openTestDatabase();
+      expect(await database.read(schemaOf)).toEqual(await created.read(schemaOf));
+    },
+  );
+
+  test.each([1, Math.max(...recordedVersions) + 1])(
+    "refuses a bridge.db that version %d made",
+    async (version) => {
+      const path = join(createTestFolder(), "bridge.db");
+      await createDatabaseMadeBy(path, version);
+
+      await expect(openBridgeDatabase(path)).rejects.toThrow(
+        `${path} was made by another version of toy-box-slack. The bridge has to start over, which forgets every link, so stop the bridge, remove bridge.db and its -wal/-shm files, and start it again. Then link each channel and allow its people again.`,
+      );
+    },
+  );
 });
 
 describe("BridgeDatabase", () => {
