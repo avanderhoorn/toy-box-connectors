@@ -4,8 +4,8 @@
 // sessions, the skills its lead finds and its Copilot CLI's state never touch the owner's. Agent
 // shells set variables that point Toy Box at the owner's server and session, so Toy Box runs in a
 // scrubbed environment, which is also the only place its Copilot token goes. Before it starts, the
-// CLI under test goes on its PATH and installs its skill, as an owner's would. The port is fixed,
-// so one runs at a time.
+// CLI under test goes on its PATH and its skill goes where `serve` installs an owner's, since the
+// lead adds its routine before the bridge first serves. The port is fixed, so one runs at a time.
 
 import {
   closeSync,
@@ -22,6 +22,7 @@ import {
 import { dirname, join } from "node:path";
 import type { Subprocess } from "bun";
 import { z } from "zod";
+import { installSkill } from "@commands/client/skill";
 
 /** The model every test lead runs. A claude-haiku-4.5 lead failed its tool calls. */
 export const LEAD_MODEL = { provider: "copilot", name: "claude-sonnet-5" } as const;
@@ -69,7 +70,7 @@ export async function startIsolatedToyBox(): Promise<IsolatedToyBox> {
   const log = join(root, "toy-box.log");
   // The README installs the CLI as this link, which its shebang runs with the Bun on PATH.
   symlinkSync(CLI, join(bin, "toy-box-slack"));
-  await runCli(home, ["install-skill"]);
+  await installSkill({}, home);
 
   const output = openSync(log, "a");
   const server = Bun.spawn(

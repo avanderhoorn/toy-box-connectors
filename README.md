@@ -17,7 +17,6 @@ npm install --global --prefix "$HOME/.local" @github/copilot @lostintangent/toy-
 bun install
 mkdir -p "$HOME/.local/bin"
 ln -sf "$PWD/cli/index.ts" "$HOME/.local/bin/toy-box-slack"
-toy-box-slack install-skill
 ```
 
 Run `copilot`, use `/login` to sign in, then exit. Start Toy Box **from this PATH**, so its leads can find the CLI:
@@ -54,7 +53,7 @@ TOY_BOX_URL=http://127.0.0.1:3000
 
 The bridge reads this file, not a checkout `.env`; token and URL environment variables override it. These instructions use the default data folder. `TOY_BOX_SLACK_HOME` can select another.
 
-Invite the app into the Slack channel with `/invite` and select **Toy Box**, then run `toy-box-slack serve` in the foreground. Keep it running while configuring the link.
+Invite the app into the Slack channel with `/invite` and select **Toy Box**, then run `toy-box-slack serve` in the foreground. Keep it running while configuring the link. Each time it starts, it installs the skill leads learn the CLI from, and names the file. Copilot reads skills when a lead's session starts or resumes, so ask a lead that was already running to read that file.
 
 ## Link the channels
 
@@ -103,7 +102,7 @@ Stop with `launchctl bootout "gui/$(id -u)/local.toy-box-slack"`. After changing
 
 ## Commands and development
 
-**Lead:** `inbox`, `reply`, `dismiss`, `activity`, `mark-read`, `publish`, `retract`. **Owner:** `passphrase`, `link`, `allow`, `resume`. **Lead or terminal:** `status`, `deny`, `pause`, `unlink`. **Operator:** `serve`, `install-skill`.
+**Lead:** `inbox`, `reply`, `dismiss`, `activity`, `mark-read`, `publish`, `retract`. **Owner:** `passphrase`, `link`, `allow`, `resume`. **Lead or terminal:** `status`, `deny`, `pause`, `unlink`. **Operator:** `serve`.
 
 `toy-box-slack <command> --help` gives flags. See [operations](docs/operations.md) for status, pauses, uncertain posts and deletion, [AGENTS.md](AGENTS.md) for architecture, and [research](docs/research) for evidence.
 

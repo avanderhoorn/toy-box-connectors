@@ -6,7 +6,7 @@ import { tsAt, type SlackTs } from "@slackapi/model/ts";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import type { WakeTimings } from "@wakes/model";
 import type { FakeEventOptions, FakeSlackMessage } from "../fakes/slack";
-import { startSlackForBridge, withDatabase } from "./bridgeProcess";
+import { startSlackForBridge, started, withDatabase } from "./bridgeProcess";
 import { startLinkedBridge, type LinkColumns } from "./linkedBridge";
 import { waitFor } from "./waitFor";
 
@@ -120,12 +120,8 @@ export async function connectedBridge({
      * `lines`.
      */
     saying: (...lines: string[]) =>
-      [
-        `toy-box-slack is running for ${linked.dataFolder}`,
-        "Connected to Slack.",
-        ...lines,
-        "toy-box-slack is stopping after SIGTERM\n",
-      ].join("\n"),
+      started(linked.home) +
+      ["Connected to Slack.", ...lines, "toy-box-slack is stopping after SIGTERM\n"].join("\n"),
   };
 }
 

@@ -14,6 +14,7 @@
 
 import { join } from "node:path";
 import { forgetOldMessages } from "@activity/server/ledger";
+import { installSkill } from "@commands/client/skill";
 import { unconfiguredSlack, type SlackState } from "@commands/model/status";
 import { activityCommand, markReadCommand } from "@commands/server/activity";
 import { dismissCommand } from "@commands/server/dismiss";
@@ -56,6 +57,8 @@ export async function serveBridge(): Promise<number> {
     const bridge = await startBridge(dataFolder);
     // Whoever started the bridge may stop it as soon as it says it's running, so it listens first.
     const stopped = shutdownSignal(bridge.failed);
+    // Only the bridge that holds the lock installs the skill, so leads read the one it ships.
+    console.error(await refreshSkill());
     console.error(`toy-box-slack is running for ${dataFolder}`);
 
     const signal = await stopped;
@@ -211,4 +214,17 @@ function shutdownSignal(failed: Promise<unknown>): Promise<NodeJS.Signals | unde
     process.on("SIGINT", stop);
     void failed.then(() => stop());
   });
+}
+
+/**
+ * Installs the skill this release ships and says where. A failed install only says why, since the
+ * bridge still stores what Slack sends while the owner fixes it.
+ */
+async function refreshSkill(): Promise<string> {
+  try {
+    return `Installed the toy-box-slack skill at ${await installSkill()}.`;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return `Couldn't install the toy-box-slack skill: ${reason}`;
+  }
 }

@@ -4,11 +4,11 @@ import { expect, onTestFinished, test } from "bun:test";
 import { existsSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTestFolder } from "@bridge/server/testFixtures";
+import { started } from "./bridgeProcess";
 import { MALLORY, connectedBridge } from "./connectedBridge";
 import { startLinkedBridge, storeNewRequest } from "./linkedBridge";
 
 const CLI = join(import.meta.dir, "..", "..", "cli", "index.ts");
-const SKILL = join(import.meta.dir, "..", "..", "skills", "toy-box-slack", "SKILL.md");
 
 /**
  * Runs `toy-box-slack <args>` with `env` and `PATH` as its whole environment, and a home folder
@@ -65,7 +65,7 @@ test("ignores a .env file in the folder it runs from", async () => {
   }
   child.kill("SIGTERM");
 
-  expect(stderr).toBe(`toy-box-slack is running for ${join(home, ".toy-box-slack")}\n`);
+  expect(stderr).toBe(started(home));
   expect(await child.exited).toBe(0);
 }, 15_000);
 
@@ -190,18 +190,3 @@ test("exits 2 once the bridge stops, and once it's killed and leaves its socket 
   expect(existsSync(socket)).toBe(true);
   expect(await runToyBoxSlack(["status"], { HOME: home })).toEqual(noBridge(home));
 }, 20_000);
-
-test("installs the skill it ships into ~/.copilot/skills, and says when leads see it", async () => {
-  const home = createTestFolder();
-  const path = join(home, ".copilot", "skills", "toy-box-slack", "SKILL.md");
-
-  expect(await runToyBoxSlack(["install-skill"], { HOME: home })).toEqual({
-    exitCode: 0,
-    stdout: `Installed the toy-box-slack skill at ${path}.
-
-Copilot reads skills when a lead's session starts or resumes, so a lead that's already running may not see it yet. To set one up now, ask it to read ${path}.
-`,
-    stderr: "",
-  });
-  expect(await Bun.file(path).text()).toBe(await Bun.file(SKILL).text());
-});

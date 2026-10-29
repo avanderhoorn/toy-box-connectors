@@ -17,6 +17,17 @@ function killBridges() {
   bridges.clear();
 }
 
+/** Where `serve` installs the skill when `home` is its home folder. */
+export function installedSkill(home: string) {
+  return join(home, ".copilot", "skills", "toy-box-slack", "SKILL.md");
+}
+
+/** What a bridge whose home folder is `home` writes to stderr as it starts, up to saying it runs. */
+export function started(home: string) {
+  const running = `toy-box-slack is running for ${join(home, ".toy-box-slack")}`;
+  return `Installed the toy-box-slack skill at ${installedSkill(home)}.\n${running}\n`;
+}
+
 /**
  * Run `toy-box-slack serve` with `home` as its home folder, collecting what it writes to stderr.
  * Its environment holds only `PATH`, its home and data folders, and `env`, so nothing from the

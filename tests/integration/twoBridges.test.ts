@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { prepareDataFolder } from "@bridge/server/dataFolder";
 import { acquireBridgeLock } from "@bridge/server/lock";
 import { createTestFolder } from "@bridge/server/testFixtures";
-import { spawnBridge } from "./bridgeProcess";
+import { spawnBridge, started } from "./bridgeProcess";
 
 /** Describe every entry in `folder` closely enough to notice any change to it. */
 function snapshot(folder: string) {
@@ -43,7 +43,7 @@ test("a second bridge exits with a clear message and touches nothing", async () 
   first.child.kill("SIGTERM");
   expect(await first.exit()).toEqual({
     code: 0,
-    stderr: `toy-box-slack is running for ${dataFolder}\ntoy-box-slack is stopping after SIGTERM\n`,
+    stderr: `${started(home)}toy-box-slack is stopping after SIGTERM\n`,
   });
 }, 15_000);
 

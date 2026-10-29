@@ -12,10 +12,9 @@ test("replaces its own folder in COPILOT_HOME whole, without touching anyone els
   mkdirSync(join(skills, "user-skill"));
   writeFileSync(join(skills, "user-skill", "SKILL.md"), "User owned");
 
-  const said = await installSkill({ COPILOT_HOME: copilotHome }, createTestFolder());
+  const path = await installSkill({ COPILOT_HOME: copilotHome }, createTestFolder());
 
-  const path = join(skills, "toy-box-slack", "SKILL.md");
-  expect(said).toStartWith(`Installed the toy-box-slack skill at ${path}.`);
+  expect(path).toBe(join(skills, "toy-box-slack", "SKILL.md"));
   expect(readdirSync(join(skills, "toy-box-slack"))).toEqual(["SKILL.md"]);
   expect(await Bun.file(path).text()).toBe(await Bun.file(BUNDLED_SKILL).text());
   expect(await Bun.file(join(skills, "user-skill", "SKILL.md")).text()).toBe("User owned");

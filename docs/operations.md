@@ -31,7 +31,7 @@ but an old root's text is not repeated just because a new reply arrived.
 If Slack requests wait, inspect the wake result and make sure Toy Box is up.
 The channel needs an inbox routine whose prompt runs `toy-box-slack inbox`.
 The lead creates it using the installed skill. A routine keeps the prompt it
-was created with, so after `toy-box-slack install-skill` updates the skill, ask
+was created with, so after a newer release's `serve` updates the skill, ask
 the lead to set its routines again from it. Missing routines are retried;
 repeated unserved wakes eventually show stalled. Reading inbox serves work,
 so do not run it as the lead merely to inspect status.

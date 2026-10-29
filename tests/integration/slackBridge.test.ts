@@ -1,7 +1,7 @@
 // The bridge as launchd runs it, with both tokens for a fake Slack.
 
 import { expect, test } from "bun:test";
-import { startSlackForBridge, withDatabase } from "./bridgeProcess";
+import { startSlackForBridge, started, withDatabase } from "./bridgeProcess";
 import { startLinkedBridge, storeNewRequest } from "./linkedBridge";
 import { waitFor } from "./waitFor";
 
@@ -26,7 +26,7 @@ function connected({ status }: Bridge) {
 test("a bridge with both tokens connects to Slack, and acks an event once it's stored", async () => {
   const { slack, env } = startSlackForBridge();
   const linked = await startLinkedBridge({ env });
-  const { bridge, dataFolder } = linked;
+  const { bridge, home, dataFolder } = linked;
   await connected(linked);
 
   const sent = slack.sendEvent(post("1700000200.000100"));
@@ -35,7 +35,7 @@ test("a bridge with both tokens connects to Slack, and acks an event once it's s
   bridge.child.kill("SIGTERM");
   expect(await bridge.exit()).toEqual({
     code: 0,
-    stderr: `toy-box-slack is running for ${dataFolder}\nConnected to Slack.\ntoy-box-slack is stopping after SIGTERM\n`,
+    stderr: `${started(home)}Connected to Slack.\ntoy-box-slack is stopping after SIGTERM\n`,
   });
   const messages = await withDatabase(dataFolder, (database) =>
     database.read((sql) => sql`SELECT ts FROM messages`),

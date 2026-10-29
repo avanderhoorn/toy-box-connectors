@@ -1,7 +1,7 @@
 // The bridge as launchd runs it, waking the lead of its linked channel in a fake Toy Box.
 
 import { expect, test } from "bun:test";
-import { withDatabase } from "./bridgeProcess";
+import { started, withDatabase } from "./bridgeProcess";
 import { startLinkedBridge, storeNewRequest } from "./linkedBridge";
 import { waitFor } from "./waitFor";
 
@@ -11,7 +11,7 @@ const PROMPTLY = {
 };
 
 test("a running bridge wakes the lead once for a new request, and stops on SIGTERM", async () => {
-  const { toyBox, channelId, routine, bridge, dataFolder } = await startLinkedBridge({
+  const { toyBox, channelId, routine, bridge, home, dataFolder } = await startLinkedBridge({
     env: PROMPTLY,
     prepare: storeNewRequest,
   });
@@ -21,7 +21,7 @@ test("a running bridge wakes the lead once for a new request, and stops on SIGTE
 
   expect(await bridge.exit()).toEqual({
     code: 0,
-    stderr: `toy-box-slack is running for ${dataFolder}\ntoy-box-slack is stopping after SIGTERM\n`,
+    stderr: `${started(home)}toy-box-slack is stopping after SIGTERM\n`,
   });
   expect(toyBox.runs).toEqual([{ channelId, routineId: routine.id, at: expect.any(Number) }]);
   const wakes = await withDatabase(dataFolder, (database) =>
@@ -31,7 +31,7 @@ test("a running bridge wakes the lead once for a new request, and stops on SIGTE
 }, 15_000);
 
 test("a storage error stops the bridge with exit code 1 so launchd restarts it", async () => {
-  const { toyBox, bridge, dataFolder } = await startLinkedBridge({
+  const { toyBox, bridge, home } = await startLinkedBridge({
     env: PROMPTLY,
     prepare: async (database) => {
       await storeNewRequest(database);
@@ -47,7 +47,7 @@ test("a storage error stops the bridge with exit code 1 so launchd restarts it",
   const { code, stderr } = await bridge.exit();
 
   expect(code).toBe(1);
-  expect(stderr).toStartWith(`toy-box-slack is running for ${dataFolder}\nStopped waking leads:`);
+  expect(stderr).toStartWith(`${started(home)}Stopped waking leads:`);
   expect(stderr).toContain("database or disk is full");
   expect(stderr).toEndWith("toy-box-slack is stopping after an error\n");
   expect(toyBox.runs).toHaveLength(1);
