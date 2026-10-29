@@ -143,7 +143,7 @@ test("a reply Slack refuses after removing the bot suspends the link and wakes i
     botId: "B-bot",
     botUserId: "U-bot",
   });
-  slack.addChannel({ id: "C-link", is_private: true, is_member: true });
+  slack.addChannel({ id: "C-link", is_private: true });
   slack.failNext("chat.postMessage", { error: "not_in_channel" });
   const { toyBox, channelId, bridge, status } = await startLinkedBridge({
     env: { ...env, TOY_BOX_SLACK_WAKE_TIMINGS: JSON.stringify({ debounce: 0, debounceLimit: 0 }) },

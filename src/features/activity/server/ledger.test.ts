@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
-import { RETENTION_MS, type LinkAudience } from "@activity/model/ledger";
+import { RETENTION_MS } from "@activity/model/ledger";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import type { SlackMessage } from "@slackapi/model/messages";
 import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
-import { forgetOldMessages, storeDelete, storeMessage } from "./ledger";
-import { ledgerLink } from "./testFixtures";
+import { forgetOldMessages, storeDelete } from "./ledger";
+import { createStoredMessage, ledgerLink } from "./testFixtures";
 
 const ask = askMessage();
 
@@ -14,16 +14,6 @@ async function openLedger(): Promise<BridgeDatabase> {
   const database = await openTestDatabase();
   await createStoredLink(database);
   return database;
-}
-
-function store(
-  database: BridgeDatabase,
-  message: SlackMessage,
-  { inRequestThread = false, observe = "requesters" as LinkAudience["observe"] } = {},
-) {
-  return database.write((transaction) =>
-    storeMessage(transaction, ledgerLink({ observe }), message, inRequestThread),
-  );
 }
 
 function storeDeleteOf(database: BridgeDatabase, message: SlackMessage) {
@@ -42,7 +32,7 @@ function readLedger(database: BridgeDatabase) {
 test("a message's versions converge in any order, with one change for each edit", async () => {
   const database = await openLedger();
   const edited = editMessage(ask, "1700000150.000100", "<@U-bot> can you look at prod?");
-  for (const message of [ask, edited, ask, edited]) await store(database, message);
+  for (const message of [ask, edited, ask, edited]) await createStoredMessage(database, message);
 
   expect(await readLedger(database)).toEqual({
     messages: [{ ts: ask.ts, text: edited.text, deleted: 0, updated_seq: 2 }],
@@ -56,11 +46,11 @@ test("a message's versions converge in any order, with one change for each edit"
 test("a delete forgets a message's text for good, even when it arrives first", async () => {
   const database = await openLedger();
   const early = askMessage("1700000200.000100");
-  await store(database, ask);
+  await createStoredMessage(database, ask);
   for (const message of [ask, early]) {
     await storeDeleteOf(database, message);
     await storeDeleteOf(database, message);
-    await store(database, message);
+    await createStoredMessage(database, message);
   }
 
   expect(await readLedger(database)).toEqual({
@@ -80,11 +70,15 @@ test("a stranger's text is kept only where the link observes them", async () => 
   const database = await openLedger();
   const inThread = replyMessage(ask, "1700000200.000100", { userId: "U-stranger" });
   const atRoot = askMessage("1700000300.000100", { userId: "U-stranger", text: inThread.text });
-  await store(database, inThread);
+  await createStoredMessage(database, inThread);
   // A request started in the thread since, so its redelivery fills the marker in.
-  await store(database, inThread, { inRequestThread: true });
-  await store(database, atRoot);
-  await store(database, { ...atRoot, ts: "1700000400.000100" }, { observe: "channel" });
+  await createStoredMessage(database, inThread, ledgerLink(), true);
+  await createStoredMessage(database, atRoot);
+  await createStoredMessage(
+    database,
+    { ...atRoot, ts: "1700000400.000100" },
+    ledgerLink({ observe: "channel" }),
+  );
 
   expect((await readLedger(database)).messages).toEqual([
     { ts: inThread.ts, text: inThread.text, deleted: 0, updated_seq: 1 },
@@ -96,7 +90,7 @@ test("a stranger's text is kept only where the link observes them", async () => 
 test("the ledger forgets a message 30 days after its latest version, and a tombstone too", async () => {
   const database = await openLedger();
   const edited = editMessage(askMessage("1700000050.000100"), "1700000300.000100", "it's red");
-  for (const message of [ask, edited]) await store(database, message);
+  for (const message of [ask, edited]) await createStoredMessage(database, message);
   await storeDeleteOf(database, askMessage("1700000060.000100"));
   const now = 1_700_000_200_000 + RETENTION_MS;
   await database.write((transaction) => forgetOldMessages(transaction, now));

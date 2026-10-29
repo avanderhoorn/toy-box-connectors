@@ -36,10 +36,6 @@ function confirm(
   return confirmIdentity(database, wrap(bot), tokens);
 }
 
-function methodsCalled(slack: FakeSlack) {
-  return slack.calls.map(({ method }) => method);
-}
-
 const fakeInstallation: Installation = {
   teamId: "TFAKE",
   enterpriseId: null,
@@ -130,7 +126,7 @@ describe("refusing credentials v1 doesn't support", () => {
       const database = await openTestDatabase();
 
       expect(await confirm(database, slack)).toEqual({ kind: "refused", refusal });
-      expect(methodsCalled(slack)).toEqual(["auth.test"]);
+      expect(slack.calls.map(({ method }) => method)).toEqual(["auth.test"]);
       expect(await database.read(readInstallation)).toBeNull();
     }
   });

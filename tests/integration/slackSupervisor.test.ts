@@ -51,7 +51,7 @@ async function linkFakeSlack() {
     expect(errors).toEqual([]);
   });
   const database = await openTestDatabase();
-  await createStoredLink(database, "link", { slack_channel_id: "C-link" });
+  await createStoredLink(database);
 
   function now() {
     reading?.resolve();
@@ -282,7 +282,7 @@ describe("connecting", () => {
       await Bun.sleep(500);
       expect(called(link.fake, method)).toBe(1);
 
-      await waitFor(() => expect(supervisor.state()).toEqual(connected), 2_000);
+      await waitFor(() => expect(supervisor.state()).toEqual(connected));
       expect(log.mock.calls).toEqual([
         [`Can't connect to Slack. ${problem}`],
         ["Connected to Slack."],

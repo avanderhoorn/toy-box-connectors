@@ -50,7 +50,6 @@ export async function createOutboxWorld() {
   slack.addChannel({
     id: "C-link",
     is_private: true,
-    context_team_id: "T-home",
     shared_team_ids: ["T-home"],
     members: ["U-owner", "U-bot"],
   });
@@ -58,7 +57,7 @@ export async function createOutboxWorld() {
   await createStoredLink(database);
   await database.write(
     (tx) => tx`
-    INSERT OR IGNORE INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-owner', 0)
+    INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-owner', 0)
   `,
   );
   const request = await createStoredRequest(database, {
