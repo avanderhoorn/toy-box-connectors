@@ -156,7 +156,7 @@ To add an app for a lead:
    `serve` runs and run it again, or restart the job the
    [last section](#start-the-bridge-at-login) sets up.
 4. Set up the lead as the README describes, naming the app with `--app` in
-   its `link` command. The preview names the bot that will answer.
+   its `link` command. The preview names the app whose bot will answer.
 
 ```sh
 toy-box-slack link --channel TOYBOX_ID --slack-channel SLACK_ID --app releases
@@ -167,7 +167,7 @@ already links through, else uses the one `--app` names, else `default`. It
 refuses an `--app` that names another app than the channel's link, so unlink
 before moving a channel to another app. Every other command runs in the app
 the caller's channel links through, or `default`. At a terminal, `status`
-without `--channel` shows each app with its bot, its connection and its links,
+without `--channel` shows each app by name, with its connection and its links,
 and each line the bridge logs about an added app starts with its name.
 
 An app whose tokens are missing or rejected, that was uninstalled, or whose
