@@ -68,10 +68,10 @@ async function configure(sql: Bun.SQL): Promise<void> {
 }
 
 // Feature schemas are composed here so one connection owns ordering and transactions without
-// owning each feature's persistence model. Nothing has shipped, so a schema change raises the
-// version instead of migrating, and the bridge refuses a `bridge.db` any other version made rather
-// than fail on it later. Once something has shipped, a change must migrate files from the version
-// before it.
+// owning each feature's persistence model. 0.1.0 shipped version 2, and owners update by installing
+// a release and restarting, so a change to a table raises the version and migrates the `bridge.db`
+// the release before it made. The bridge refuses a `bridge.db` any other version made rather than
+// fail on it later.
 const schemaVersion = 2;
 
 async function initializeSchema(sql: Bun.SQL, path: string): Promise<void> {
