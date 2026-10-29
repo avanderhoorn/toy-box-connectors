@@ -17,12 +17,13 @@ const now = 1_700_001_000_000;
 
 const ask = askMessage();
 const more = replyMessage(ask, "1700000200.000100");
+const theirs = replyMessage(ask, "1700000250.000100", { userId: "U-allowed", mentionsBot: true });
 
-/** A database whose link took the owner's `ask`, which opened request 1. */
-async function openIntake(): Promise<BridgeDatabase> {
+/** A database whose link took the owner's `ask`, which opened request 1, and then `messages`. */
+async function openIntake(...messages: SlackMessage[]): Promise<BridgeDatabase> {
   const database = await openTestDatabase();
   await createStoredLink(database);
-  await take(database, ask);
+  for (const message of [ask, ...messages]) await take(database, message);
   return database;
 }
 
@@ -46,10 +47,10 @@ function requestOf(database: BridgeDatabase, { channelId, ts }: SlackMessage) {
   return database.read((sql) => readMessageRequest(sql, channelId, ts));
 }
 
-/** Has the lead read request `id` and take it as far as `state`, with the outbox's help. */
-function advance(database: BridgeDatabase, state: "seen" | "answering" | "answered", id = 1) {
+/** Has the lead read request 1 and take it as far as `state`, with the outbox's help. */
+function advance(database: BridgeDatabase, state: "seen" | "answering" | "answered") {
   return database.write(async (transaction) => {
-    let request = serveRequest((await readRequest(transaction, id))!, now);
+    let request = serveRequest((await readRequest(transaction, 1))!, now);
     if (state !== "seen") request = beginAnswer(request, now);
     if (state === "answered") request = confirmAnswer(request);
     await saveRequest(transaction, request);
@@ -74,14 +75,13 @@ test("the requester's later messages join their request and flag it once the lea
   await advance(database, "seen");
   expect(await takeDeleteOf(database, more)).toBe(true);
   expect(await requestOf(database, ask)).toMatchObject({ state: "seen", attention: "updated" });
-  const allowed = replyMessage(ask, "1700000400.000100", { userId: "U-allowed" });
-  expect(await take(database, allowed)).toBe(false);
+  expect(await take(database, { ...theirs, mentionsBot: false })).toBe(false);
 });
 
 test("losing its mention cancels a request, and losing its question cancels its answer and our copy", async () => {
-  const removed = await openIntake();
-  expect(await take(removed, editMessage(ask, "1700000300.000100", "never mind"))).toBe(true);
-  expect(await requestOf(removed, ask)).toMatchObject({ closedReason: "mention_removed" });
+  const edited = await openIntake(theirs);
+  expect(await take(edited, editMessage(theirs, "1700000300.000100", "never mind"))).toBe(true);
+  expect(await requestOf(edited, theirs)).toMatchObject({ id: 2, closedReason: "mention_removed" });
   const deleted = await openIntake();
   await advance(deleted, "answering");
   await createStoredOutboxItem(deleted, 1);
@@ -101,8 +101,7 @@ test("once the lead answers, edits change nothing and a new message asks again",
 });
 
 test("a finished request's messages ask again only by gaining a mention, but a new reply follows up", async () => {
-  const database = await openIntake();
-  await take(database, more);
+  const database = await openIntake(more);
   await advance(database, "answered");
   const kept = editMessage(ask, "1700000150.000100", "<@U-bot> can you look at staging?");
   expect(await take(database, kept)).toBe(false);
@@ -111,6 +110,7 @@ test("a finished request's messages ask again only by gaining a mention, but a n
   const mentioned = editMessage(more, "1700000300.000100", "<@U-bot> one more look?");
   expect(await take(database, mentioned)).toBe(true);
   expect(await requestOf(database, more)).toMatchObject({ id: 2, reason: "mention" });
-  await advance(database, "answered", 2);
+  expect(await takeDeleteOf(database, more)).toBe(true);
+  expect(await requestOf(database, more)).toMatchObject({ closedReason: "source_deleted" });
   expect(await take(database, replyMessage(ask, "1700000400.000100"))).toBe(true);
 });
