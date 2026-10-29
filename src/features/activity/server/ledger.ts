@@ -76,9 +76,9 @@ export async function storeDelete(
   transaction: Bun.SQL,
   channelId: string,
   ts: SlackTs,
-): Promise<MergeDecision> {
+): Promise<void> {
   const decision = mergeDelete(storedMessage(await readMessage(transaction, channelId, ts)));
-  if (decision.kind === "ignore") return decision;
+  if (decision.kind === "ignore") return;
   await writeMessage(
     transaction,
     channelId,
@@ -88,7 +88,6 @@ export async function storeDelete(
       ? { author_role: "other", deleted: 1, version: ts }
       : { deleted: 1, text: null, content_hash: null, mentions_bot: 0 },
   );
-  return decision;
 }
 
 /**
