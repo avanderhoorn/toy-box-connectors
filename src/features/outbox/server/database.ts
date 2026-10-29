@@ -1,3 +1,4 @@
+import { RETENTION_MS } from "@activity/model/ledger";
 import { readChannelLink } from "@links/server/database";
 import {
   beginAnswer,
@@ -30,7 +31,8 @@ export type OutboxItem = {
   threadTs: SlackTs | null;
   series: string | null;
   scheduledAt: number | null;
-  payload: Record<string, unknown>;
+  /** What the post says, until the bridge forgets it. A post that may still go out has it. */
+  payload: Record<string, unknown> | null;
   payloadHash: string;
   state: OutboxState;
   attempts: number;
@@ -52,7 +54,7 @@ type OutboxRow = {
   thread_ts: SlackTs | null;
   series: string | null;
   scheduled_at: number | null;
-  payload: string;
+  payload: string | null;
   payload_hash: string;
   state: OutboxState;
   attempts: number;
@@ -264,6 +266,18 @@ export async function recoverOutboxAttempts(tx: Bun.SQL, now: number): Promise<s
   return rows.map((row) => row.id);
 }
 
+/**
+ * Forgets what each post said once it can't go out anymore and hasn't changed for as long as the
+ * bridge keeps what was said. Its row stays, so nothing it reserved posts again.
+ */
+export async function forgetOldPosts(tx: Bun.SQL, now: number): Promise<void> {
+  await tx`
+    UPDATE outbox SET payload = NULL
+    WHERE payload IS NOT NULL AND state NOT IN ('queued', 'sending')
+      AND updated_at < ${now - RETENTION_MS}
+  `;
+}
+
 function rendered(text: string): RenderedMessage {
   const result = renderMarkdown(text);
   if (result.kind === "refused") {
@@ -343,7 +357,10 @@ function outboxItem(row: OutboxRow): OutboxItem {
     threadTs: row.thread_ts,
     series: row.series,
     scheduledAt: row.scheduled_at,
-    payload: z.record(z.string(), z.unknown()).parse(JSON.parse(row.payload)),
+    payload:
+      row.payload === null
+        ? null
+        : z.record(z.string(), z.unknown()).parse(JSON.parse(row.payload)),
     payloadHash: row.payload_hash,
     state: row.state,
     attempts: row.attempts,

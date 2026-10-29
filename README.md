@@ -2,7 +2,7 @@
 
 One local bridge lets a [Toy Box](https://github.com/lostintangent/toy-box) channel's Copilot lead answer allowed people in one Slack channel, publish scheduled release notes there, and bring useful activity back to Toy Box.
 
-The four v1 guarantees are: only allowlisted people can open requests, only the owner widens access, uncertain posts are never resent, and events survive acknowledgement with gaps recovered or reported. Rare channel or policy changes suspend the link for owner review. See [operations](docs/operations.md) for recovery and retention limits.
+The four v1 guarantees are: only allowlisted people can open requests, only the owner widens access, uncertain posts are never resent, and events survive acknowledgement with gaps recovered or reported. Rare channel or policy changes suspend the link for owner review. The bridge keeps only what its links need, by default what allowed people say and the threads they ask in, and forgets any Slack text 30 days after it last changed. See [operations](docs/operations.md) for recovery and retention limits.
 
 No DMs, attachments, Slack Connect, org-wide installs, rotating tokens or non-Copilot leads. Slack text the lead reads reaches Copilot and its selected model provider. Obtain company approval first and read the [reviewer guide](docs/security-review.md).
 

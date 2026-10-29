@@ -23,7 +23,7 @@ test("one threaded Markdown answer confirms its request, retracts and keeps its 
     mrkdwn: "false",
     unfurl_links: "false",
     unfurl_media: "false",
-    blocks: JSON.stringify([{ type: "markdown", text: item.payload.text }]),
+    blocks: JSON.stringify([{ type: "markdown", text: item.payload!.text }]),
   });
   const retract = (link = "link") =>
     retractPost(world.database, world.bot, link, item.number, world.now());

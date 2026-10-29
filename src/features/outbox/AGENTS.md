@@ -5,6 +5,9 @@ Each item has an opaque metadata ID, a never-reused number, an immutable attempt
 and its hash, and a delivery state. A unique request ID or `(link, series, scheduled slot)`
 reserves its purpose. Unknown delivery and retraction never release that reservation.
 A duplicate command refuses with the first item's number and state, rather than queueing again.
+An item that may still go out keeps its payload. Any other forgets it 30 days after it last
+changed and keeps its hash, so delivery can still be proven and the reservation still holds.
+A reply's item goes with its request, whose number is never handed out again.
 
 ## Posting once
 

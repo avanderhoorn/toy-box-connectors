@@ -53,3 +53,11 @@ export async function readSlackPersonName(sql: Bun.SQL, userId: string): Promise
   `;
   return row?.real_name ?? row?.display_name ?? null;
 }
+
+/**
+ * Forgets everyone no link allows, along with their other IDs. Only allowing someone stores them,
+ * so a person's name goes once the last link that allowed them doesn't.
+ */
+export async function forgetUnallowedPeople(tx: Bun.SQL): Promise<void> {
+  await tx`DELETE FROM users WHERE user_id NOT IN (SELECT user_id FROM allowlist)`;
+}

@@ -32,6 +32,9 @@ test("only a linked channel's messages are stored, under their authors' own IDs,
   expect(await ingest(database, { kind: "message", message: elsewhere })).toBe(false);
   const aliased = { ...ask, userId: "W-owner" };
   expect(await ingest(database, { kind: "message", message: aliased })).toBe(true);
+  expect(await database.read((sql) => sql`SELECT user_id FROM messages`)).toEqual([
+    { user_id: "U-owner" },
+  ]);
   expect(await ingest(database, { kind: "replied" })).toBe(false);
   expect(await ingest(database, { kind: "deleted", channelId: "C-link", ts: ask.ts })).toBe(true);
 
@@ -41,7 +44,7 @@ test("only a linked channel's messages are stored, under their authors' own IDs,
       requests: await sql`SELECT requester_user_id, state, closed_reason FROM requests`,
     })),
   ).toEqual({
-    messages: [{ channel_id: "C-link", user_id: "U-owner", author_role: "allowed", deleted: 1 }],
+    messages: [{ channel_id: "C-link", user_id: null, author_role: "allowed", deleted: 1 }],
     requests: [
       { requester_user_id: "U-owner", state: "cancelled", closed_reason: "source_deleted" },
     ],

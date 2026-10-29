@@ -28,10 +28,10 @@ does not revisit. Unfinished reads are retried and reported, without holding pos
 Fresh channel-audience reads happen at link, resume and before every post,
 not at startup or before catch-up.
 
-The startup and hourly cleanup applies to message-ledger rows whose latest
-posted or edited version is over 30 days old, not all bridge text. Queued and sent
-outbox payloads remain until unlink or uninstall. Content-free `changes`
-records remain too. Reviewers must approve retained output separately.
+The startup and hourly cleanup keeps Slack text, the bridge's own posts
+included, for at most 30 days after it last changed. Only a post that may still
+go out keeps its text longer. Rows that outlast their text keep only the
+identifiers, timestamps, states and hashes that posting once and numbering need.
 
 ### Smaller v1: live Markdown probe
 

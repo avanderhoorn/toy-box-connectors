@@ -163,7 +163,20 @@ function requestColumns(request: Request): Omit<RequestRow, "id"> {
   };
 }
 
-/** Deletes a link's requests, along with which messages each held. */
+/** Deletes a link's requests, along with which messages each held and its reply. */
 export async function deleteLinkRequests(transaction: Bun.SQL, linkId: string): Promise<void> {
   await transaction`DELETE FROM requests WHERE link_id = ${linkId}`;
+}
+
+/**
+ * Forgets every finished request once the ledger has forgotten all its messages, along with which
+ * messages it held and its reply. Until then an edit to one of them finds the request finished and
+ * asks nothing, and after, a message's next version is too old to ask.
+ */
+export async function forgetFinishedRequests(transaction: Bun.SQL): Promise<void> {
+  await transaction`
+    DELETE FROM requests WHERE state NOT IN ${transaction(activeStates)} AND id NOT IN (
+      SELECT request_id FROM request_messages JOIN messages USING (channel_id, ts)
+    )
+  `;
 }

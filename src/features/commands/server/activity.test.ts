@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { forgetOldActivity } from "@activity/server/ledger";
 import { createStoredMessage } from "@activity/server/testFixtures";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
@@ -42,7 +43,9 @@ test("serves the messages that changed after the cursor a page at a time, and ma
   expect(await refusal(markRead({ through: 6 }, LEAD))).toBe(
     "Activity hasn't shown you change 6, so it isn't marked read. Run `toy-box-slack activity`, then the mark-read it ends with.",
   );
-  // Until it's marked read, a digest that didn't finish gets the same page again.
+  // Until it's marked read, a digest that didn't finish gets the same page again, even once the
+  // ledger forgets the changes later ones replaced.
+  await database.write((tx) => forgetOldActivity(tx, LEAD.at));
   expect(await activity({ limit: 2 }, LEAD)).toEqual(first);
   expect((await markRead({ through: 5 }, LEAD)).text).toBe("#C-link is read through change 5.");
   expect((await markRead({ through: 4 }, LEAD)).text).toBe("#C-link is read through change 5.");

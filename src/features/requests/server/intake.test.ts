@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { storeDelete, storeMessage } from "@activity/server/ledger";
+import { RETENTION_MS } from "@activity/model/ledger";
+import { forgetOldActivity, storeDelete, storeMessage } from "@activity/server/ledger";
 import { linkAudience } from "@activity/server/testFixtures";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
@@ -9,10 +10,12 @@ import { beginAnswer, confirmAnswer, serveRequest } from "@requests/model/lifecy
 import type { SlackMessage } from "@slackapi/model/messages";
 import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
 import type { SlackTs } from "@slackapi/model/ts";
-import { readMessageRequest, readRequest, saveRequest } from "./database";
+import { forgetFinishedRequests, readMessageRequest, readRequest, saveRequest } from "./database";
 import { takeDelete, takeMessage } from "./intake";
 
 const now = 1_700_001_000_000;
+/** A month after `now`, when the ledger has forgotten what didn't change since. */
+const later = now + RETENTION_MS;
 
 const ask = askMessage();
 const more = replyMessage(ask, "1700000200.000100");
@@ -26,12 +29,12 @@ async function openIntake(...messages: SlackMessage[]): Promise<BridgeDatabase> 
   return database;
 }
 
-/** Stores `message` in the ledger and takes it, in one transaction as ingest does. */
-function take(database: BridgeDatabase, message: SlackMessage) {
+/** Stores `message` in the ledger and takes it at `at`, in one transaction as ingest does. */
+function take(database: BridgeDatabase, message: SlackMessage, at = now) {
   return database.write(async (transaction) => {
     const link = (await readChannelLink(transaction, message.channelId))!;
     const stored = await storeMessage(transaction, linkAudience(), message, false);
-    return takeMessage(transaction, link, message, stored, now);
+    return takeMessage(transaction, link, message, stored, at);
   });
 }
 
@@ -44,6 +47,21 @@ function takeDeleteOf(database: BridgeDatabase, { channelId, ts }: SlackMessage)
 
 function requestOf(database: BridgeDatabase, { channelId, ts }: SlackMessage) {
   return database.read((sql) => readMessageRequest(sql, channelId, ts));
+}
+
+/** Forgets what the ledger no longer keeps `later`, and the finished requests that held only that. */
+function forget(database: BridgeDatabase) {
+  return database.write(async (transaction) => {
+    await forgetOldActivity(transaction, later);
+    await forgetFinishedRequests(transaction);
+  });
+}
+
+function readRequests(database: BridgeDatabase) {
+  return database.read(async (sql) => ({
+    requests: await sql`SELECT id, state FROM requests ORDER BY id`,
+    messages: await sql`SELECT request_id, ts FROM request_messages ORDER BY ts`,
+  }));
 }
 
 /** Has the lead read request 1 and take it as far as `state`, with the outbox's help. */
@@ -130,4 +148,37 @@ test("an okay follows up only when our newest message before it in the thread as
     id: 2,
     reason: "follow_up",
   });
+});
+
+test("once the ledger forgets a request's messages, it goes if finished, but stays while answering", async () => {
+  const database = await openIntake(theirs);
+  await advance(database, "answering");
+  expect(await take(database, editMessage(theirs, "1700000300.000100", "never mind"))).toBe(true);
+  await forget(database);
+  expect(await readRequests(database)).toEqual({
+    requests: [{ id: 1, state: "answering" }],
+    messages: [{ request_id: 1, ts: ask.ts }],
+  });
+});
+
+test("a finished request stays while the ledger keeps any of its messages, so none asks again", async () => {
+  const database = await openIntake(more);
+  await advance(database, "answered");
+  // The owner fixes a typo in their question weeks after the answer, so the ledger keeps it longer.
+  const fixed = editMessage(
+    ask,
+    "1701728100.000100",
+    "<@U-bot> can you look at the deploy, please?",
+  );
+  expect(await take(database, fixed)).toBe(false);
+  await forget(database);
+  expect((await readRequests(database)).requests).toEqual([{ id: 1, state: "answered" }]);
+
+  const again = editMessage(fixed, "1702592000.000100", "<@U-bot> can you look at staging?");
+  expect(await take(database, again, later)).toBe(false);
+  // The ledger forgot `more`, so its edit reads as new and never mentioning the bot, and only its
+  // age stops it asking.
+  const mentioned = editMessage(more, "1702592100.000100", "<@U-bot> one more look?");
+  expect(await take(database, mentioned, later)).toBe(false);
+  expect((await readRequests(database)).requests).toEqual([{ id: 1, state: "answered" }]);
 });

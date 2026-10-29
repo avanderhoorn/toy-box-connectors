@@ -4,8 +4,9 @@
 // it's missing. The bridge then prepares its data folder, reads its settings,
 // takes the single-bridge lock, and only then opens `bridge.db`, so a second
 // bridge stops before it opens anything.
-// Then it starts its work: forgetting old messages hourly, connecting to Slack
-// once both tokens are set, waking leads, and answering commands on its socket.
+// Then it starts its work: forgetting hourly what it no longer keeps, connecting
+// to Slack once both tokens are set, waking leads, and answering commands on its
+// socket.
 // It lets go of everything in the reverse order, so it stops taking commands
 // before anything they use stops.
 //
@@ -14,7 +15,6 @@
 // login job starts it afresh and an owner at a terminal sees why it stopped.
 
 import { join } from "node:path";
-import { forgetOldMessages } from "@activity/server/ledger";
 import { askForMissingCredentials } from "@commands/client/firstRun";
 import { installSkill } from "@commands/client/skill";
 import { resolveSessionId } from "@commands/model/callers";
@@ -45,6 +45,7 @@ import { openBridgeDatabase, type BridgeDatabase } from "./database";
 import { readCredentialsFile, resolveBridgeSettings } from "./environment";
 import { acquireBridgeLock } from "./lock";
 import { BridgeRefusedError } from "./refusal";
+import { startRetention } from "./retention";
 import { startSlackSupervisor, type SlackSupervisor } from "./slack";
 import { commandSocketPath, listenForCommands, type CommandSocket } from "./socket";
 
@@ -191,21 +192,6 @@ export async function startBridge(
     await stop();
     throw error;
   }
-}
-
-/** Forgets old messages now and then hourly, until the timer it returns is cleared. */
-async function startRetention(
-  database: BridgeDatabase,
-  onError: (error: unknown) => void,
-): Promise<Timer> {
-  const forget = () => database.write((tx) => forgetOldMessages(tx, Date.now()));
-  await forget();
-  return setInterval(() => {
-    forget().catch((error: unknown) => {
-      log("Couldn't forget old messages:", error);
-      onError(error);
-    });
-  }, 60 * 60_000);
 }
 
 /**

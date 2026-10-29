@@ -105,11 +105,17 @@ database to recover an unknown post.
 Deleting or restoring an older database can also lose post reservations.
 Check Slack before resuming publications after any state reset.
 
-Ledger cleanup runs at startup and hourly. It removes messages
-whose latest posted or edited version is over 30 days old, including markers
-and tombstones. Content-free change records remain. **Outbox payloads do not
-expire after 30 days:** queued and sent replies and publications keep their
-text until unlink or uninstall.
+Cleanup runs at startup and hourly. It removes messages whose latest posted
+or edited version is over 30 days old, including markers and tombstones, and
+every change record but each remaining message's latest. A finished request
+goes once none of its messages remain, with its reply's outbox item, so that
+reply can't be retracted after that, and a follow-up in its thread needs a
+new mention. A post forgets its text 30 days after it last changed, unless it
+may still go out, such as a reply queued while its link is paused. Its
+number, hash and state stay, so an unknown post can still be confirmed and a
+publication slot stays reserved. A request whose reply's delivery is unknown
+never finishes, so it stays too. A person's name and other IDs go within an
+hour of the `deny` or `unlink` that leaves no link allowing them.
 
 Catch-up scans roots at most 30 days old and follows threads with replies
 since the gap. It takes new or edited versions from five minutes before the

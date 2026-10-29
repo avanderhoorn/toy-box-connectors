@@ -56,7 +56,7 @@ export async function storeMessage(
   if (decision.kind !== "ignore") {
     await writeMessage(transaction, channelId, ts, decision, {
       thread_ts: message.threadTs,
-      user_id: message.userId,
+      user_id: kept ? message.userId : null,
       author_role: role,
       text: kept ? message.text : null,
       content_hash: contentHash,
@@ -69,8 +69,8 @@ export async function storeMessage(
 }
 
 /**
- * Merges a delete into the ledger, forgetting the message's text. A message the ledger never saw
- * leaves a tombstone, so its late original stays deleted.
+ * Merges a delete into the ledger, forgetting the message's text and who wrote it. A message the
+ * ledger never saw leaves a tombstone, so its late original stays deleted.
  */
 export async function storeDelete(
   transaction: Bun.SQL,
@@ -86,7 +86,7 @@ export async function storeDelete(
     decision,
     decision.kind === "insert"
       ? { author_role: "other", deleted: 1, version: ts }
-      : { deleted: 1, text: null, content_hash: null, mentions_bot: 0 },
+      : { deleted: 1, user_id: null, text: null, content_hash: null, mentions_bot: 0 },
   );
 }
 
@@ -106,12 +106,14 @@ export async function readOwnTextBefore(
 
 /**
  * Forgets every message last changed longer ago than the ledger keeps one, a tombstone too, since
- * Slack never shows a deleted message again. Changes keep no text, so they stay.
+ * Slack never shows a deleted message again. Then it forgets every change no message points at,
+ * which activity never reads, so the digest reads as it did.
  */
-export async function forgetOldMessages(transaction: Bun.SQL, now: number): Promise<void> {
+export async function forgetOldActivity(transaction: Bun.SQL, now: number): Promise<void> {
   // SQLite casts a ts to its whole seconds.
   const before = Math.floor((now - RETENTION_MS) / 1000);
   await transaction`DELETE FROM messages WHERE CAST(version AS INTEGER) < ${before}`;
+  await transaction`DELETE FROM changes WHERE seq NOT IN (SELECT updated_seq FROM messages)`;
 }
 
 async function readMessage(

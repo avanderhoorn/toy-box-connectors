@@ -146,14 +146,29 @@ DLP and does not constrain the lead's other shell tools.
 
 ## Retention and deletion
 
-Ledger cleanup deletes `messages` rows at startup and hourly once their latest
-posted or edited version is over 30 days old, including markers and tombstones.
-`changes` rows contain only identifiers, timestamps and kinds, and remain.
+Cleanup runs at startup and hourly, so the bridge keeps Slack text for at most
+30 days after it last changed. Only a post that may still go out keeps its text
+longer. Rows that outlast their text hold identifiers, timestamps, states and
+hashes that posting once and numbering need.
 
-**That job does not prune outbox payloads.** Queued and sent replies and
-publications keep their text until unlink or uninstall. Approve this longer
-output retention separately. There are no downloaded files, coverage records
-or durable event receipts to retain.
+- `messages` rows go once their latest posted or edited version is over 30
+  days old, including markers and tombstones. A marker or tombstone keeps its
+  author's role but not their user ID.
+- `changes` keeps only each remaining message's latest change, which holds
+  identifiers, a timestamp and a kind.
+- A finished request goes, with its `request_messages` and its reply's
+  `outbox` row, once the ledger keeps none of its messages. The reason the lead
+  gave for dismissing it goes with it. A request whose reply's delivery is
+  unknown never finishes, so it stays, with no text.
+- An `outbox` row forgets its payload 30 days after it last changed, unless it
+  is queued or sending, such as a reply queued while its link is paused. Its
+  number, payload hash, state, destination and Slack `ts` remain, so an unknown
+  post can still be proven and a publication slot stays reserved.
+- `users` and `user_aliases` keep a person's name and other IDs only while a
+  link allows them.
+
+There are no downloaded files, coverage records or durable event receipts to
+retain.
 
 Unlink removes a link's owned bridge data. Observed app uninstall, or token
 revocation naming our bot, empties all other tables and leaves the installation

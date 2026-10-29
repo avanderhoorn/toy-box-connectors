@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { serveRequest } from "@requests/model/lifecycle";
 import { readRequest, saveRequest } from "@requests/server/database";
 import {
+  forgetOldPosts,
   OutboxRefusedError,
   queuePublication,
   readReadyOutbox,
@@ -111,4 +112,23 @@ test("a definite refusal can reuse only its own row, after inbox clears reply_fa
   });
   await world.database.write((tx) => tx`DELETE FROM links WHERE id = 'link'`);
   expect(await world.read(item.id)).toBeNull();
+});
+
+test("a post forgets what it said a month after it last changed, unless it may still go out", async () => {
+  const world = await createOutboxWorld();
+  const reply = await world.queue();
+  await world.post(reply.id);
+  const slot = { linkId: "link", series: "release-notes", scheduledAt: world.now(), text: "Notes" };
+  const publication = await world.database.write((tx) => queuePublication(tx, slot, world.now()));
+  const forgetAfter = async (days: number) => {
+    world.advance(days * 86_400_000);
+    await world.database.write((tx) => forgetOldPosts(tx, world.now()));
+    return { reply: await world.read(reply.id), publication: await world.read(publication.id) };
+  };
+
+  expect(await forgetAfter(29)).toMatchObject({ reply: { state: "sent", payload: reply.payload } });
+  expect(await forgetAfter(2)).toMatchObject({
+    reply: { state: "sent", payload: null, payloadHash: reply.payloadHash },
+    publication: { state: "queued", payload: publication.payload },
+  });
 });

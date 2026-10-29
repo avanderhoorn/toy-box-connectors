@@ -2,7 +2,7 @@
 export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
   await db.unsafe(`
     -- A kept message has text and a content hash, and a content-free marker or a tombstone has
-    -- neither, nor any trace that it mentioned the bot.
+    -- neither, nor any trace of who wrote it or that it mentioned the bot.
     CREATE TABLE messages (
       channel_id   TEXT NOT NULL,
       ts           TEXT NOT NULL,
@@ -19,10 +19,12 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       updated_seq  INTEGER NOT NULL CHECK (typeof(updated_seq) = 'integer' AND updated_seq > 0),
       PRIMARY KEY (channel_id, ts),
       CHECK ((content_hash IS NULL) = (text IS NULL)),
-      CHECK (text IS NOT NULL OR mentions_bot = 0),
+      CHECK (text IS NOT NULL OR (user_id IS NULL AND mentions_bot = 0)),
       CHECK (text IS NULL OR (deleted = 0 AND author_role <> 'other'))
     );
 
+    -- AUTOINCREMENT never hands a seq out again, even once its change is gone, so every new change
+    -- comes after every cursor.
     CREATE TABLE changes (
       seq        INTEGER PRIMARY KEY AUTOINCREMENT,
       channel_id TEXT NOT NULL,

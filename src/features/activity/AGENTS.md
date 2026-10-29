@@ -10,15 +10,15 @@ An event counts only when it's for our app and our bot, and nothing is taken bef
 
 The ledger keeps one row per channel and `ts`. Every new, edited, or deleted message appends a change with an increasing sequence, so readers follow changes instead of rescanning messages. A merge that changes nothing appends nothing, so replaying an envelope converges to the same rows. A `ts` is an exact decimal string. It is never parsed into a float, and comparisons use the decimal order of its seconds and fraction.
 
-A delete leaves a tombstone that no version of the message can undo, even one that arrives first, and its text is forgotten. When someone deletes a root that still has replies, Slack leaves a tombstone message in its place and sends the root's `message_deleted` only after the last reply's, so that tombstone counts as the delete, and the replies stay. Slack withdraws a message when an admin's key no longer unlocks it or a rule hides it, and the ledger stores that as its delete, since the bridge may no longer keep what it said. Only the message's own `hidden` flag counts, since Slack hides every edit and delete event too.
+A delete leaves a tombstone that no version of the message can undo, even one that arrives first, and its text and its author's ID are forgotten. When someone deletes a root that still has replies, Slack leaves a tombstone message in its place and sends the root's `message_deleted` only after the last reply's, so that tombstone counts as the delete, and the replies stay. Slack withdraws a message when an admin's key no longer unlocks it or a rule hides it, and the ledger stores that as its delete, since the bridge may no longer keep what it said. Only the message's own `hidden` flag counts, since Slack hides every edit and delete event too.
 
-Each message gets its author role when it's stored, and a person's comes from their exact user ID, never the workspace the message names. In the default requesters mode, text is kept only from allowlisted people, from the bot, and from anyone posting in a thread where a request started. Every other message becomes a content-free marker, so the digest cursor still accounts for it. Another bot's text is never kept. A marker whose text is kept when the same version arrives again is filled in without counting as an edit.
+Each message gets its author role when it's stored, and a person's comes from their exact user ID, never the workspace the message names. In the default requesters mode, text is kept only from allowlisted people, from the bot, and from anyone posting in a thread where a request started. Every other message becomes a content-free marker, with its author's role but not their ID, so the digest cursor still accounts for it. Another bot's text is never kept. A marker whose text is kept when the same version arrives again is filled in without counting as an edit.
 
 ## Catching up
 
 Each hello notes a gap since the last hello in the same transaction that records it, so whatever happened while the bridge wasn't connected is caught up on, even after a crash. Once gaps have ended, catch-up reads every linked channel's history, then the threads replied to since, and stores what changed through ingest as live intake would have. It takes changes from five minutes before the earliest gap, since Slack's clock and ours can differ, but never from before the link or from longer ago than the ledger keeps messages. Each channel is stored in one transaction, so the lead never sees half of what was missed, and reading something twice changes nothing. Catch-up waits out Slack's rate limits, skips a channel and suspends its links when Slack shuts the bot out of it, and retries a run that can't finish on the wake backoff, with status saying why. History shows a message only as it stands, so catch-up never finds a delete, and it misses a reply in a thread whose root is older than the ledger keeps.
 
-The ledger forgets a message 30 days after its latest version, a tombstone too, when the bridge starts and hourly after. Changes keep no text, so they stay.
+The ledger forgets a message 30 days after its latest version, a tombstone too, when the bridge starts and hourly after. Readers only ever see a message at its latest change, so that's the one change it keeps, and a forgotten change's sequence is never handed out again, so every new change comes after every cursor.
 
 ## Boundaries and invariants
 
@@ -26,5 +26,6 @@ The ledger forgets a message 30 days after its latest version, a tombstone too, 
 - Logs hold no message content.
 - Every version of a message merges through one idempotent function, so a redelivery converges to the same rows.
 - Nothing from an unlinked channel is stored.
+- The ledger knows who wrote a message only while it keeps what they said.
 - A gap is forgotten only once catch-up has read every linked channel in full, and never one noted after the run began.
 - SDK retries are off. Every Web API call goes through the shared bot client in `src/features/slackapi`, which makes one attempt per call, holds a rate-limited method back for every caller, and leaves what happens next to its caller.
