@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
+import type { SlackCall } from "@slackapi/server/botClient";
 import {
   deleteReceipt,
   nextReconciliation,
   outboxMetadata,
-  postReceipt,
+  postSettlement,
   reconciliationReceipt,
-  writeOutcome,
 } from "./delivery";
 
 const identity = { appId: "A1", botId: "B1" };
@@ -19,40 +19,40 @@ const message = {
   metadata: outboxMetadata(post),
 };
 const receipt = { ok: true, channel: post.channelId, ts: message.ts, message };
+const settle = (call: SlackCall<unknown>) => postSettlement(call, post, identity);
 
 test("ambiguous writes never become retryable, while explicit refusals do", () => {
   for (const error of ["internal_error", "fatal_error", "service_unavailable"]) {
-    expect(writeOutcome({ kind: "error", error, data: { ok: false } }).kind).toBe(
-      "delivery_unknown",
-    );
+    expect(settle({ kind: "error", error, data: { ok: false } }).state).toBe("delivery_unknown");
   }
-  expect(writeOutcome({ kind: "unknown", detail: "private response content" })).toEqual({
-    kind: "delivery_unknown",
+  expect(settle({ kind: "unknown", detail: "private response content" })).toEqual({
+    state: "delivery_unknown",
     error: "unverified_slack_response",
   });
-  expect(writeOutcome({ kind: "rate_limited", until: 60_000 })).toMatchObject({
-    kind: "queued",
+  expect(settle({ kind: "rate_limited", until: 60_000 })).toMatchObject({
+    state: "queued",
     nextAttemptAt: 60_000,
   });
-  expect(writeOutcome({ kind: "error", error: "invalid_blocks", data: { ok: false } }).kind).toBe(
+  expect(settle({ kind: "error", error: "invalid_blocks", data: { ok: false } }).state).toBe(
     "failed",
   );
 });
 test("a response confirms only the intended bot post and destination", () => {
-  expect(postReceipt(receipt, post, identity)).toEqual({ kind: "confirmed", ts: message.ts });
-  expect(
-    postReceipt({ ...receipt, message: { ...message, metadata: undefined } }, post, identity).kind,
-  ).toBe("confirmed");
-  expect(
-    postReceipt({ ...receipt, message: { ...message, thread_ts: undefined } }, post, identity).kind,
-  ).toBe("misplaced");
-  for (const changed of [
-    { ...receipt, channel: "COTHER" },
-    { ...receipt, message: { ...message, bot_id: "BOTHER" } },
-    { ...receipt, ts: "102.1" },
-    { ok: true, channel: "C1" },
-  ])
-    expect(postReceipt(changed, post, identity).kind).toBe("unverified");
+  const accepted = (result: object) => settle({ kind: "ok", result });
+  expect(accepted(receipt)).toEqual({ state: "sent", slackTs: message.ts });
+  expect(accepted({ ...receipt, message: { ...message, metadata: undefined } }).state).toBe("sent");
+  expect(accepted({ ...receipt, message: { ...message, thread_ts: undefined } })).toEqual({
+    state: "delivery_unknown",
+    error: "wrong_thread",
+    slackTs: message.ts,
+  });
+  for (const [changed, error] of [
+    [{ ...receipt, channel: "COTHER" }, "wrong_channel"],
+    [{ ...receipt, message: { ...message, bot_id: "BOTHER" } }, "wrong_author"],
+    [{ ...receipt, ts: "102.1" }, "invalid_response"],
+    [{ ok: true, channel: "C1" }, "invalid_response"],
+  ] as const)
+    expect(accepted(changed)).toEqual({ state: "delivery_unknown", error });
 });
 test("read proof requires exact metadata, our identity, live content and the intended thread", () => {
   expect(reconciliationReceipt(message, "C1", post, identity)).toBe(message.ts);

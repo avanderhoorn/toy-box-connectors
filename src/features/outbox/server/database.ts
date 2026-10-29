@@ -9,7 +9,7 @@ import { readRequest, saveRequest } from "@requests/server/database";
 import { canonicalUserId } from "@slackapi/server/users";
 import type { SlackTs } from "@slackapi/model/ts";
 import { z } from "zod";
-import { nextReconciliation } from "../model/delivery";
+import { nextReconciliation, type OutboxSettlement } from "../model/delivery";
 import { renderMarkdown, type RenderedMessage } from "../model/rendering";
 
 export class OutboxRefusedError extends Error {}
@@ -67,11 +67,6 @@ type OutboxRow = {
   created_at: number;
   updated_at: number;
 };
-export type OutboxSettlement =
-  | { state: "sent"; slackTs: SlackTs }
-  | { state: "queued"; error: string; nextAttemptAt: number | null }
-  | { state: "delivery_unknown"; error: string; slackTs?: SlackTs }
-  | { state: "failed"; error: string };
 
 export async function queueReply(
   tx: Bun.SQL,

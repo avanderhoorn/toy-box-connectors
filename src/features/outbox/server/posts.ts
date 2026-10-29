@@ -10,7 +10,7 @@ import { fetchChannelFacts } from "@slackapi/server/channels";
 import { readInstallation } from "@slackapi/server/installation";
 import { canonicalUserId } from "@slackapi/server/users";
 import { ZodError } from "zod";
-import { outboxMetadata, postReceipt, writeOutcome } from "../model/delivery";
+import { outboxMetadata, postSettlement } from "../model/delivery";
 import { checkLeadPayload } from "../model/payload";
 import type { RenderedMessage } from "../model/rendering";
 import {
@@ -19,7 +19,6 @@ import {
   settleOutboxAttempt,
   startOutboxAttempt,
   type OutboxItem,
-  type OutboxSettlement,
 } from "./database";
 
 export type PostStep =
@@ -77,7 +76,7 @@ export function createPostDelivery(
     });
     if (prepared.kind !== "started") return prepared;
     const { item, identity, message } = prepared;
-    const outcome = writeOutcome(
+    const settlement = postSettlement(
       await bot.call("chat.postMessage", (client) =>
         client.chat.postMessage({
           ...message,
@@ -86,26 +85,13 @@ export function createPostDelivery(
           ...(item.threadTs === null ? {} : { thread_ts: item.threadTs, reply_broadcast: false }),
         }),
       ),
+      item,
+      identity,
     );
-    let settlement: OutboxSettlement;
-    if (outcome.kind === "accepted") {
-      const receipt = postReceipt(outcome.result, item, identity);
-      settlement =
-        receipt.kind === "confirmed"
-          ? { state: "sent", slackTs: receipt.ts }
-          : receipt.kind === "misplaced"
-            ? { state: "delivery_unknown", error: "wrong_thread", slackTs: receipt.ts }
-            : { state: "delivery_unknown", error: receipt.reason };
-    } else {
-      settlement =
-        outcome.kind === "queued"
-          ? { ...outcome, state: "queued" }
-          : { state: outcome.kind, error: outcome.error };
-    }
+    const suspend = settlement.state === "failed" ? channelFailureReason(settlement.error) : null;
     return database.write(async (tx) => {
       const settled = await settleOutboxAttempt(tx, item, settlement, now());
-      if (settled && outcome.kind === "failed" && outcome.suspend)
-        await suspendChannelLinks(tx, item.channelId, outcome.suspend, now());
+      if (settled && suspend) await suspendChannelLinks(tx, item.channelId, suspend, now());
       return settled ? { kind: "settled", item: settled } : { kind: "changed" };
     });
   }

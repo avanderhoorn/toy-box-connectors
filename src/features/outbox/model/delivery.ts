@@ -1,31 +1,33 @@
-import type { ChannelSuspendReason } from "@links/model/audience";
-import { channelFailureReason } from "@slackapi/model/errors";
 import type { Installation } from "@slackapi/model/installation";
 import { isWithdrawn, slackMessageSchema } from "@slackapi/model/messages";
 import { compareTs, slackTsSchema, type SlackTs } from "@slackapi/model/ts";
 import type { SlackCall } from "@slackapi/server/botClient";
 import { z } from "zod";
 
-export type WriteOutcome<Result> =
-  | { kind: "accepted"; result: Result }
-  | { kind: "queued"; nextAttemptAt: number | null; error: string }
-  | { kind: "delivery_unknown"; error: string }
-  | { kind: "failed"; error: string; suspend: ChannelSuspendReason | null };
+export type OutboxSettlement =
+  | { state: "sent"; slackTs: SlackTs }
+  | { state: "queued"; error: string; nextAttemptAt: number | null }
+  | { state: "delivery_unknown"; error: string; slackTs?: SlackTs }
+  | { state: "failed"; error: string };
 
-export function writeOutcome<Result>(call: SlackCall<Result>): WriteOutcome<Result> {
+export function postSettlement(
+  call: SlackCall<unknown>,
+  post: OutboxPost,
+  identity: BotIdentity,
+): OutboxSettlement {
   switch (call.kind) {
     case "ok":
-      return { kind: "accepted", result: call.result };
+      return postReceipt(call.result, post, identity);
     case "auth_failed":
-      return { kind: "queued", nextAttemptAt: null, error: call.error };
+      return { state: "queued", nextAttemptAt: null, error: call.error };
     case "rate_limited":
-      return { kind: "queued", nextAttemptAt: call.until, error: "rate_limited" };
+      return { state: "queued", nextAttemptAt: call.until, error: "rate_limited" };
     case "unknown":
-      return { kind: "delivery_unknown", error: "unverified_slack_response" };
+      return { state: "delivery_unknown", error: "unverified_slack_response" };
     case "error":
       return ["internal_error", "fatal_error", "service_unavailable"].includes(call.error)
-        ? { kind: "delivery_unknown", error: call.error }
-        : { kind: "failed", error: call.error, suspend: channelFailureReason(call.error) };
+        ? { state: "delivery_unknown", error: call.error }
+        : { state: "failed", error: call.error };
   }
 }
 
@@ -58,28 +60,23 @@ const receiptSchema = z.object({
   ts: slackTsSchema,
   message: messageSchema,
 });
-export type PostReceipt =
-  | { kind: "confirmed"; ts: SlackTs }
-  | { kind: "misplaced"; ts: SlackTs }
-  | { kind: "unverified"; reason: "invalid_response" | "wrong_channel" | "wrong_author" };
 
-export function postReceipt(result: unknown, post: OutboxPost, identity: BotIdentity): PostReceipt {
+function postReceipt(result: unknown, post: OutboxPost, identity: BotIdentity): OutboxSettlement {
   const parsed = receiptSchema.safeParse(result);
-  if (!parsed.success) return { kind: "unverified", reason: "invalid_response" };
+  if (!parsed.success) return { state: "delivery_unknown", error: "invalid_response" };
   const receipt = parsed.data;
   if (compareTs(receipt.ts, receipt.message.ts) !== 0 || !currentMessage(receipt.message))
-    return { kind: "unverified", reason: "invalid_response" };
+    return { state: "delivery_unknown", error: "invalid_response" };
   if (
     receipt.channel !== post.channelId ||
     (receipt.message.channel != null && receipt.message.channel !== post.channelId)
   )
-    return { kind: "unverified", reason: "wrong_channel" };
+    return { state: "delivery_unknown", error: "wrong_channel" };
   if (conflictingIdentity(receipt.message, identity))
-    return { kind: "unverified", reason: "wrong_author" };
-  return {
-    kind: correctThread(receipt.message, post.threadTs) ? "confirmed" : "misplaced",
-    ts: receipt.ts,
-  };
+    return { state: "delivery_unknown", error: "wrong_author" };
+  return correctThread(receipt.message, post.threadTs)
+    ? { state: "sent", slackTs: receipt.ts }
+    : { state: "delivery_unknown", error: "wrong_thread", slackTs: receipt.ts };
 }
 
 /** Reads prove only positive, exact correlation. Missing or matching text proves nothing. */
