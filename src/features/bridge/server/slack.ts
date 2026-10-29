@@ -4,7 +4,7 @@ import type { SlackState } from "@commands/model/status";
 import {
   helloRefusal,
   refusalProblem,
-  rejectedTokenProblem,
+  rejectedTokensProblem,
   type IdentityRefusal,
   type TokenName,
 } from "@slackapi/model/identity";
@@ -89,7 +89,7 @@ export function startSlackSupervisor(
   let socket: SlackSocket | undefined;
   let workspace: string | null = null;
   let refusal: IdentityRefusal | null = null;
-  // What status says about each token Slack rejected.
+  // The error Slack gave for each token it rejected.
   const rejected = new Map<TokenName, string>();
   // Why Slack isn't connected while the bridge keeps trying.
   let problem: string | null = null;
@@ -205,9 +205,8 @@ export function startSlackSupervisor(
   // Only the operator can replace a token Slack rejected, so nothing asks about it again.
   function reject(token: TokenName, error: string): null {
     if (!signal.aborted && !rejected.has(token)) {
-      const rejection = rejectedTokenProblem(token, error);
-      rejected.set(token, rejection);
-      log(rejection);
+      rejected.set(token, error);
+      log(rejectedTokensProblem([[token, error]]));
     }
     return null;
   }
@@ -244,7 +243,7 @@ export function startSlackSupervisor(
   function state(): SlackState {
     if (refusal !== null) return { connection: "refused", problem: refusalProblem(refusal) };
     if (rejected.size > 0) {
-      return { connection: "auth_failed", problem: [...rejected.values()].join(" ") };
+      return { connection: "auth_failed", problem: rejectedTokensProblem([...rejected]) };
     }
     if (connected) return { connection: "connected", problem: catchUp.problem() };
     return { connection: everConnected ? "reconnecting" : "connecting", problem };

@@ -66,16 +66,18 @@ Channel audience is checked at link, at resume and before every post, not
 at startup or before catch-up. If a share or privacy-change event was missed
 offline, the audience comparison waits until a later fresh check.
 
-For a bad token, stop the bridge with Ctrl-C, delete the token's line from
-`credentials.env`, and run `serve` at a terminal, which asks for it again.
-If the bridge starts at login, correct the line instead and restart the job
-as the last section describes. Environment variables override that file, so
-a stale exported token can hide a correction. Ordinary credential failures
-retain the ledger; they are not uninstall events.
+For a bad token, delete its line from `credentials.env` and run `serve` at a
+terminal, which asks for it again. If the bridge is stopped, that `serve`
+starts it. If it still runs, at another terminal or as the job the last
+section sets up, `serve` saves the token and stops, and the running bridge
+reads it once restarted. The bridge's log and status say which line to
+delete. Environment variables override that file, so a stale exported token
+can hide a correction. Ordinary credential failures retain the ledger; they
+are not uninstall events.
 
 Editing `docs/manifest.yaml` does not update Slack. Apply changes in the app's
 **App Manifest** settings, follow Slack's reinstall prompt for permission
-changes, and update credentials if Slack issues new tokens.
+changes, and replace a token as above if Slack issues a new one.
 
 ## Unknown posts are not a retry queue
 
@@ -157,6 +159,7 @@ starts the bridge again whenever it stops, including after a storage error.
 It logs to `~/.toy-box-slack/bridge.log`, which grows until you rotate it.
 
 Stop the job with `launchctl bootout "gui/$(id -u)/local.toy-box-slack"`.
-After changing credentials, restart it with
-`launchctl kickstart -k "gui/$(id -u)/local.toy-box-slack"`. Do not also run
-`serve` at a terminal, since only one bridge can run for a data folder.
+Only one bridge runs for a data folder, so while the job runs, `serve` at a
+terminal asks for any token missing from `credentials.env`, saves it, and
+stops without starting another. Restart the job to read the new token with
+`launchctl kickstart -k "gui/$(id -u)/local.toy-box-slack"`.

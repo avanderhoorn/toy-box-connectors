@@ -2,11 +2,13 @@
 // owner for at a terminal, and the skill.
 
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { readCredentialsFile } from "@bridge/server/environment";
+import { prepareDataFolder } from "@bridge/server/dataFolder";
+import { readCredentialsFile, writeCredential } from "@bridge/server/environment";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { BUNDLED_SKILL } from "@commands/client/skill";
+import { rejectedTokensProblem } from "@slackapi/model/identity";
 import {
   installedSkill,
   serveAtTerminal,
@@ -55,6 +57,54 @@ test("asks the owner at a terminal for both tokens and a passphrase the first ti
   expect(tokens).toEqual({ SLACK_BOT_TOKEN: slack.botToken, SLACK_APP_TOKEN: slack.appToken });
   expect(await Bun.password.verify(PASSPHRASE, OWNER_PASSPHRASE_HASH ?? "")).toBe(true);
 }, 15_000);
+
+test("replaces a token Slack rejects the way the bridge says, asking for it while the bridge runs, which connects once restarted", async () => {
+  const home = createTestFolder();
+  const { slack } = startSlackForBridge();
+  const env = { SLACK_API_URL: slack.url };
+  const dataFolder = join(home, ".toy-box-slack");
+  const credentials = join(dataFolder, "credentials.env");
+  prepareDataFolder(dataFolder);
+  writeCredential(dataFolder, "SLACK_BOT_TOKEN", "xoxb-revoked");
+  writeCredential(dataFolder, "SLACK_APP_TOKEN", slack.appToken);
+  const hash = await Bun.password.hash(PASSPHRASE, {
+    algorithm: "argon2id",
+    memoryCost: 8,
+    timeCost: 1,
+  });
+  writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", hash);
+  const running = serveAtTerminal(home, env);
+  await running.shows(rejectedTokensProblem([["SLACK_BOT_TOKEN", "invalid_auth"]]));
+
+  const lines = readFileSync(credentials, "utf8").split("\n");
+  writeFileSync(
+    credentials,
+    lines.filter((line) => !line.startsWith("SLACK_BOT_TOKEN=")).join("\n"),
+  );
+  const terminal = serveAtTerminal(home, env);
+  await terminal.shows("(xoxb-...): ");
+  await terminal.type(slack.botToken);
+
+  expect(await terminal.exit()).toEqual({
+    code: 1,
+    transcript: [
+      "Paste the Slack bot token (xoxb-...): ",
+      `Saved SLACK_BOT_TOKEN in ${credentials}.`,
+      `Another toy-box-slack bridge is already running for ${dataFolder}. Stop it before starting a new one.`,
+      "",
+    ].join("\n"),
+  });
+  await running.interrupt();
+  expect((await running.exit()).code).toBe(0);
+
+  const restarted = serveAtTerminal(home, env);
+  await restarted.shows("Connected to Slack.");
+  await restarted.interrupt();
+  expect(await restarted.exit()).toEqual({
+    code: 0,
+    transcript: `${started(home)}Connected to Slack.\n${STOPPED_AT_TERMINAL}`,
+  });
+}, 20_000);
 
 test("stops without saving or starting when the owner presses Ctrl-C at a prompt", async () => {
   const home = createTestFolder();

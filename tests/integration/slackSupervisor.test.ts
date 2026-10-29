@@ -10,7 +10,7 @@ import type { SlackState } from "@commands/model/status";
 import { createStoredLink } from "@links/server/testFixtures";
 import {
   refusalProblem,
-  rejectedTokenProblem,
+  rejectedTokensProblem,
   type IdentityRefusal,
 } from "@slackapi/model/identity";
 import { tsAt } from "@slackapi/model/ts";
@@ -372,7 +372,7 @@ describe("rejected tokens", () => {
     link.fake.failNext("auth.test", { error: "invalid_auth" });
 
     const { supervisor } = link.supervise();
-    const problem = rejectedTokenProblem("SLACK_BOT_TOKEN", "invalid_auth");
+    const problem = rejectedTokensProblem([["SLACK_BOT_TOKEN", "invalid_auth"]]);
     await waitFor(() => expect(supervisor.state()).toEqual({ connection: "auth_failed", problem }));
     await Bun.sleep(TIMINGS.retryLimit * 2);
     expect(methodsCalled(link.fake)).toEqual(["auth.test"]);
@@ -385,7 +385,7 @@ describe("rejected tokens", () => {
     expect(await link.database.read(readInstallation)).toMatchObject({ status: "active" });
   });
 
-  test("a bot token Slack rejects once connected leaves the connection up, and both rejected tokens are named", async () => {
+  test("a bot token Slack rejects once connected leaves the connection up, and status replaces both rejected tokens at once", async () => {
     const logged = captureLog();
     const link = await linkFakeSlack();
     const { supervisor, bot } = link.supervise();
@@ -395,18 +395,21 @@ describe("rejected tokens", () => {
     await bot.call("conversations.info", (client) =>
       client.conversations.info({ channel: "C-link" }),
     );
-    const botRejected = rejectedTokenProblem("SLACK_BOT_TOKEN", "token_revoked");
+    const botRejected = rejectedTokensProblem([["SLACK_BOT_TOKEN", "token_revoked"]]);
     expect(supervisor.state()).toEqual({ connection: "auth_failed", problem: botRejected });
     const sent = link.fake.sendEvent(post("1700000200.000100"));
     expect(await link.fake.waitForAck(sent.envelopeId)).not.toBeNull();
 
     link.fake.failNext("apps.connections.open", { error: "invalid_auth" });
     link.fake.dropConnections();
-    const appRejected = rejectedTokenProblem("SLACK_APP_TOKEN", "invalid_auth");
+    const appRejected = rejectedTokensProblem([["SLACK_APP_TOKEN", "invalid_auth"]]);
     await waitFor(() =>
       expect(supervisor.state()).toEqual({
         connection: "auth_failed",
-        problem: `${botRejected} ${appRejected}`,
+        problem: rejectedTokensProblem([
+          ["SLACK_BOT_TOKEN", "token_revoked"],
+          ["SLACK_APP_TOKEN", "invalid_auth"],
+        ]),
       }),
     );
     await Bun.sleep(TIMINGS.retryLimit * 2);
@@ -431,7 +434,7 @@ describe("rejected tokens", () => {
       link.fake.failNext("apps.connections.open", { error });
 
       const { supervisor } = link.supervise();
-      const problem = rejectedTokenProblem("SLACK_APP_TOKEN", error);
+      const problem = rejectedTokensProblem([["SLACK_APP_TOKEN", error]]);
       await waitFor(() =>
         expect(supervisor.state()).toEqual({ connection: "auth_failed", problem }),
       );

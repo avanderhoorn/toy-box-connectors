@@ -2,6 +2,7 @@
 // comes with what to do about it.
 
 import { suspensions, type SuspendReason } from "@links/model/status";
+import { missingTokensProblem } from "@slackapi/model/identity";
 import { STALL_AFTER, type WakeDecision, type WakeRun } from "@wakes/model";
 import { ago, clockTime, count, duration } from "./wording";
 
@@ -21,11 +22,13 @@ export type SlackState = { connection: SlackConnection; problem: string | null }
 
 /** Slack's state while a token is missing, naming each one, or null once both are set. */
 export function unconfiguredSlack({ botToken, appToken }: Tokens): SlackState | null {
-  const missing = [botToken ? "" : "SLACK_BOT_TOKEN", appToken ? "" : "SLACK_APP_TOKEN"];
-  const named = missing.filter(Boolean).join(" and ");
-  if (!named) return null;
-  const problem = `Put ${named} in credentials.env in the bridge's data folder, then restart the bridge.`;
-  return { connection: "unconfigured", problem };
+  const missing = [
+    botToken ? null : "SLACK_BOT_TOKEN",
+    appToken ? null : "SLACK_APP_TOKEN",
+  ] as const;
+  const tokens = missing.filter((token) => token !== null);
+  if (tokens.length === 0) return null;
+  return { connection: "unconfigured", problem: missingTokensProblem(tokens) };
 }
 
 type Tokens = { botToken: string | null; appToken: string | null };
