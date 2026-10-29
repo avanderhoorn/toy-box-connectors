@@ -64,5 +64,10 @@ Great code pursues simplicity by placing a rich domain model at the center, deco
 
 - Run `bun run check` and fix any formatting, lint, or typecheck issues. The pre-commit hook runs the linter and formats staged files, and CI runs check, the tests and the build on every push and pull request.
 - Run `bun test` and fix any failing tests. It runs the unit and integration suites with no network or credentials.
+- Run the end-to-end suite when a change alters what a lead reads or runs, or how the bridge wakes it, and the live check when it changes how the bridge talks to Slack. CI runs neither, and [tests/AGENTS.md](tests/AGENTS.md) says how.
 - Prove every failure a change handles with a test at the layer that can observe it: unit tests for policies, integration tests for anything that crosses Slack, Toy Box, the socket, or a process boundary.
 - Update the owning guide when a change moves a responsibility or an invariant.
+
+## Releasing
+
+The README's [Publishing](README.md#publishing) section is the release procedure, and only its Publish workflow publishes to npm.

@@ -76,7 +76,7 @@ To remove it, ask each lead to delete its Slack routines, then stop `serve`, or 
 
 ## Publishing
 
-Update `package.json` to the next stable version and keep its release notes under a matching `## 📅 vX.Y.Z (date)` heading in `CHANGELOG.md`. Commit and push those changes, then select **Actions → Publish → Run workflow** on the branch to release.
+Update `package.json` to the next stable version and keep its release notes under a matching `## 📅 vX.Y.Z (date)` heading in `CHANGELOG.md`, saying what changed for owners and anything they must do besides updating. Commit and push those changes. CI runs neither the end-to-end suite nor the live check, so run both on that commit as [tests/AGENTS.md](tests/AGENTS.md) describes. Then select **Actions → Publish → Run workflow** on the branch to release.
 
 The workflow reads the version and notes from that exact commit, rejects an already published npm version, runs checks and tests, and builds the Apple silicon macOS CLI. It publishes the tested package through npm trusted publishing, then creates the matching GitHub tag and release with the changelog notes and npm tarball attached. No npm token or separately entered release version is needed.
 
