@@ -184,6 +184,34 @@ test("a restart starts an app added while the bridge ran, through its own Slack 
   });
 }, 15_000);
 
+test("a bridge that hosts only the default app names no app in what link shows and says", async () => {
+  const { slack, env } = startSlackForBridge(RECORDED);
+  slack.addChannel({ id: "C0RELEASES", name: "releases" });
+  const toyBox = startFakeToyBox();
+  onTestFinished(() => toyBox.stop());
+  const docs = toyBox.addChannel({ name: "Docs" });
+  const { home, dataFolder } = prepareHome();
+  writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", HASH);
+  const bridge = spawnBridge(home, { ...env, TOY_BOX_URL: toyBox.url });
+  await bridge.says("Connected to Slack.");
+  const link = (owner?: CallOptions["owner"]) =>
+    callBridge("link", { slackChannel: "C0RELEASES" }, { channelId: docs, env: {}, home, owner });
+
+  const shown = await link();
+  expect(shown.text).toStartWith(
+    'Linking "Docs" to #releases would let the people you allow ask its lead to act, and it would answer them there.\n',
+  );
+  expect(await link({ passphrase: PASSPHRASE, confirms: shown.confirm! })).toMatchObject({
+    exitCode: 0,
+    text: 'The lead of "Docs" answers in #releases now, for the people `toy-box-slack allow` names.',
+  });
+
+  bridge.child.kill("SIGTERM");
+  const { code, stderr } = await bridge.exit();
+  expect(code).toBe(0);
+  expectSaid(stderr, home, ["Connected to Slack."]);
+}, 15_000);
+
 /**
  * A bridge hosting the default app and releases, each through its own Slack app in one workspace,
  * whose bots are both in C-link, a private channel Alice is in. Toy Box has a channel for each
