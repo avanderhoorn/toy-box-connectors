@@ -183,7 +183,7 @@ async function linkChannel(
       throw new CommandRefusedError(
         app
           ? `${channel} is linked to another Toy Box channel through the ${app} app. Unlink it there, or link this one through another app with \`--app\`.`
-          : `${channel} is linked to another Toy Box channel. Unlink it there before you link it here.`,
+          : `${channel} is linked to another Toy Box channel. Unlink it there, or add another app with \`toy-box-slack add-app\` and link this one through it.`,
       );
     }
     const requestMode = wanted.requestMode ?? link?.requestMode ?? "mention";

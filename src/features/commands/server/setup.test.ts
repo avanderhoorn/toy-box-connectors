@@ -172,13 +172,13 @@ test("a link through a named app says whose bot answers, in what the owner confi
   );
 });
 
-test("a Slack channel linked to another Toy Box channel through a named app is refused, saying another app can link it", async () => {
+test("a Slack channel linked to another Toy Box channel is refused, saying another app can link it", async () => {
   const { channelId, options } = await linking();
   const link = (app: string | null) =>
     linkCommand({ ...options, app })({ slackChannel: "C-link" }, { channelId, at: 1_000 });
 
   expect(await refusal(link(null))).toBe(
-    "#fake-channel is linked to another Toy Box channel. Unlink it there before you link it here.",
+    "#fake-channel is linked to another Toy Box channel. Unlink it there, or add another app with `toy-box-slack add-app` and link this one through it.",
   );
   expect(await refusal(link("releases"))).toBe(
     "#fake-channel is linked to another Toy Box channel through the releases app. Unlink it there, or link this one through another app with `--app`.",
