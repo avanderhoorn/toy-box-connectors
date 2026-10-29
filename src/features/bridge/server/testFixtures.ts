@@ -17,6 +17,13 @@ export async function openTestDatabase(): Promise<BridgeDatabase> {
   return database;
 }
 
+/** Leave a `bridge.db` at `path` that says `version` of the bridge made it. */
+export async function createDatabaseMadeBy(path: string, version: number): Promise<void> {
+  const sql = new Bun.SQL({ adapter: "sqlite", filename: path });
+  await sql.unsafe(`PRAGMA user_version = ${version}`);
+  await sql.close();
+}
+
 /** Keep what the test logs, unprinted, as a string for each `log` without its newline. */
 export function captureLog(): () => string[] {
   const write = spyOn(process.stderr, "write").mockImplementation(() => true);

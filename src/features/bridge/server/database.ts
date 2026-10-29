@@ -13,6 +13,7 @@ import { initializeRequestSchema } from "@requests/server/schema";
 import { initializeSlackApiSchema } from "@slackapi/server/schema";
 import { initializeWakeSchema } from "@wakes/server/schema";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
+import { BridgeRefusedError } from "./refusal";
 
 export class BridgeDatabase {
   private readonly queue = new SerialTaskQueue();
@@ -41,13 +42,14 @@ export class BridgeDatabase {
 
 /**
  * Opens `bridge.db` at `path` with the settings that keep an acked event on
- * disk through a power loss, and creates its tables when it's new.
+ * disk through a power loss, and creates its tables when it's new. Refuses one
+ * that another version of the bridge made.
  */
 export async function openBridgeDatabase(path: string): Promise<BridgeDatabase> {
   const sql = new Bun.SQL({ adapter: "sqlite", filename: path, strict: true });
   try {
     await configure(sql);
-    await initializeSchema(sql);
+    await initializeSchema(sql, path);
   } catch (error) {
     await sql.close();
     throw error;
@@ -66,20 +68,29 @@ async function configure(sql: Bun.SQL): Promise<void> {
 }
 
 // Feature schemas are composed here so one connection owns ordering and transactions without
-// owning each feature's persistence model. Nothing has shipped, so a schema change needs a new
-// `bridge.db`. Once something has, a change must migrate files from version 1.
-async function initializeSchema(sql: Bun.SQL): Promise<void> {
+// owning each feature's persistence model. Nothing has shipped, so a schema change raises the
+// version instead of migrating, and the bridge refuses a `bridge.db` any other version made rather
+// than fail on it later. Once something has shipped, a change must migrate files from the version
+// before it.
+const schemaVersion = 2;
+
+async function initializeSchema(sql: Bun.SQL, path: string): Promise<void> {
   await sql.begin("IMMEDIATE", async (transaction) => {
     const [{ user_version: version }] = await transaction<{ user_version: number }[]>`
       PRAGMA user_version
     `;
-    if (version > 0) return;
+    if (version === schemaVersion) return;
+    if (version !== 0) {
+      throw new BridgeRefusedError(
+        `${path} was made by another version of toy-box-slack. The bridge has to start over, which forgets every link, so stop the bridge, remove bridge.db and its -wal/-shm files, and start it again. Then link each channel and allow its people again.`,
+      );
+    }
     await initializeSlackApiSchema(transaction);
     await initializeLinkSchema(transaction);
     await initializeActivitySchema(transaction);
     await initializeRequestSchema(transaction);
     await initializeWakeSchema(transaction);
     await initializeOutboxSchema(transaction);
-    await transaction`PRAGMA user_version = 1`;
+    await transaction.unsafe(`PRAGMA user_version = ${schemaVersion}`);
   });
 }

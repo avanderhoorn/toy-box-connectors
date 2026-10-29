@@ -117,7 +117,6 @@ test("a definite refusal can reuse only its own row, after inbox clears reply_fa
 test("a post forgets what it said a month after it last changed, unless it may still go out", async () => {
   const world = await createOutboxWorld();
   const reply = await world.queue();
-  await world.post(reply.id);
   const slot = { linkId: "link", series: "release-notes", scheduledAt: world.now(), text: "Notes" };
   const publication = await world.database.write((tx) => queuePublication(tx, slot, world.now()));
   const forgetAfter = async (days: number) => {
@@ -126,6 +125,11 @@ test("a post forgets what it said a month after it last changed, unless it may s
     return { reply: await world.read(reply.id), publication: await world.read(publication.id) };
   };
 
+  // The reply waits over a month, as one queued while its link is paused would, then goes out.
+  expect(await forgetAfter(40)).toMatchObject({
+    reply: { state: "queued", payload: reply.payload },
+  });
+  await world.post(reply.id);
   expect(await forgetAfter(29)).toMatchObject({ reply: { state: "sent", payload: reply.payload } });
   expect(await forgetAfter(2)).toMatchObject({
     reply: { state: "sent", payload: null, payloadHash: reply.payloadHash },

@@ -1,9 +1,9 @@
 import { expect, onTestFinished, test } from "bun:test";
-import { chmodSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { startBridge } from "./bridge";
 import { BridgeRefusedError } from "./refusal";
-import { createTestFolder } from "./testFixtures";
+import { createDatabaseMadeBy, createTestFolder } from "./testFixtures";
 
 // No Toy Box URL from the shell running the tests. A new database has no links, so the bridge
 // never calls Toy Box's default address.
@@ -41,4 +41,16 @@ test("refuses tokens that others can read before it takes the lock", async () =>
   await expect(startBridge(dataFolder, env)).rejects.toThrow("must be 600");
 
   expect(readdirSync(dataFolder)).toEqual(["credentials.env"]);
+});
+
+test("refuses a bridge.db another version made until the owner starts over", async () => {
+  const dataFolder = createTestFolder();
+  await createDatabaseMadeBy(join(dataFolder, "bridge.db"), 1);
+
+  await expect(startBridge(dataFolder, env)).rejects.toThrow(BridgeRefusedError);
+  for (const file of ["bridge.db", "bridge.db-wal", "bridge.db-shm"]) {
+    rmSync(join(dataFolder, file), { force: true });
+  }
+
+  await start(dataFolder);
 });

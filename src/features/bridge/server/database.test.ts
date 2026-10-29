@@ -1,7 +1,7 @@
 import { describe, expect, onTestFinished, test } from "bun:test";
 import { join } from "node:path";
 import { openBridgeDatabase, type BridgeDatabase } from "./database";
-import { createTestFolder, openTestDatabase } from "./testFixtures";
+import { createDatabaseMadeBy, createTestFolder, openTestDatabase } from "./testFixtures";
 
 async function open(path: string): Promise<BridgeDatabase> {
   const database = await openBridgeDatabase(path);
@@ -21,6 +21,15 @@ describe("openBridgeDatabase", () => {
     );
 
     expect(pragmas).toEqual({ journal_mode: "wal", synchronous: 2, fullfsync: 1, foreign_keys: 1 });
+  });
+
+  test.each([1, 3])("refuses a bridge.db that version %d made", async (version) => {
+    const path = join(createTestFolder(), "bridge.db");
+    await createDatabaseMadeBy(path, version);
+
+    await expect(openBridgeDatabase(path)).rejects.toThrow(
+      `${path} was made by another version of toy-box-slack. The bridge has to start over, which forgets every link, so stop the bridge, remove bridge.db and its -wal/-shm files, and start it again. Then link each channel and allow its people again.`,
+    );
   });
 });
 

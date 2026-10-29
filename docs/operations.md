@@ -100,7 +100,9 @@ removed; include them in the approved offboarding process.
 Run `toy-box-slack unlink --channel TOYBOX_ID` to remove one link, then have
 the lead delete its Slack routines.
 Before reinstalling after uninstall, stop the bridge and follow its startup
-refusal to remove `bridge.db` and its WAL/SHM companions. Do not reset the
+refusal to remove `bridge.db` and its WAL/SHM companions. The bridge refuses
+a `bridge.db` that another version of it made the same way. After removing
+that one, link each channel and allow its people again. Do not reset the
 database to recover an unknown post.
 Deleting or restoring an older database can also lose post reservations.
 Check Slack before resuming publications after any state reset.
