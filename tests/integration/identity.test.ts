@@ -40,13 +40,6 @@ function methodsCalled(slack: FakeSlack) {
   return slack.calls.map(({ method }) => method);
 }
 
-function readFailure(database: BridgeDatabase) {
-  return database.read(async (sql) => {
-    const [row] = await sql`SELECT status, auth_failed_at FROM installation`;
-    return row;
-  });
-}
-
 const fakeInstallation: Installation = {
   teamId: "TFAKE",
   enterpriseId: null,
@@ -178,7 +171,7 @@ describe("refusing credentials v1 doesn't support", () => {
 });
 
 describe("a rejected bot token", () => {
-  test("fails the installation from the moment Slack rejected it until the tokens confirm again", async () => {
+  test("fails the installation once Slack rejects it, until the tokens confirm again", async () => {
     for (const method of ["auth.test", "bots.info"]) {
       const slack = fakeSlack();
       const database = await openTestDatabase();
@@ -189,19 +182,19 @@ describe("a rejected bot token", () => {
         kind: "auth_failed",
         error: "token_revoked",
       });
-      expect(await readFailure(database)).toEqual({ status: "auth_failed", auth_failed_at: NOW });
+      expect(await database.read(readInstallation)).toMatchObject({ status: "auth_failed" });
 
       expect(await confirm(database, fakeSlack({ teamId: "TOTHER" }))).toMatchObject({
         kind: "refused",
         refusal: { reason: "mismatch", field: "teamId" },
       });
-      expect(await readFailure(database)).toEqual({ status: "auth_failed", auth_failed_at: NOW });
+      expect(await database.read(readInstallation)).toMatchObject({ status: "auth_failed" });
 
       expect(await confirm(database, slack)).toMatchObject({
         kind: "confirmed",
         installation: fakeInstallation,
       });
-      expect(await readFailure(database)).toEqual({ status: "active", auth_failed_at: null });
+      expect(await database.read(readInstallation)).toEqual(fakeInstallation);
     }
   });
 });

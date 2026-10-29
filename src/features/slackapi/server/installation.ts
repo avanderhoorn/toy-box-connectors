@@ -16,20 +16,13 @@ export async function recordInstallation(tx: Bun.SQL, identity: SlackIdentity): 
   `;
 }
 
-/** Recovery starts at the first rejection, never the latest one. */
-export async function reactivateInstallation(tx: Bun.SQL): Promise<number | null> {
-  const [row] = await tx<{ auth_failed_at: number | null }[]>`
-    SELECT auth_failed_at FROM installation WHERE status = 'auth_failed'
-  `;
-  if (!row) return null;
-  await tx`UPDATE installation SET status = 'active', auth_failed_at = NULL`;
-  return row.auth_failed_at ?? 0;
+export async function reactivateInstallation(tx: Bun.SQL): Promise<void> {
+  await tx`UPDATE installation SET status = 'active' WHERE status = 'auth_failed'`;
 }
 
-export async function markAuthFailed(tx: Bun.SQL, now: number): Promise<boolean> {
+export async function markAuthFailed(tx: Bun.SQL): Promise<boolean> {
   const rows = await tx`
-    UPDATE installation SET status = 'auth_failed', auth_failed_at = ${now}
-    WHERE status = 'active' RETURNING id
+    UPDATE installation SET status = 'auth_failed' WHERE status = 'active' RETURNING id
   `;
   return rows.length > 0;
 }

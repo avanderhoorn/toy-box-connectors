@@ -5,7 +5,7 @@ export async function initializeSlackApiSchema(db: Bun.SQL): Promise<void> {
       team_id TEXT NOT NULL, app_id TEXT NOT NULL, bot_id TEXT NOT NULL, bot_user_id TEXT NOT NULL,
       enterprise_id TEXT,
       status TEXT NOT NULL CHECK (status IN ('active', 'auth_failed', 'uninstalled')),
-      auth_failed_at INTEGER, connected_at INTEGER
+      connected_at INTEGER
     );
     CREATE TABLE users (
       user_id TEXT PRIMARY KEY,

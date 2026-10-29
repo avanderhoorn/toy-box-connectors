@@ -63,10 +63,7 @@ export function createBotClient(
           cooldowns.set(method, until);
           return { kind: "rate_limited", until };
         }
-        if (
-          failure.kind === "auth_failed" &&
-          (await database.write((tx) => markAuthFailed(tx, now())))
-        ) {
+        if (failure.kind === "auth_failed" && (await database.write(markAuthFailed))) {
           onAuthFailed?.(failure.error);
         }
         return failure;
