@@ -34,6 +34,15 @@ export type FakeSlackMessage = {
 };
 type PageMethod = "conversations.history" | "conversations.replies";
 
+export function createFakeSlackStore() {
+  return {
+    channels: new Map<string, FakeSlackChannel>(),
+    users: new Map<string, Map<string, FakeSlackUser>>(),
+    messages: new Map<string, Map<string, FakeSlackMessage>>(),
+    timestampMicros: 0n,
+  };
+}
+
 const BOT_SCOPES = [
   "channels:history",
   "channels:read",
@@ -101,6 +110,7 @@ const schemas = {
 };
 
 export function createFakeSlackApi(options: {
+  store: ReturnType<typeof createFakeSlackStore>;
   identity: FakeSlackIdentity;
   botToken: string;
   appToken: string;
@@ -109,19 +119,19 @@ export function createFakeSlackApi(options: {
   pageSize?: number;
   emitEvent: (event: Record<string, unknown>, context: Record<string, unknown>) => void;
 }) {
-  const { identity, now } = options;
+  const { identity, now, store } = options;
+  const { channels, messages } = store;
+  const users = store.users.get(identity.teamId) ?? new Map<string, FakeSlackUser>();
+  store.users.set(identity.teamId, users);
   const calls: FakeSlackCall[] = [];
   const problems: string[] = [];
-  const channels = new Map<string, FakeSlackChannel>();
-  const users = new Map<string, FakeSlackUser>();
-  const messages = new Map<string, Map<string, FakeSlackMessage>>();
+  const membership = new Map<string, unknown>();
   const failures = new Map<string, FakeSlackFailure[]>();
   const emptyPages = new Map<PageMethod, number>();
   const cursors = new Map<string, { method: string; query: string; offset: number }>();
   const authChanges: Record<string, unknown> = {};
   const botChanges: Record<string, unknown> = {};
   const pending = new Set<() => void>();
-  let timestampMicros = 0n;
   const maxPageSize = options.pageSize ?? 100;
   if (!Number.isInteger(maxPageSize) || maxPageSize < 1)
     throw new Error("Fake Slack pageSize must be a positive integer.");
@@ -138,7 +148,6 @@ export function createFakeSlackApi(options: {
           is_im: false,
           is_mpim: false,
           is_private: false,
-          is_member: true,
           is_archived: false,
           is_shared: false,
           is_ext_shared: false,
@@ -147,9 +156,12 @@ export function createFakeSlackApi(options: {
           context_team_id: identity.teamId,
           enterprise_id: identity.enterpriseId,
           shared_team_ids: [],
+          ...channels.get(id),
           ...settings,
         }),
       );
+      delete channels.get(id)!.is_member;
+      membership.set(id, Object.hasOwn(settings, "is_member") ? settings.is_member : true);
       if (!messages.has(id)) messages.set(id, new Map());
       return id;
     },
@@ -203,6 +215,13 @@ export function createFakeSlackApi(options: {
     return channel;
   }
 
+  function channelForApp(id: string): FakeSlackChannel | undefined {
+    const channel = channels.get(id);
+    return channel && membership.has(id)
+      ? { ...channel, is_member: membership.get(id) }
+      : undefined;
+  }
+
   function unexpected(message: string): Response {
     problems.push(message);
     return Response.json({
@@ -222,12 +241,12 @@ export function createFakeSlackApi(options: {
 
   function timestamp(): string {
     const wall = BigInt(Math.floor(now() * 1000));
-    timestampMicros = wall > timestampMicros ? wall : timestampMicros + 1n;
-    return `${timestampMicros / 1_000_000n}.${String(timestampMicros % 1_000_000n).padStart(6, "0")}`;
+    store.timestampMicros = wall > store.timestampMicros ? wall : store.timestampMicros + 1n;
+    return `${store.timestampMicros / 1_000_000n}.${String(store.timestampMicros % 1_000_000n).padStart(6, "0")}`;
   }
 
   function writeProblem(channelId: string): string | null {
-    const channel = channels.get(channelId);
+    const channel = channelForApp(channelId);
     if (!channel) return "channel_not_found";
     if (channel.is_member === false) return "not_in_channel";
     if (channel.is_archived) return "is_archived";
@@ -439,7 +458,7 @@ export function createFakeSlackApi(options: {
     method: "conversations.history" | "conversations.replies",
     args: z.output<(typeof schemas)["conversations.history"]> & { ts?: string },
   ): Response {
-    const channel = channels.get(args.channel);
+    const channel = channelForApp(args.channel);
     if (!channel) return failure("channel_not_found");
     if (channel.is_member === false) return failure("not_in_channel");
     let list = [...messages.get(args.channel)!.values()];
@@ -559,7 +578,7 @@ export function createFakeSlackApi(options: {
         );
       case "conversations.info":
         return run(schemas[method], (input) => {
-          const channel = channels.get(input.channel);
+          const channel = channelForApp(input.channel);
           if (!channel) return failure("channel_not_found");
           return Response.json({ ok: true, channel });
         });
@@ -587,6 +606,9 @@ export function createFakeSlackApi(options: {
     calls,
     problems,
     handle,
+    isMember(channelId: string) {
+      return membership.has(channelId) && membership.get(channelId) !== false;
+    },
     finishPending() {
       for (const finish of pending) finish();
     },

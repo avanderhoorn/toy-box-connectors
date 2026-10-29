@@ -6,7 +6,7 @@
 
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
-import { createFakeSlackApi } from "./api";
+import { createFakeSlackApi, createFakeSlackStore } from "./api";
 export type { FakeSlackChannel, FakeSlackUser, FakeSlackMessage } from "./api";
 
 export type FakeSlackIdentity = {
@@ -51,8 +51,21 @@ export type FakeEventOptions = {
 };
 
 export type FakeSlack = ReturnType<typeof startFakeSlack>;
+export type FakeSlackApp = ReturnType<FakeSlack["addApp"]>;
 
-type SocketData = { id: number };
+type AckWaiter = { envelopeId: string; finish(ack: FakeSlackAck | null): void };
+type AppConnection = {
+  identity: FakeSlackIdentity;
+  sockets: Map<number, ServerWebSocket<SocketData>>;
+  connections: number[];
+  acks: FakeSlackAck[];
+  unacked: Set<string>;
+  ackWaiters: Set<AckWaiter>;
+  nextHelloAppId?: string;
+  responsive: boolean;
+  nextSocket: number;
+};
+type SocketData = { id: number; app: AppConnection };
 const ackSchema = z
   .object({ envelope_id: z.string().min(1), payload: z.unknown().optional() })
   .strict();
@@ -73,18 +86,15 @@ export function startFakeSlack(
     botUserId: "UFAKEBOT",
     ...options.identity,
   };
-  const botToken = "xoxb-fake-for-local-tests-only";
-  const appToken = "xapp-fake-for-local-tests-only";
-  const acks: FakeSlackAck[] = [];
-  const connections: number[] = [];
-  const unacked = new Set<string>();
+  const store = createFakeSlackStore();
   const problems: string[] = [];
-  const tickets = new Set<string>();
-  const sockets = new Map<number, ServerWebSocket<SocketData>>();
-  const ackWaiters = new Set<{ envelopeId: string; finish(ack: FakeSlackAck | null): void }>();
-  let nextHelloAppId: string | undefined;
+  const tickets = new Map<string, AppConnection>();
+  const apps = new Map<
+    string,
+    { connection: AppConnection; api: ReturnType<typeof createFakeSlackApi> }
+  >();
+  const tokens = new Map<string, ReturnType<typeof createFakeSlackApi>>();
   let connectionSequence = 0;
-  let responsive = true;
   let stopped = false;
   const server = Bun.serve<SocketData>({
     hostname: "127.0.0.1",
@@ -94,20 +104,22 @@ export function startFakeSlack(
     websocket: {
       sendPings: false,
       open(socket) {
-        sockets.set(socket.data.id, socket);
-        connections.push(socket.data.id);
+        const app = socket.data.app;
+        app.sockets.set(socket.data.id, socket);
+        app.connections.push(socket.data.id);
         socket.send(
           JSON.stringify({
             type: "hello",
-            connection_info: { app_id: nextHelloAppId ?? identity.appId },
-            num_connections: sockets.size,
+            connection_info: { app_id: app.nextHelloAppId ?? app.identity.appId },
+            num_connections: app.sockets.size,
             debug_info: { host: "fake-slack", build_number: 1, approximate_connection_time: 3600 },
           }),
         );
-        nextHelloAppId = undefined;
-        if (!responsive) socket.pause();
+        app.nextHelloAppId = undefined;
+        if (!app.responsive) socket.pause();
       },
-      message(_socket, bytes) {
+      message(socket, bytes) {
+        const app = socket.data.app;
         let value: unknown;
         try {
           value = JSON.parse(typeof bytes === "string" ? bytes : bytes.toString());
@@ -121,7 +133,7 @@ export function startFakeSlack(
           problems.push(`Invalid Socket Mode ack: ${ack.error.message}`);
           return;
         }
-        if (!unacked.delete(ack.data.envelope_id)) {
+        if (!app.unacked.delete(ack.data.envelope_id)) {
           problems.push(`Ack names an unknown or already acked envelope: ${ack.data.envelope_id}`);
           return;
         }
@@ -130,66 +142,64 @@ export function startFakeSlack(
           at: now(),
           body: ack.data,
         };
-        acks.push(recorded);
-        for (const waiter of ackWaiters) {
+        app.acks.push(recorded);
+        for (const waiter of app.ackWaiters) {
           if (waiter.envelopeId === recorded.envelopeId) waiter.finish(recorded);
         }
       },
       close(socket) {
-        sockets.delete(socket.data.id);
+        socket.data.app.sockets.delete(socket.data.id);
       },
     },
   });
   const url = new URL("/api/", server.url).href;
-  const api = createFakeSlackApi({
+  const primary = createApp(
     identity,
-    botToken,
-    appToken,
-    now,
-    pageSize: options.pageSize,
-    emitEvent(event, context) {
-      if (sockets.size) sendEvent(event, { context });
-    },
-    connectionUrl() {
-      const ticket = crypto.randomUUID();
-      tickets.add(ticket);
-      const socketUrl = new URL(`/socket?ticket=${ticket}`, server.url);
-      socketUrl.protocol = "ws:";
-      return socketUrl.href;
-    },
-  });
+    "xoxb-fake-for-local-tests-only",
+    "xapp-fake-for-local-tests-only",
+  );
   const heartbeat = setInterval(() => {
-    if (responsive) for (const socket of sockets.values()) socket.ping("fake-slack");
+    for (const { connection } of apps.values()) {
+      if (connection.responsive)
+        for (const socket of connection.sockets.values()) socket.ping("fake-slack");
+    }
   }, 1000);
 
   async function route(request: Request): Promise<Response | undefined> {
     const target = new URL(request.url);
     if (target.pathname === "/socket") {
       const ticket = target.searchParams.get("ticket");
-      if (!ticket || !tickets.delete(ticket))
-        return new Response("Invalid ticket", { status: 403 });
-      if (server.upgrade(request, { data: { id: ++connectionSequence } })) return;
+      const app = ticket ? tickets.get(ticket) : undefined;
+      if (!ticket || !app) return new Response("Invalid ticket", { status: 403 });
+      tickets.delete(ticket);
+      if (server.upgrade(request, { data: { id: ++connectionSequence, app } })) return;
       return new Response("WebSocket upgrade required", { status: 400 });
     }
     if (!target.pathname.startsWith("/api/")) {
       problems.push(`Unexpected Slack route: ${target.pathname}`);
       return new Response("Unknown fake Slack route", { status: 404 });
     }
-    return api.handle(request);
+    const token = request.headers.get("authorization")?.replace(/^Bearer /i, "");
+    return (tokens.get(token ?? "") ?? apps.get(primary.appToken)!.api).handle(request);
   }
 
-  function sendFrame(frame: Record<string, unknown>): FakeSlackDelivery {
-    const socket = [...sockets.values()].at(-1);
+  function sendFrame(app: AppConnection, frame: Record<string, unknown>): FakeSlackDelivery {
+    const available = [...app.sockets.values()];
+    const socket = available[app.nextSocket++ % available.length];
     if (!socket) throw new Error("Fake Slack has no matching open socket.");
     const copy = structuredClone(frame);
     const envelopeId = typeof copy.envelope_id === "string" ? copy.envelope_id : "";
-    if (envelopeId) unacked.add(envelopeId);
+    if (envelopeId) app.unacked.add(envelopeId);
     socket.send(JSON.stringify(copy));
     return { envelopeId };
   }
 
   /** `event` framed as Slack sends it over Socket Mode. */
-  function envelope(event: Record<string, unknown>, settings: FakeEventOptions = {}) {
+  function envelope(
+    identity: FakeSlackIdentity,
+    event: Record<string, unknown>,
+    settings: FakeEventOptions = {},
+  ) {
     const payload: Record<string, unknown> = {
       token: "fake-verification-token",
       context_team_id: identity.teamId,
@@ -228,73 +238,154 @@ export function startFakeSlack(
     };
   }
 
-  function sendEvent(event: Record<string, unknown>, settings?: FakeEventOptions) {
-    return sendFrame(envelope(event, settings));
+  function sendEvent(
+    app: AppConnection,
+    event: Record<string, unknown>,
+    settings?: FakeEventOptions,
+  ) {
+    return sendFrame(app, envelope(app.identity, event, settings));
+  }
+
+  function broadcastEvent(event: Record<string, unknown>, context: Record<string, unknown> = {}) {
+    const channelId = event.channel;
+    if (typeof channelId !== "string" || !store.channels.has(channelId))
+      throw new Error("A broadcast needs a seeded Slack channel.");
+    const deliveries: (FakeSlackDelivery & { appId: string })[] = [];
+    for (const { connection, api } of apps.values()) {
+      const ownDeparture =
+        event.type === "member_left_channel" && event.user === connection.identity.botUserId;
+      if (connection.sockets.size && (api.isMember(channelId) || ownDeparture)) {
+        deliveries.push({
+          appId: connection.identity.appId,
+          ...sendEvent(connection, event, { context }),
+        });
+      }
+    }
+    return deliveries;
+  }
+
+  function createApp(identity: FakeSlackIdentity, botToken: string, appToken: string) {
+    if ([...apps.values()].some((app) => app.connection.identity.appId === identity.appId))
+      throw new Error(`Slack app ${identity.appId} is already seeded.`);
+    const connection: AppConnection = {
+      identity,
+      sockets: new Map(),
+      connections: [],
+      acks: [],
+      unacked: new Set(),
+      ackWaiters: new Set(),
+      responsive: true,
+      nextSocket: 0,
+    };
+    const api = createFakeSlackApi({
+      store,
+      identity,
+      botToken,
+      appToken,
+      now,
+      pageSize: options.pageSize,
+      emitEvent: broadcastEvent,
+      connectionUrl() {
+        const ticket = crypto.randomUUID();
+        tickets.set(ticket, connection);
+        const socketUrl = new URL(`/socket?ticket=${ticket}`, server.url);
+        socketUrl.protocol = "ws:";
+        return socketUrl.href;
+      },
+    });
+    apps.set(appToken, { connection, api });
+    tokens.set(appToken, api);
+    tokens.set(botToken, api);
+    return {
+      ...api.controls,
+      url,
+      botToken,
+      appToken,
+      identity,
+      calls: api.calls,
+      acks: connection.acks,
+      connections: connection.connections,
+      get activeConnections() {
+        return connection.sockets.size;
+      },
+      sendFrame: (frame: Record<string, unknown>) => sendFrame(connection, frame),
+      envelope: (event: Record<string, unknown>, settings?: FakeEventOptions) =>
+        envelope(identity, event, settings),
+      sendEvent: (event: Record<string, unknown>, settings?: FakeEventOptions) =>
+        sendEvent(connection, event, settings),
+      disconnect() {
+        sendFrame(connection, {
+          type: "disconnect",
+          reason: "refresh_requested",
+          debug_info: { host: "fake-slack" },
+        });
+      },
+      dropConnections() {
+        for (const socket of connection.sockets.values()) socket.terminate();
+      },
+      setNextHelloAppId(appId: string) {
+        connection.nextHelloAppId = appId;
+      },
+      setSocketResponsive(value: boolean) {
+        connection.responsive = value;
+        for (const socket of connection.sockets.values()) {
+          if (value) socket.resume();
+          else socket.pause();
+        }
+      },
+      waitForAck(envelopeId: string, timeoutMs = 1000): Promise<FakeSlackAck | null> {
+        if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
+          throw new Error("Ack timeout must be nonnegative and finite.");
+        const existing = connection.acks.findLast((ack) => ack.envelopeId === envelopeId);
+        if (existing) return Promise.resolve(existing);
+        return new Promise((resolve) => {
+          const waiter = {
+            envelopeId,
+            finish(ack: FakeSlackAck | null) {
+              clearTimeout(timer);
+              connection.ackWaiters.delete(waiter);
+              resolve(ack);
+            },
+          };
+          const timer = setTimeout(() => waiter.finish(null), timeoutMs);
+          connection.ackWaiters.add(waiter);
+        });
+      },
+      failNext: api.failNext,
+    };
   }
 
   return {
-    ...api.controls,
-    url,
-    botToken,
-    appToken,
-    identity,
-    calls: api.calls,
-    acks,
-    connections,
+    ...primary,
     get activeConnections() {
-      return sockets.size;
+      return primary.activeConnections;
     },
-    sendFrame,
-    envelope,
-    sendEvent,
-    disconnect() {
-      sendFrame({
-        type: "disconnect",
-        reason: "refresh_requested",
-        debug_info: { host: "fake-slack" },
-      });
+    addApp(settings: Partial<FakeSlackIdentity> = {}) {
+      const number = apps.size + 1;
+      return createApp(
+        {
+          ...identity,
+          appId: `AFAKE${number}`,
+          botId: `BFAKE${number}`,
+          botUserId: `UFAKEBOT${number}`,
+          ...settings,
+        },
+        `xoxb-fake-${number}-for-local-tests-only`,
+        `xapp-fake-${number}-for-local-tests-only`,
+      );
     },
-    dropConnections() {
-      for (const socket of sockets.values()) socket.terminate();
-    },
-    setNextHelloAppId(appId: string) {
-      nextHelloAppId = appId;
-    },
-    setSocketResponsive(value: boolean) {
-      responsive = value;
-      for (const socket of sockets.values()) {
-        if (value) socket.resume();
-        else socket.pause();
-      }
-    },
-    waitForAck(envelopeId: string, timeoutMs = 1000): Promise<FakeSlackAck | null> {
-      if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
-        throw new Error("Ack timeout must be nonnegative and finite.");
-      const existing = acks.findLast((ack) => ack.envelopeId === envelopeId);
-      if (existing) return Promise.resolve(existing);
-      return new Promise((resolve) => {
-        const waiter = {
-          envelopeId,
-          finish(ack: FakeSlackAck | null) {
-            clearTimeout(timer);
-            ackWaiters.delete(waiter);
-            resolve(ack);
-          },
-        };
-        const timer = setTimeout(() => waiter.finish(null), timeoutMs);
-        ackWaiters.add(waiter);
-      });
-    },
-    failNext: api.failNext,
+    broadcastEvent,
     async stop() {
       if (stopped) return;
       stopped = true;
       clearInterval(heartbeat);
-      for (const waiter of ackWaiters) waiter.finish(null);
-      api.finishPending();
-      for (const socket of sockets.values()) socket.terminate();
+      for (const { connection, api } of apps.values()) {
+        for (const waiter of connection.ackWaiters) waiter.finish(null);
+        api.finishPending();
+        for (const socket of connection.sockets.values()) socket.terminate();
+      }
       await server.stop(true);
-      const allProblems = [...problems, ...api.problems];
+      const allProblems = [...problems, ...[...apps.values()].flatMap(({ api }) => api.problems)];
       if (allProblems.length)
         throw new Error(`Unexpected fake Slack traffic:\n${allProblems.join("\n")}`);
     },
