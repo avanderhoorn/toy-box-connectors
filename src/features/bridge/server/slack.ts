@@ -10,7 +10,7 @@ import {
 } from "@slackapi/model/identity";
 import type { BotClient, CallFailure } from "@slackapi/server/botClient";
 import { openSlackSocket, type SlackSocket } from "@slackapi/server/socketMode";
-import { defaultWakeTimings, retryDelay, type WakeTimings } from "@wakes/model";
+import { retryDelay, type WakeTimings } from "@wakes/model";
 import { sleep } from "@/shared/sleep";
 import type { BridgeDatabase } from "./database";
 import { confirmIdentity } from "./identity";
@@ -48,14 +48,13 @@ export type SlackSupervisorOptions = {
   /** Called after a delivery changed a link or request. */
   onChange?: () => void;
   /** Called when the supervisor stops on an error that retrying can't fix, such as storage failing. */
-  onError?: (error: unknown) => void;
+  onError: (error: unknown) => void;
   now?: () => number;
   /** Asking Slack about the tokens, and a connection it never said hello on, retry on this backoff. */
-  timings?: WakeTimings;
+  timings: WakeTimings;
   /** How long losing a connection Slack said hello on waits to reconnect. */
   reconnectDelay?: number;
   helloTimeoutMs?: number;
-  pingTimeoutMs?: number;
 };
 
 /** How one connection ended, which decides how long to wait before the next, or null for none. */
@@ -69,12 +68,11 @@ export function startSlackSupervisor(
     tokens,
     slackApiUrl,
     onChange,
-    onError = () => {},
+    onError,
     now = Date.now,
-    timings = defaultWakeTimings,
+    timings,
     reconnectDelay = 1_000,
     helloTimeoutMs,
-    pingTimeoutMs,
   }: SlackSupervisorOptions,
 ): SlackSupervisor {
   const stopping = new AbortController();
@@ -144,7 +142,6 @@ export function startSlackSupervisor(
     const current = openSlackSocket(tokens.appToken, {
       slackApiUrl,
       helloTimeoutMs,
-      pingTimeoutMs,
       now,
       onFrame(frame, arrivedAt) {
         switch (frame.kind) {
