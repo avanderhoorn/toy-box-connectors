@@ -10,8 +10,8 @@
 // before anything they use stops.
 //
 // A part that fails in a way retrying can't fix, such as a storage error,
-// reports it through one fatal path, and the bridge exits so launchd restarts
-// it.
+// reports it through one fatal path, and the bridge exits with code 1, so a
+// login job starts it afresh and an owner at a terminal sees why it stopped.
 
 import { join } from "node:path";
 import { forgetOldMessages } from "@activity/server/ledger";

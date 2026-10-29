@@ -44,8 +44,8 @@ test("ignores a .env file in the folder it runs from", async () => {
   const project = createTestFolder();
   writeFileSync(join(project, ".env"), "TOY_BOX_URL=http://toy-box.example.com:3000\n");
 
-  // Run through the file's own shebang, the way a shell or launchd runs the installed CLI, with
-  // the Bun running these tests first on PATH.
+  // Run through the file's own shebang, the way a shell runs the installed CLI, with the Bun
+  // running these tests first on PATH.
   const bin = createTestFolder();
   symlinkSync(process.execPath, join(bin, "bun"));
   const child = Bun.spawn([CLI, "serve"], {

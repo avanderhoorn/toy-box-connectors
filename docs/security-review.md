@@ -123,7 +123,9 @@ the folder protects them. Token and URL environment variables override the
 credential file; the owner hash is read only from that file. Checkout `.env`
 files are not loaded.
 
-Tokens stay in the bridge's normal control flow, not CLI output or prompts.
+`serve` reads a missing token only at the owner's terminal, without echo, and
+saves it only in `credentials.env`. Tokens then stay in the bridge's normal
+control flow, not CLI output or a lead's prompts.
 The bridge opens no TCP listener and accepts only loopback HTTP for Toy Box.
 **Toy Box has no authentication. Run `toy-box --host 127.0.0.1` and never
 expose it publicly or through a tunnel.**
@@ -156,7 +158,7 @@ or durable event receipts to retain.
 Unlink removes a link's owned bridge data. Observed app uninstall, or token
 revocation naming our bot, empties all other tables and leaves the installation
 marked uninstalled. Other credential errors stop work but retain data for
-repair. The credential file and service logs remain and need separate
+repair. The credential file and the login job's log remain and need separate
 offboarding cleanup. An offline bridge cannot detect uninstall immediately.
 
 When observed, Slack deletion, a tombstone or EKM/DLP withdrawal redacts the

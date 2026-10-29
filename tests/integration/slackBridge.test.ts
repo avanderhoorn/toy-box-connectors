@@ -1,4 +1,4 @@
-// The bridge as launchd runs it, with both tokens for a fake Slack.
+// The bridge as `serve` runs it without a terminal, with both tokens for a fake Slack.
 
 import { expect, test } from "bun:test";
 import { startSlackForBridge, started, withDatabase } from "./bridgeProcess";

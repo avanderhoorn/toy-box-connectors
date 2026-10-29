@@ -1,4 +1,5 @@
-// The bridge as launchd runs it, waking the lead of its linked channel in a fake Toy Box.
+// The bridge as `serve` runs it without a terminal, waking the lead of its linked channel in a fake
+// Toy Box.
 
 import { expect, test } from "bun:test";
 import { started, withDatabase } from "./bridgeProcess";
@@ -30,7 +31,7 @@ test("a running bridge wakes the lead once for a new request, and stops on SIGTE
   expect(wakes).toEqual([{ link_id: "link", outcome: "ran" }]);
 }, 15_000);
 
-test("a storage error stops the bridge with exit code 1 so launchd restarts it", async () => {
+test("a storage error stops the bridge with exit code 1 instead of retrying", async () => {
   const { toyBox, bridge, home } = await startLinkedBridge({
     env: PROMPTLY,
     prepare: async (database) => {
