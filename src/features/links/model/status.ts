@@ -14,7 +14,7 @@ export type SuspendReason =
   "channel_id_changed" | ChannelSuspendReason;
 
 /** Why a link is suspended, as a clause that reads after "suspended", and what ends it. */
-export type Suspension = { because: string; fix: string };
+type Suspension = { because: string; fix: string };
 
 const resume = "then have the owner run `toy-box-slack resume`.";
 

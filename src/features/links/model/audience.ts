@@ -71,10 +71,7 @@ export type ApprovalProblem =
   | AudienceProblem;
 
 /** A channel's audience, or null for a conversation that isn't a channel, such as a direct message. */
-export function audienceOf(
-  facts: ChannelFacts,
-  home: Pick<Installation, "teamId">,
-): Audience | null {
+function audienceOf(facts: ChannelFacts, home: Pick<Installation, "teamId">): Audience | null {
   if (facts.kind !== "public" && facts.kind !== "private") return null;
   return {
     kind: facts.kind,
@@ -90,7 +87,7 @@ export function audienceOf(
  * org-shared channel is allowed only inside the installation's org, with the installation's
  * workspace among those Slack lists.
  */
-export function audienceProblem(
+function audienceProblem(
   audience: Audience,
   home: Pick<Installation, "teamId" | "enterpriseId">,
 ): AudienceProblem | null {
@@ -111,7 +108,7 @@ export function audienceProblem(
  * How a channel's audience now is wider than the one the owner approved, or null: shared with
  * another organization or about to be, private made public, or a workspace the approved set lacks.
  */
-export function widening(approved: Audience, current: Audience): Widening | null {
+function widening(approved: Audience, current: Audience): Widening | null {
   if (current.external) return "channel_external";
   if (approved.kind === "private" && current.kind === "public") return "channel_made_public";
   if (current.workspaces.some((team) => !approved.workspaces.includes(team))) {

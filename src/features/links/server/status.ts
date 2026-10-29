@@ -9,7 +9,7 @@ import type { ChannelLink } from "./database";
 // the owner resumes it, or until unlink deletes it.
 
 /** A link as the owner approves it. */
-export type ApprovedLink = Pick<
+type ApprovedLink = Pick<
   ChannelLink,
   "toyBoxChannelId" | "slackChannelId" | "requestMode" | "observe" | "approved"
 >;
