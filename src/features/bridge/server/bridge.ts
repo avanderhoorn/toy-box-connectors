@@ -14,7 +14,7 @@
 // reports it through one fatal path, and the bridge exits with code 1, so a
 // login job starts it afresh and an owner at a terminal sees why it stopped.
 
-import { join } from "node:path";
+import { DEFAULT_APP } from "@bridge/model/apps";
 import { askForMissingCredentials } from "@commands/client/firstRun";
 import { installSkill } from "@commands/client/skill";
 import { resolveSessionId } from "@commands/model/callers";
@@ -40,6 +40,7 @@ import { wakeLead } from "@toybox/server";
 import { readToyBoxChannel } from "@toybox/server/api";
 import { startWakeScheduler, type WakeScheduler } from "@wakes/server";
 import { log } from "@/shared/log";
+import { locateApp, readAppTokens } from "./apps";
 import { prepareDataFolder, resolveDataFolder } from "./dataFolder";
 import { openBridgeDatabase, type BridgeDatabase } from "./database";
 import { readCredentialsFile, resolveBridgeSettings } from "./environment";
@@ -93,7 +94,9 @@ export async function startBridge(
 ): Promise<Bridge> {
   prepareDataFolder(dataFolder);
   const settings = resolveBridgeSettings(env, readCredentialsFile(dataFolder));
-  const lock = await acquireBridgeLock(join(dataFolder, "bridge.lock"));
+  const app = locateApp(dataFolder, DEFAULT_APP);
+  const tokens = readAppTokens(app, env);
+  const lock = await acquireBridgeLock(app.lock);
   const failure = Promise.withResolvers<unknown>();
   let database: BridgeDatabase | undefined;
   let scheduler: WakeScheduler | undefined;
@@ -116,12 +119,13 @@ export async function startBridge(
   }
 
   try {
-    database = await openBridgeDatabase(join(dataFolder, "bridge.db"));
+    database = await openBridgeDatabase(app.database);
     await database.write((tx) => recoverOutboxAttempts(tx, Date.now()));
     retention = await startRetention(database, failure.resolve);
     // Slack is supervised exactly when both tokens are set.
-    const slackState = (): SlackState => unconfiguredSlack(settings) ?? slack!.state();
-    const { botToken, appToken, slackApiUrl } = settings;
+    const slackState = (): SlackState => unconfiguredSlack(tokens) ?? slack!.state();
+    const { botToken, appToken } = tokens;
+    const { slackApiUrl } = settings;
     let bot: BotClient | null = null;
     if (botToken && appToken) {
       bot = createBotClient(database, botToken, {

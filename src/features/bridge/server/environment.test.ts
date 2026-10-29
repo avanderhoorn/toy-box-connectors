@@ -3,53 +3,29 @@ import { appendFileSync, chmodSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { defaultWakeTimings } from "@wakes/model";
 import { readCredentialsFile, resolveBridgeSettings, writeCredential } from "./environment";
-import { BridgeRefusedError } from "./refusal";
-import { createTestFolder } from "./testFixtures";
-
-/** The whole message `operation` refuses with. */
-function refusalOf(operation: () => unknown): string {
-  try {
-    operation();
-  } catch (error) {
-    if (error instanceof BridgeRefusedError) return error.message;
-    throw error;
-  }
-  throw new Error("Expected a refusal.");
-}
+import { createTestFolder, refusalOf } from "./testFixtures";
 
 describe("the bridge's settings", () => {
-  const file = {
-    SLACK_BOT_TOKEN: "xoxb-file",
-    SLACK_APP_TOKEN: "xapp-file",
-    TOY_BOX_URL: "http://127.0.0.1:3100",
-  };
+  const file = { TOY_BOX_URL: "http://127.0.0.1:3100" };
 
   test("come from the environment first and credentials.env next, where empty counts as unset", () => {
     expect(resolveBridgeSettings({}, file)).toEqual({
       toyBoxOrigin: new URL("http://127.0.0.1:3100"),
-      botToken: "xoxb-file",
-      appToken: "xapp-file",
       slackApiUrl: undefined,
       wakeTimings: defaultWakeTimings,
     });
     const env = {
-      SLACK_BOT_TOKEN: "xoxb-env",
-      SLACK_APP_TOKEN: "",
       TOY_BOX_URL: "http://[::1]:3000",
       SLACK_API_URL: "http://127.0.0.1:4100/api/",
       TOY_BOX_SLACK_WAKE_TIMINGS: '{"debounce":100,"backoff":[1,2,3]}',
     };
     expect(resolveBridgeSettings(env, file)).toEqual({
       toyBoxOrigin: new URL("http://[::1]:3000"),
-      botToken: "xoxb-env",
-      appToken: "xapp-file",
       slackApiUrl: "http://127.0.0.1:4100/api/",
       wakeTimings: { ...defaultWakeTimings, debounce: 100, backoff: [1, 2, 3] },
     });
-    expect(resolveBridgeSettings({ TOY_BOX_URL: "" }, { SLACK_BOT_TOKEN: "" })).toMatchObject({
+    expect(resolveBridgeSettings({ TOY_BOX_URL: "" }, { TOY_BOX_URL: "" })).toMatchObject({
       toyBoxOrigin: new URL("http://127.0.0.1:3000"),
-      botToken: null,
-      appToken: null,
     });
   });
 

@@ -2,12 +2,24 @@ import { onTestFinished, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { openBridgeDatabase, type BridgeDatabase } from "./database";
+import { BridgeRefusedError } from "./refusal";
 
 /** Create an empty folder that's removed after the test. */
 export function createTestFolder(): string {
   const path = mkdtempSync("/tmp/tbs-");
   onTestFinished(() => rmSync(path, { recursive: true, force: true }));
   return path;
+}
+
+/** The whole message `operation` refuses with. */
+export function refusalOf(operation: () => unknown): string {
+  try {
+    operation();
+  } catch (error) {
+    if (error instanceof BridgeRefusedError) return error.message;
+    throw error;
+  }
+  throw new Error("Expected a refusal.");
 }
 
 /** Open a new `bridge.db` in a folder of its own, closed after the test. */

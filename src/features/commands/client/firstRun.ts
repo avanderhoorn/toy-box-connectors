@@ -5,6 +5,8 @@
 // as it was typed.
 
 import { join } from "node:path";
+import { DEFAULT_APP } from "@bridge/model/apps";
+import { locateApp, readAppTokens } from "@bridge/server/apps";
 import { prepareDataFolder } from "@bridge/server/dataFolder";
 import {
   readCredentialsFile,
@@ -32,9 +34,10 @@ export async function askForMissingCredentials(
 ): Promise<string | null> {
   prepareDataFolder(dataFolder);
   const credentials = readCredentialsFile(dataFolder);
-  // The same check the bridge makes, so a setting it would refuse stops it before anyone types.
-  const settings = resolveBridgeSettings(env, credentials);
-  const tokens = TOKENS.filter(({ setting }) => !settings[setting]);
+  // The same checks the bridge makes, so a setting it would refuse stops it before anyone types.
+  resolveBridgeSettings(env, credentials);
+  const found = readAppTokens(locateApp(dataFolder, DEFAULT_APP), env);
+  const tokens = TOKENS.filter(({ setting }) => !found[setting]);
   const passphrase = !credentials.OWNER_PASSPHRASE_HASH;
   if (tokens.length === 0 && !passphrase) return null;
 
