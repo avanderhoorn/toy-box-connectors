@@ -9,7 +9,7 @@
 // operations guide says: they add the app at a terminal, restart the bridge, and link through it.
 
 import { Database, type SQLQueryBindings } from "bun:sqlite";
-import { closeSync, openSync, readFileSync } from "node:fs";
+import { closeSync, openSync } from "node:fs";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { DEFAULT_APP } from "@bridge/model/apps";
@@ -209,7 +209,7 @@ export async function linkSlack(toyBox: IsolatedToyBox, channel: TestChannel): P
  * no run reaches, so only the bridge or a scenario runs it.
  */
 export function skillRoutine(title: string) {
-  for (const [, heading, prompt] of readFileSync(BUNDLED_SKILL, "utf8").matchAll(SKILL_ROUTINE)) {
+  for (const [, heading, prompt] of BUNDLED_SKILL.matchAll(SKILL_ROUTINE)) {
     if (heading === title && prompt) return { title, schedule: "0 4 1 1 *", prompt };
   }
   throw new Error(`The skill gives no routine titled "${title}".`);

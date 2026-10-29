@@ -24,5 +24,5 @@ test("installs the skill before it returns, so Slack can't log before serve says
   const path = installSkill({ COPILOT_HOME: copilotHome }, createTestFolder());
 
   expect(path).toBe(join(copilotHome, "skills", "toy-box-slack", "SKILL.md"));
-  expect(readFileSync(path, "utf8")).toBe(readFileSync(BUNDLED_SKILL, "utf8"));
+  expect(readFileSync(path, "utf8")).toBe(BUNDLED_SKILL);
 });

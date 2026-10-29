@@ -2,12 +2,13 @@
 // `serve` installs the skill each time the bridge starts, so leads read the one its release ships.
 // The install replaces the skill's whole folder, so no file an older release shipped is left behind.
 
-import { copyFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import skill from "../../../../skills/toy-box-slack/SKILL.md" with { type: "text" };
 
-/** The skill this release ships. */
-export const BUNDLED_SKILL = join(import.meta.dir, "../../../../skills/toy-box-slack/SKILL.md");
+/** The skill this release ships, which the compiled CLI carries inside it. */
+export const BUNDLED_SKILL: string = skill;
 
 /**
  * Installs the skill this release ships where Copilot finds it, and returns its path there. It's
@@ -22,6 +23,6 @@ export function installSkill(
   rmSync(folder, { recursive: true, force: true });
   mkdirSync(folder, { recursive: true });
   const path = join(folder, "SKILL.md");
-  copyFileSync(BUNDLED_SKILL, path);
+  writeFileSync(path, BUNDLED_SKILL);
   return path;
 }

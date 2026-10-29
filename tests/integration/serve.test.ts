@@ -206,7 +206,7 @@ test("installs the skill it ships each time it starts, in place of the one befor
   const bridge = spawnBridge(home);
   await bridge.running();
 
-  expect(await Bun.file(skill).text()).toBe(await Bun.file(BUNDLED_SKILL).text());
+  expect(await Bun.file(skill).text()).toBe(BUNDLED_SKILL);
   expect(readdirSync(dirname(skill))).toEqual(["SKILL.md"]);
   bridge.child.kill("SIGTERM");
   expect(await bridge.exit()).toEqual({
