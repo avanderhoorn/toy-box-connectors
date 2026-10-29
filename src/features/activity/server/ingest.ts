@@ -1,9 +1,9 @@
-import { readChannelLink, type ChannelLink } from "@links/server/database";
+import { readChannelLink } from "@links/server/database";
 import { hasRequestInThread } from "@requests/server/database";
 import { takeDelete, takeMessage } from "@requests/server/intake";
 import type { SlackMessage, SlackMessageEvent } from "@slackapi/model/messages";
 import { canonicalUserId } from "@slackapi/server/users";
-import { storeDelete, storeMessage, type LedgerLink } from "./ledger";
+import { storeDelete, storeMessage } from "./ledger";
 
 // Ingest.
 //
@@ -25,12 +25,12 @@ export async function ingestMessageEvent(
   if (link === null) return false;
 
   if (event.kind !== "message") {
-    await storeDelete(transaction, link.id, channelId, event.ts);
+    await storeDelete(transaction, channelId, event.ts);
     return takeDelete(transaction, channelId, event.ts, now);
   }
   const message = await withKnownAuthor(transaction, event.message);
   const inRequestThread = await hasRequestInThread(transaction, link.id, message.rootTs);
-  const stored = await storeMessage(transaction, ledgerLink(link), message, inRequestThread);
+  const stored = await storeMessage(transaction, link, message, inRequestThread);
   return takeMessage(transaction, link, message, stored, now);
 }
 
@@ -38,8 +38,4 @@ export async function ingestMessageEvent(
 async function withKnownAuthor(transaction: Bun.SQL, message: SlackMessage): Promise<SlackMessage> {
   if (message.userId === null) return message;
   return { ...message, userId: await canonicalUserId(transaction, message.userId) };
-}
-
-function ledgerLink(link: ChannelLink): LedgerLink {
-  return { id: link.id, audience: { allowlist: link.allowlist, observe: link.observe } };
 }

@@ -33,8 +33,9 @@ export function activityCommand({
           m.author_role AS role, m.edited_ts IS NOT NULL AS edited, m.text
         FROM changes c
         JOIN messages m ON m.channel_id = c.channel_id AND m.ts = c.ts AND m.updated_seq = c.seq
-        LEFT JOIN cursors r ON r.link_id = c.link_id
-        WHERE c.link_id = ${link.id} AND c.seq > coalesce(r.through_seq, 0) AND m.text IS NOT NULL
+        LEFT JOIN cursors r ON r.link_id = ${link.id}
+        WHERE c.channel_id = ${link.slackChannelId} AND c.seq > coalesce(r.through_seq, 0)
+          AND m.text IS NOT NULL
         ORDER BY c.seq
       `;
       const page = unread.slice(0, limit);

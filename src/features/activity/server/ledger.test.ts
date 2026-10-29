@@ -6,7 +6,7 @@ import { createStoredLink } from "@links/server/testFixtures";
 import type { SlackMessage } from "@slackapi/model/messages";
 import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
 import { forgetOldMessages, storeDelete } from "./ledger";
-import { createStoredMessage, ledgerLink } from "./testFixtures";
+import { createStoredMessage, linkAudience } from "./testFixtures";
 
 const ask = askMessage();
 
@@ -17,9 +17,7 @@ async function openLedger(): Promise<BridgeDatabase> {
 }
 
 function storeDeleteOf(database: BridgeDatabase, message: SlackMessage) {
-  return database.write((transaction) =>
-    storeDelete(transaction, "link", message.channelId, message.ts),
-  );
+  return database.write((transaction) => storeDelete(transaction, message.channelId, message.ts));
 }
 
 function readLedger(database: BridgeDatabase) {
@@ -72,12 +70,12 @@ test("a stranger's text is kept only where the link observes them", async () => 
   const atRoot = askMessage("1700000300.000100", { userId: "U-stranger", text: inThread.text });
   await createStoredMessage(database, inThread);
   // A request started in the thread since, so its redelivery fills the marker in.
-  await createStoredMessage(database, inThread, ledgerLink(), true);
+  await createStoredMessage(database, inThread, linkAudience(), true);
   await createStoredMessage(database, atRoot);
   await createStoredMessage(
     database,
     { ...atRoot, ts: "1700000400.000100" },
-    ledgerLink({ observe: "channel" }),
+    linkAudience({ observe: "channel" }),
   );
 
   expect((await readLedger(database)).messages).toEqual([

@@ -25,7 +25,6 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
 
     CREATE TABLE changes (
       seq        INTEGER PRIMARY KEY AUTOINCREMENT,
-      link_id    TEXT NOT NULL,
       channel_id TEXT NOT NULL,
       ts         TEXT NOT NULL,
       kind       TEXT NOT NULL CHECK (kind IN ('new', 'edited', 'deleted'))

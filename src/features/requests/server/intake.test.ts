@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { storeDelete, storeMessage } from "@activity/server/ledger";
-import { ledgerLink } from "@activity/server/testFixtures";
+import { linkAudience } from "@activity/server/testFixtures";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { readChannelLink } from "@links/server/database";
@@ -31,14 +31,14 @@ async function openIntake(...messages: SlackMessage[]): Promise<BridgeDatabase> 
 function take(database: BridgeDatabase, message: SlackMessage) {
   return database.write(async (transaction) => {
     const link = (await readChannelLink(transaction, message.channelId))!;
-    const stored = await storeMessage(transaction, ledgerLink(), message, false);
+    const stored = await storeMessage(transaction, linkAudience(), message, false);
     return takeMessage(transaction, link, message, stored, now);
   });
 }
 
 function takeDeleteOf(database: BridgeDatabase, { channelId, ts }: SlackMessage) {
   return database.write(async (transaction) => {
-    await storeDelete(transaction, "link", channelId, ts);
+    await storeDelete(transaction, channelId, ts);
     return takeDelete(transaction, channelId, ts, now);
   });
 }

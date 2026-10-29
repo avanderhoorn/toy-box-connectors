@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createStoredMessage, ledgerLink } from "@activity/server/testFixtures";
+import { createStoredMessage } from "@activity/server/testFixtures";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { countRows, createStoredLink, fillEveryTable } from "@links/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
@@ -12,7 +12,7 @@ test("unlink deletes what the bridge kept for its link, and nothing of another l
   const before = await countRows(database);
   await createStoredLink(database, "gone");
   const message = askMessage(undefined, { channelId: "C-gone" });
-  await createStoredMessage(database, message, { ...ledgerLink(), id: "gone" });
+  await createStoredMessage(database, message);
   await createStoredRequest(database, { linkId: "gone", channelId: "C-gone" });
   const unlink = unlinkCommand({
     database,

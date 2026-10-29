@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createStoredMessage, ledgerLink } from "@activity/server/testFixtures";
+import { createStoredMessage } from "@activity/server/testFixtures";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
@@ -13,7 +13,7 @@ test("serves the messages that changed after the cursor a page at a time, and ma
   await createStoredLink(database);
   await createStoredLink(database, "other");
   const elsewhere = askMessage(undefined, { channelId: "C-other" });
-  await createStoredMessage(database, elsewhere, { ...ledgerLink(), id: "other" });
+  await createStoredMessage(database, elsewhere);
   const ask = askMessage();
   for (const message of [
     ask,

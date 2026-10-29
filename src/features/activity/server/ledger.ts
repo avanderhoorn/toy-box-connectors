@@ -19,9 +19,6 @@ import type { SlackTs } from "@slackapi/model/ts";
 // what they read, so replaying an envelope or a history page converges to the same rows. A merge
 // that changes what a message says appends a change, and the row keeps that change's seq.
 
-/** The link a message's channel belongs to. */
-export type LedgerLink = { id: string; audience: LinkAudience };
-
 /** What storing one version of a message did. */
 export type StoredVersion = {
   decision: MergeDecision;
@@ -46,18 +43,18 @@ type MessageRow = {
  */
 export async function storeMessage(
   transaction: Bun.SQL,
-  link: LedgerLink,
+  audience: LinkAudience,
   message: SlackMessage,
   inRequestThread: boolean,
 ): Promise<StoredVersion> {
   const { channelId, ts } = message;
-  const role = authorRole(message, link.audience);
-  const kept = keepsText(role, link.audience.observe, inRequestThread);
+  const role = authorRole(message, audience);
+  const kept = keepsText(role, audience.observe, inRequestThread);
   const contentHash = kept ? Bun.SHA256.hash(fingerprintSource(message), "hex") : null;
   const row = await readMessage(transaction, channelId, ts);
   const decision = mergeSnapshot(storedMessage(row), { version: message.version, contentHash });
   if (decision.kind !== "ignore") {
-    await writeMessage(transaction, link.id, channelId, ts, decision, {
+    await writeMessage(transaction, channelId, ts, decision, {
       thread_ts: message.threadTs,
       user_id: message.userId,
       author_role: role,
@@ -77,7 +74,6 @@ export async function storeMessage(
  */
 export async function storeDelete(
   transaction: Bun.SQL,
-  linkId: string,
   channelId: string,
   ts: SlackTs,
 ): Promise<MergeDecision> {
@@ -85,7 +81,6 @@ export async function storeDelete(
   if (decision.kind === "ignore") return decision;
   await writeMessage(
     transaction,
-    linkId,
     channelId,
     ts,
     decision,
@@ -124,7 +119,6 @@ function storedMessage(row: MessageRow | null): StoredMessage | null {
 
 async function writeMessage(
   transaction: Bun.SQL,
-  linkId: string,
   channelId: string,
   ts: SlackTs,
   decision: Applied,
@@ -132,7 +126,7 @@ async function writeMessage(
 ): Promise<void> {
   const row = { ...columns };
   if (decision.change !== null) {
-    row.updated_seq = await appendChange(transaction, linkId, channelId, ts, decision.change);
+    row.updated_seq = await appendChange(transaction, channelId, ts, decision.change);
   }
   if (decision.kind === "insert") {
     await transaction`INSERT INTO messages ${transaction({ channel_id: channelId, ts, ...row })}`;
@@ -145,24 +139,23 @@ async function writeMessage(
 
 async function appendChange(
   transaction: Bun.SQL,
-  linkId: string,
   channelId: string,
   ts: SlackTs,
   kind: NonNullable<Applied["change"]>,
 ): Promise<number> {
   const [change] = await transaction<{ seq: number }[]>`
-    INSERT INTO changes (link_id, channel_id, ts, kind)
-    VALUES (${linkId}, ${channelId}, ${ts}, ${kind})
+    INSERT INTO changes (channel_id, ts, kind)
+    VALUES (${channelId}, ${ts}, ${kind})
     RETURNING seq
   `;
   return change!.seq;
 }
 
-/** Deletes the messages kept from a link's channel, and the changes recorded for the link. */
+/** Deletes the messages and changes the ledger kept from a link's channel. */
 export async function deleteLinkActivity(
   transaction: Bun.SQL,
-  link: { id: string; slackChannelId: string },
+  link: { slackChannelId: string },
 ): Promise<void> {
-  await transaction`DELETE FROM changes WHERE link_id = ${link.id}`;
+  await transaction`DELETE FROM changes WHERE channel_id = ${link.slackChannelId}`;
   await transaction`DELETE FROM messages WHERE channel_id = ${link.slackChannelId}`;
 }
