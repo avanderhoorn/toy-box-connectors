@@ -86,9 +86,9 @@ To link this channel:
    toy-box-slack allow --channel <this channel's ID> U0123ABCD U0456EFGH
    ```
 
-   Each shows what it widens, with names from Slack, before it asks for the passphrase. Add `--requests all` to link if every top-level post from those people should count as a request, and `--observe channel` if digests should cover everyone.
+   Each shows what it widens, with names from Slack, before it asks for the passphrase. Add `--requests all` to link if every top-level post from those people should count as a request, and `--observe channel` if digests should cover everyone. Once the owner has run them, `toy-box-slack status` shows the link.
 
-4. Once the owner has run them, `toy-box-slack status` shows the link.
+Leads in the same Slack channel each need their own Slack app, since people tell leads apart by the bot they mention, but leads in different Slack channels share one. So only when another lead already answers the Slack channel, as the owner may say or `link` may refuse, have the owner create and install another Slack app as they did the first, changing only the manifest's `name` and `display_name`, and invite its bot there. They then run `toy-box-slack add-app <name>` at their own terminal, which you never run since it asks for the app's tokens, and restart the bridge as it says. Add `--app <name>` to the `link` command you give them, and tell them that people there should mention the lead they mean, since a reply that mentions no one reaches every lead its author asked in that thread.
 
 Create the digest and release notes routines only if the owner asks. Give each routine the title and schedule shown, changing the schedule only if the owner asks, and its prompt exactly as written on one line, since the bridge finds a routine by the command its prompt runs and a line break would reach you as a literal \n.
 

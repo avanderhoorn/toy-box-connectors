@@ -51,6 +51,10 @@ Defaults are `--requests mention --observe requesters`; `--requests all` accepts
 
 Send a **new** mention by selecting the app in Slack's mention menu. An allowed person's question should get eyes and one threaded answer within minutes. If it does not, check `toy-box-slack status` and the [operations guide](docs/operations.md).
 
+## Several leads in one Slack channel
+
+People tell leads apart by the bot they mention, so leads in the same Slack channel each need a Slack app of their own, while leads in different Slack channels share one. Create another Slack app, add it to the bridge with `toy-box-slack add-app <name>`, and link through it with `--app <name>`, as [operations](docs/operations.md#add-or-remove-an-app) describes. Ask people there to mention the lead they mean, since a reply that mentions no one reaches every lead its author asked in that thread. Two links with `--requests all` both answer each top-level post that mentions no one, from someone they both allow.
+
 ## Keep it running
 
 The bridge answers only while `serve` runs. Ctrl-C stops it. When `serve` runs again, it catches up on what it missed, within the [limits](docs/operations.md#deletion-and-limits) of catch-up. To start it at login instead, see [operations](docs/operations.md#start-the-bridge-at-login).
@@ -59,7 +63,7 @@ The bridge answers only while `serve` runs. Ctrl-C stops it. When `serve` runs a
 
 ## Commands and development
 
-**Lead:** `inbox`, `reply`, `dismiss`, `activity`, `mark-read`, `publish`, `retract`. **Owner:** `passphrase`, `link`, `allow`, `resume`. **Lead or terminal:** `status`, `deny`, `pause`, `unlink`. **Operator:** `serve`.
+**Lead:** `inbox`, `reply`, `dismiss`, `activity`, `mark-read`, `publish`, `retract`. **Owner:** `passphrase`, `add-app`, `link`, `allow`, `resume`. **Lead or terminal:** `status`, `deny`, `pause`, `unlink`. **Operator:** `serve`.
 
 `toy-box-slack <command> --help` gives flags. See [operations](docs/operations.md) for status, pauses, uncertain posts, deletion and starting at login, [AGENTS.md](AGENTS.md) for architecture, and [research](docs/research) for evidence.
 
