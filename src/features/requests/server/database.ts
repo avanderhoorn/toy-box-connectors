@@ -8,7 +8,7 @@ import {
   type RequestReason,
   type RequestState,
 } from "@requests/model/lifecycle";
-import { compareTs, type SlackTs } from "@slackapi/model/ts";
+import type { SlackTs } from "@slackapi/model/ts";
 
 // Stored requests.
 //
@@ -42,23 +42,19 @@ export async function readRequest(sql: Bun.SQL, id: number): Promise<StoredReque
   return row ? requestFromRow(row) : null;
 }
 
-/**
- * The newest request a person has open or seen in a thread, which their later messages there join.
- * Once the lead answers, their next message asks anew.
- */
-export async function readJoinableRequest(
+/** A person's requests in a thread, whatever became of them, oldest first. */
+export async function readThreadRequests(
   sql: Bun.SQL,
   linkId: string,
   requesterUserId: string,
   rootTs: SlackTs,
-): Promise<StoredRequest | null> {
-  const [row] = await sql<RequestRow[]>`
+): Promise<StoredRequest[]> {
+  const rows = await sql<RequestRow[]>`
     SELECT * FROM requests
     WHERE link_id = ${linkId} AND requester_user_id = ${requesterUserId} AND root_ts = ${rootTs}
-      AND state IN ('open', 'seen')
-    ORDER BY id DESC LIMIT 1
+    ORDER BY id
   `;
-  return row ? requestFromRow(row) : null;
+  return rows.map(requestFromRow);
 }
 
 /** A link's open, seen and answering requests, oldest first. */
@@ -90,21 +86,6 @@ export async function readMessageRequest(
     WHERE request_messages.channel_id = ${channelId} AND request_messages.ts = ${ts}
   `;
   return row ? requestFromRow(row) : null;
-}
-
-/** Whether a person started a request in a thread before `ts`, whatever became of it. */
-export async function askedBefore(
-  sql: Bun.SQL,
-  linkId: string,
-  requesterUserId: string,
-  rootTs: SlackTs,
-  ts: SlackTs,
-): Promise<boolean> {
-  const requests = await sql<{ source_ts: SlackTs }[]>`
-    SELECT source_ts FROM requests
-    WHERE link_id = ${linkId} AND requester_user_id = ${requesterUserId} AND root_ts = ${rootTs}
-  `;
-  return requests.some((request) => compareTs(request.source_ts, ts) < 0);
 }
 
 /** Whether anyone started a request in a link's thread, whatever became of it. */
