@@ -1,5 +1,5 @@
 import { expect, onTestFinished, spyOn, test } from "bun:test";
-import { log } from "./log";
+import { labeledLog, log } from "./log";
 
 function captureStderr() {
   const write = spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -26,6 +26,14 @@ test("shows an error with its stack", () => {
   expect(line).toStartWith("Stopped: ");
   expect(line).toContain("error: The disk is full.\n");
   expect(line).toContain(`${import.meta.path}:`);
+});
+
+test("a labeled log starts each line with its label", () => {
+  const written = captureStderr();
+  const releases = labeledLog("releases");
+  releases("Connected to Slack.");
+  releases("Tried", 3, "times.");
+  expect(written()).toEqual(["[releases] Connected to Slack.\n", "[releases] Tried 3 times.\n"]);
 });
 
 test("goes on once nothing reads stderr, as console.error does", () => {

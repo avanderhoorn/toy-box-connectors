@@ -1,4 +1,5 @@
 import { describe, expect, onTestFinished, test } from "bun:test";
+import type { ClaimSlackApp } from "@bridge/model/claims";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { confirmIdentity } from "@bridge/server/identity";
 import { openTestDatabase } from "@bridge/server/testFixtures";
@@ -19,7 +20,8 @@ function fakeSlack(identity?: Partial<FakeSlackIdentity>) {
 
 /**
  * Confirms `slack`'s tokens against `database` through a fresh bot client. `wrap` stands between the
- * check and the client, to steer a call.
+ * check and the client, to steer a call. `claim` claims their Slack app, which no other app holds
+ * unless it says so.
  */
 function confirm(
   database: BridgeDatabase,
@@ -27,13 +29,18 @@ function confirm(
   {
     tokens = { botToken: slack.botToken, appToken: slack.appToken },
     wrap = (bot) => bot,
-  }: { tokens?: { botToken: string; appToken: string }; wrap?: (bot: BotClient) => BotClient } = {},
+    claim = () => null,
+  }: {
+    tokens?: { botToken: string; appToken: string };
+    wrap?: (bot: BotClient) => BotClient;
+    claim?: ClaimSlackApp;
+  } = {},
 ) {
   const bot = createBotClient(database, slack.botToken, {
     slackApiUrl: slack.url,
     now: () => NOW,
   });
-  return confirmIdentity(database, wrap(bot), tokens);
+  return confirmIdentity(database, wrap(bot), tokens, claim);
 }
 
 const fakeInstallation: Installation = {
@@ -99,6 +106,52 @@ describe("confirming the tokens", () => {
       refusal: { reason: "moved_org" },
     });
     expect(await database.read(readInstallation)).toEqual(fakeInstallation);
+  });
+});
+
+describe("a Slack app another app the bridge hosts holds", () => {
+  test("is refused before anything is recorded, naming the app that holds it", async () => {
+    const database = await openTestDatabase();
+    const claimed: string[] = [];
+    const claim = (slackAppId: string) => {
+      claimed.push(slackAppId);
+      return "releases";
+    };
+
+    expect(await confirm(database, fakeSlack(), { claim })).toEqual({
+      kind: "refused",
+      refusal: { reason: "duplicate_app", heldBy: "releases" },
+    });
+    expect(claimed).toEqual(["AFAKE"]);
+    expect(await database.read(readInstallation)).toBeNull();
+  });
+
+  test("is refused even when this app's bridge.db records it too, which keeps the record", async () => {
+    const slack = fakeSlack();
+    const database = await openTestDatabase();
+    await confirm(database, slack);
+
+    expect(await confirm(database, slack, { claim: () => "default" })).toEqual({
+      kind: "refused",
+      refusal: { reason: "duplicate_app", heldBy: "default" },
+    });
+    expect(await database.read(readInstallation)).toEqual(fakeInstallation);
+  });
+
+  test("is claimed only once the tokens match the installation, so a mismatch is refused as one", async () => {
+    const database = await openTestDatabase();
+    await confirm(database, fakeSlack());
+    const claimed: string[] = [];
+    const claim = (slackAppId: string) => {
+      claimed.push(slackAppId);
+      return "releases";
+    };
+
+    expect(await confirm(database, fakeSlack({ appId: "AOTHER" }), { claim })).toEqual({
+      kind: "refused",
+      refusal: { reason: "mismatch", field: "appId", found: "AOTHER" },
+    });
+    expect(claimed).toEqual([]);
   });
 });
 

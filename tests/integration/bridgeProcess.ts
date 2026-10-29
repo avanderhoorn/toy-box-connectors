@@ -51,18 +51,22 @@ export function spawnBridge(home: string, env: Record<string, string> = {}, stdi
     for await (const chunk of child.stderr) stderr += decoder.decode(chunk, { stream: true });
   })();
 
+  /** Resolves once the bridge has said `text`, and rejects if it exits or takes too long. */
+  async function says(text: string) {
+    const deadline = Date.now() + 10_000;
+    while (!stderr.includes(text)) {
+      if (child.exitCode !== null || Date.now() > deadline) {
+        throw new Error(`The bridge didn't say ${JSON.stringify(text)}:\n${stderr}`);
+      }
+      await Bun.sleep(10);
+    }
+  }
+
   return {
     child,
+    says,
     /** Resolves once the bridge says it's running, and rejects if it exits or takes too long. */
-    async running() {
-      const deadline = Date.now() + 10_000;
-      while (!stderr.includes("toy-box-slack is running")) {
-        if (child.exitCode !== null || Date.now() > deadline) {
-          throw new Error(`The bridge didn't start:\n${stderr}`);
-        }
-        await Bun.sleep(10);
-      }
-    },
+    running: () => says("toy-box-slack is running"),
     async exit() {
       const code = await child.exited;
       await drained;

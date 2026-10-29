@@ -1,10 +1,12 @@
 // The single-bridge lock.
 //
-// One bridge owns a data folder. It holds an exclusive SQLite lock on
-// `bridge.lock` through a connection that stays open for the bridge's whole
-// life, so the operating system drops the lock when the process exits or
-// crashes and a stale lock can't outlive its bridge. The bridge takes the lock
-// before it opens `bridge.db`, so a second bridge stops without touching it.
+// One bridge owns a data folder and every app in it. Each app's folder has its
+// own `bridge.lock`, and the bridge holds an exclusive SQLite lock on each
+// through a connection that stays open for the bridge's whole life, so the
+// operating system drops the locks when the process exits or crashes and a
+// stale lock can't outlive its bridge. The bridge takes every app's lock, the
+// default app's first, before it opens any `bridge.db`, so a second bridge
+// stops without touching one.
 //
 // POSIX locks belong to the process, and closing any descriptor for a file
 // drops every lock the process holds on it. SQLite tracks its own descriptors

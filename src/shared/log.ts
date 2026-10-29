@@ -13,3 +13,8 @@ export function log(...parts: unknown[]): void {
   const shown = parts.map((part) => (typeof part === "string" ? part : Bun.inspect(part)));
   process.stderr.write(`${shown.join(" ")}\n`);
 }
+
+/** A log whose every line starts with `[label]`, as Toy Box labels the parts of its server. */
+export function labeledLog(label: string): Log {
+  return (...parts) => log(`[${label}]`, ...parts);
+}

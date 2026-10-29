@@ -71,6 +71,7 @@ async function linkFakeSlack() {
     const supervisor = startSlackSupervisor(database, bot, {
       app: DEFAULT_APP,
       tokens: { botToken: fake.botToken, appToken: fake.appToken },
+      claim: () => null,
       slackApiUrl,
       onError: (error) => errors.push(error),
       now,

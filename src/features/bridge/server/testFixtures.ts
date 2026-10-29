@@ -1,7 +1,9 @@
 import { onTestFinished, spyOn } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { locateApp, type App } from "./apps";
 import { openBridgeDatabase, type BridgeDatabase } from "./database";
+import { writeCredential, type AppCredentials } from "./environment";
 import { BridgeRefusedError } from "./refusal";
 
 /** Create an empty folder that's removed after the test. */
@@ -9,6 +11,20 @@ export function createTestFolder(): string {
   const path = mkdtempSync("/tmp/tbs-");
   onTestFinished(() => rmSync(path, { recursive: true, force: true }));
   return path;
+}
+
+/** Make the folder of an app `add-app` adds to `dataFolder`, holding just `credentials`. */
+export function createAddedApp(
+  dataFolder: string,
+  name: string,
+  credentials: AppCredentials = {},
+): App {
+  const app = locateApp(dataFolder, name);
+  mkdirSync(app.folder, { recursive: true, mode: 0o700 });
+  for (const [setting, value] of Object.entries(credentials)) {
+    writeCredential(app.folder, setting as keyof AppCredentials, value);
+  }
+  return app;
 }
 
 /** The whole message `operation` refuses with. */

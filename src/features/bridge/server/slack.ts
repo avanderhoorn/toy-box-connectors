@@ -1,5 +1,6 @@
 import { startCatchUp } from "@activity/server/catchUp";
 import { startSlackReceiver } from "@activity/server/receiver";
+import type { ClaimSlackApp } from "@bridge/model/claims";
 import type { SlackState } from "@commands/model/status";
 import {
   helloRefusal,
@@ -47,6 +48,8 @@ export type SlackSupervisorOptions = {
   /** The app whose tokens these are, which every hint about them names. */
   app: string;
   tokens: { botToken: string; appToken: string };
+  /** Claims the Slack app the tokens belong to, which another app the bridge hosts may hold. */
+  claim: ClaimSlackApp;
   slackApiUrl?: string;
   /** Called after a delivery changed a link or request. */
   onChange?: () => void;
@@ -72,6 +75,7 @@ export function startSlackSupervisor(
   {
     app,
     tokens,
+    claim,
     slackApiUrl,
     onChange,
     onError,
@@ -121,7 +125,7 @@ export function startSlackSupervisor(
   /** Asks Slack whose tokens these are until it answers, and returns their app if it may connect. */
   async function confirm(): Promise<string | null> {
     for (let failures = 1; !signal.aborted; failures++) {
-      const verdict = await confirmIdentity(database, bot, tokens);
+      const verdict = await confirmIdentity(database, bot, tokens, claim);
       if (signal.aborted) return null;
       switch (verdict.kind) {
         case "confirmed":

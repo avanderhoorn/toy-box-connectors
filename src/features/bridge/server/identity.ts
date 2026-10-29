@@ -1,5 +1,6 @@
 import type { WebClient } from "@slack/web-api";
 import { z } from "zod";
+import type { ClaimSlackApp } from "@bridge/model/claims";
 import type { BridgeDatabase } from "@bridge/server/database";
 import {
   checkOwner,
@@ -20,8 +21,9 @@ import {
 // Confirming the tokens.
 //
 // Startup asks Slack whose tokens the bridge holds before it reads or sends anything. The first
-// answer records the installation, and every later start must agree with it. An answer the bridge
-// can't get or can't read decides nothing.
+// answer records the installation, and every later start must agree with it. No other app the
+// bridge hosts may hold the Slack app it names. An answer the bridge can't get or can't read
+// decides nothing.
 
 /** What Slack said about the tokens. */
 export type IdentityVerdict =
@@ -34,11 +36,15 @@ export type IdentityVerdict =
   /** Slack couldn't be asked, or its answer couldn't be read. `retryAt` is when Slack said to ask again. */
   | { kind: "unavailable"; detail: string; retryAt: number | null };
 
-/** Asks Slack whose tokens these are, and records or reactivates the installation they confirm. */
+/**
+ * Asks Slack whose tokens these are, and records or reactivates the installation they confirm once
+ * `claim` gives this app their Slack app.
+ */
 export async function confirmIdentity(
   database: BridgeDatabase,
   bot: BotClient,
   tokens: { botToken: string; appToken: string },
+  claim: ClaimSlackApp,
 ): Promise<IdentityVerdict> {
   const rotating = tokensRefusal(tokens);
   if (rotating !== null) return { kind: "refused", refusal: rotating };
@@ -64,6 +70,8 @@ export async function confirmIdentity(
     if (stored?.status === "uninstalled") return uninstalled;
     const refusal = stored === null ? null : identityRefusal(stored, found);
     if (refusal !== null) return { kind: "refused", refusal };
+    const heldBy = claim(found.appId);
+    if (heldBy !== null) return { kind: "refused", refusal: { reason: "duplicate_app", heldBy } };
     if (stored === null) await recordInstallation(transaction, found);
     await reactivateInstallation(transaction);
     const installation: Installation = { ...found, status: "active" };

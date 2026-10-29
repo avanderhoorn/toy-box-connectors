@@ -1,53 +1,33 @@
 // Bridge startup and shutdown.
 //
 // At a terminal, `serve` first asks the owner for any Slack token or passphrase
-// it's missing. The bridge then prepares its data folder, reads its settings,
-// takes the single-bridge lock, and only then opens `bridge.db`, so a second
-// bridge stops before it opens anything.
-// Then it starts its work: forgetting hourly what it no longer keeps, connecting
-// to Slack once both tokens are set, waking leads, and answering commands on its
-// socket.
+// it's missing. The bridge then prepares its data folder, reads its settings
+// and every app's folder and tokens, and takes each app's lock, the default
+// app's first, before it opens any app's `bridge.db`, so a second bridge stops
+// before it opens anything. It opens every app before it starts any, so each
+// `bridge.db` is open and recovered, and the bridge knows which Slack app each
+// one records, before anything talks to Slack.
+// Then it starts each app's work, and answers commands on its socket.
 // It lets go of everything in the reverse order, so it stops taking commands
-// before anything they use stops.
+// before anything they use stops, and lets go of the default app's lock last.
 //
-// A part that fails in a way retrying can't fix, such as a storage error,
-// reports it through one fatal path, and the bridge exits with code 1, so a
-// login job starts it afresh and an owner at a terminal sees why it stopped.
+// A part that fails in a way retrying can't fix, such as a storage error in
+// any app, reports it through one fatal path, and the bridge exits with code 1,
+// so a login job starts it afresh and an owner at a terminal sees why it
+// stopped.
 
-import { DEFAULT_APP } from "@bridge/model/apps";
+import { claimSlackApp, recordedHolders, type ClaimSlackApp } from "@bridge/model/claims";
 import { askForMissingCredentials } from "@commands/client/firstRun";
 import { installSkill } from "@commands/client/skill";
 import { resolveSessionId } from "@commands/model/callers";
-import { unconfiguredSlack, type SlackState } from "@commands/model/status";
-import { activityCommand, markReadCommand } from "@commands/server/activity";
-import { dismissCommand } from "@commands/server/dismiss";
-import { inboxCommand } from "@commands/server/inbox";
-import { publishCommand, replyCommand, retractCommand } from "@commands/server/posts";
 import { serveCommands } from "@commands/server/serve";
-import {
-  allowCommand,
-  denyCommand,
-  linkCommand,
-  pauseCommand,
-  resumeCommand,
-  unlinkCommand,
-} from "@commands/server/setup";
-import { statusCommand } from "@commands/server/status";
-import { startOutboxWorker, type OutboxWorker } from "@outbox/server";
-import { recoverOutboxAttempts } from "@outbox/server/database";
-import { createBotClient, type BotClient } from "@slackapi/server/botClient";
-import { wakeLead } from "@toybox/server";
-import { readToyBoxChannel } from "@toybox/server/api";
-import { startWakeScheduler, type WakeScheduler } from "@wakes/server";
 import { log } from "@/shared/log";
-import { locateApp, readAppTokens } from "./apps";
+import { listApps, readAppTokens } from "./apps";
 import { prepareDataFolder, resolveDataFolder } from "./dataFolder";
-import { openBridgeDatabase, type BridgeDatabase } from "./database";
 import { readCredentialsFile, resolveBridgeSettings } from "./environment";
-import { acquireBridgeLock } from "./lock";
+import { openApp, type HostedApp } from "./hostedApp";
+import { acquireBridgeLock, type BridgeLock } from "./lock";
 import { BridgeRefusedError } from "./refusal";
-import { startRetention } from "./retention";
-import { startSlackSupervisor, type SlackSupervisor } from "./slack";
 import { commandSocketPath, listenForCommands, type CommandSocket } from "./socket";
 
 export interface Bridge {
@@ -93,109 +73,64 @@ export async function startBridge(
 ): Promise<Bridge> {
   prepareDataFolder(dataFolder);
   const settings = resolveBridgeSettings(env, readCredentialsFile(dataFolder));
-  const app = locateApp(dataFolder, DEFAULT_APP);
-  const tokens = readAppTokens(app, env);
-  const lock = await acquireBridgeLock(app.lock);
+  const listed = listApps(dataFolder).map((app) => ({ app, tokens: readAppTokens(app, env) }));
   const failure = Promise.withResolvers<unknown>();
-  let database: BridgeDatabase | undefined;
-  let scheduler: WakeScheduler | undefined;
-  let slack: SlackSupervisor | undefined;
+  const locks: BridgeLock[] = [];
+  const apps: HostedApp[] = [];
   let socket: CommandSocket | undefined;
-  let outbox: OutboxWorker | undefined;
-  let retention: Timer | undefined;
 
   async function stop() {
-    clearInterval(retention);
     try {
       await socket?.stop();
-      await scheduler?.stop();
-      await outbox?.stop();
-      await slack?.stop();
-      await database?.close();
+      await settle(apps.map((app) => app.stop()));
     } finally {
-      await lock.release();
+      // A bridge starting meanwhile takes the default app's lock first, so it stops there.
+      for (const lock of locks.toReversed()) await lock.release();
     }
   }
 
   try {
-    database = await openBridgeDatabase(app.database);
-    await database.write((tx) => recoverOutboxAttempts(tx, Date.now()));
-    retention = await startRetention(database, failure.resolve);
-    // Slack is supervised exactly when both tokens are set.
-    const slackState = (): SlackState => unconfiguredSlack(tokens, app.name) ?? slack!.state();
-    const { botToken, appToken } = tokens;
-    const { slackApiUrl } = settings;
-    let bot: BotClient | null = null;
-    if (botToken && appToken) {
-      bot = createBotClient(database, botToken, {
-        slackApiUrl,
-        onAuthFailed: (error) => slack?.botRejected(error),
-      });
-      slack = startSlackSupervisor(database, bot, {
-        app: app.name,
-        tokens: { botToken, appToken },
-        slackApiUrl,
-        onChange: () => scheduler?.reconsider(),
-        onError: failure.resolve,
-        timings: settings.wakeTimings,
-      });
+    for (const { app } of listed) locks.push(await acquireBridgeLock(app.lock));
+    for (const { app, tokens } of listed) {
+      apps.push(await openApp(app, tokens, { settings, onError: failure.resolve }));
     }
-    const origin = settings.toyBoxOrigin;
-    scheduler = startWakeScheduler(database, (channelId) => wakeLead(origin, channelId), {
-      onError: failure.resolve,
-      timings: settings.wakeTimings,
-    });
-    if (bot) {
-      outbox = startOutboxWorker(database, bot, {
-        ready: () => slackState().connection === "connected",
-        onChange: () => scheduler?.reconsider(),
-        onError: failure.resolve,
-      });
-    }
-    const workspaceUrl = () => slack?.workspaceUrl() ?? null;
-    const setup = { database, bot, toyBoxOrigin: origin };
+    const claims = slackAppClaims(apps);
+    const running = apps.map((app) => app.start({ claim: claims(app.name) }));
+    // listApps puts the default app first.
+    const main = running[0]!;
     socket = listenForCommands(
       commandSocketPath(dataFolder),
       serveCommands(
-        database,
-        {
-          inbox: inboxCommand({
-            database,
-            workspaceUrl,
-            acknowledge: (requests) => outbox?.acknowledge(requests),
-          }),
-          dismiss: dismissCommand({ database }),
-          reply: replyCommand({ database, outbox }),
-          activity: activityCommand({ database, workspaceUrl }),
-          "mark-read": markReadCommand({ database }),
-          publish: publishCommand({
-            database,
-            routines: async (channelId) =>
-              (await readToyBoxChannel(origin, channelId))?.routines ?? null,
-            outbox,
-          }),
-          retract: retractCommand({ database, bot }),
-          status: statusCommand({
-            database,
-            slack: slackState,
-            workspaceUrl,
-            timings: settings.wakeTimings,
-          }),
-          link: linkCommand(setup),
-          allow: allowCommand(setup),
-          deny: denyCommand(setup),
-          pause: pauseCommand(setup),
-          resume: resumeCommand(setup),
-          unlink: unlinkCommand(setup),
-        },
+        main.database,
+        main.handlers,
         () => readCredentialsFile(dataFolder).OWNER_PASSPHRASE_HASH ?? null,
-        () => scheduler?.reconsider(),
+        () => main.onChange(),
       ),
     );
     return { failed: failure.promise, stop };
   } catch (error) {
     await stop();
     throw error;
+  }
+}
+
+/**
+ * Each app's claim on the Slack app Slack confirms its tokens for, where `apps` are in start order.
+ * The claims share one record of which app holds each Slack app, for as long as the bridge runs.
+ */
+function slackAppClaims(apps: readonly HostedApp[]): (app: string) => ClaimSlackApp {
+  let holders = recordedHolders(apps.map(({ name, slackAppId }) => ({ app: name, slackAppId })));
+  return (app) => (slackAppId) => {
+    const claimed = claimSlackApp(holders, slackAppId, app);
+    holders = claimed.holders;
+    return claimed.heldBy;
+  };
+}
+
+/** Waits for all of `work` to finish, and then throws the first error any of it threw. */
+async function settle(work: readonly Promise<void>[]): Promise<void> {
+  for (const result of await Promise.allSettled(work)) {
+    if (result.status === "rejected") throw result.reason;
   }
 }
 
