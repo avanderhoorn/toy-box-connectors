@@ -10,7 +10,7 @@ import {
   type WebAPICallResult,
   type WebClientOptions,
 } from "@slack/web-api";
-import { log } from "@/shared/log";
+import { log as bridgeLog, type Log } from "@/shared/log";
 import { isAuthFailure, isErrorCode, isRateLimit, isRequestFault } from "../model/errors";
 import { markAuthFailed } from "./installation";
 
@@ -35,13 +35,15 @@ export type BotClientOptions = {
   timeoutMs?: number;
   onAuthFailed?: (error: string) => void;
   now?: () => number;
+  /** Where the client says what Slack refused, the bridge's log unless set. */
+  log?: Log;
 };
 
 /** One client shares method cooldowns. Only its caller may decide to retry a write. */
 export function createBotClient(
   database: BridgeDatabase,
   token: string,
-  { slackApiUrl, timeoutMs, onAuthFailed, now = Date.now }: BotClientOptions = {},
+  { slackApiUrl, timeoutMs, onAuthFailed, now = Date.now, log = bridgeLog }: BotClientOptions = {},
 ): BotClient {
   const client = new WebClient(token, {
     ...oneAttemptOptions({ slackApiUrl, timeoutMs }),

@@ -11,7 +11,7 @@ import { forgetOldActivity } from "@activity/server/ledger";
 import { forgetOldPosts } from "@outbox/server/database";
 import { forgetFinishedRequests } from "@requests/server/database";
 import { forgetUnallowedPeople } from "@slackapi/server/users";
-import { log } from "@/shared/log";
+import { log as bridgeLog, type Log } from "@/shared/log";
 import type { BridgeDatabase } from "./database";
 
 /** Forgets everything the bridge no longer keeps at `now`. */
@@ -23,10 +23,14 @@ export async function applyRetention(transaction: Bun.SQL, now: number): Promise
   await forgetUnallowedPeople(transaction);
 }
 
-/** Applies retention now and then hourly, until the timer it returns is cleared. */
+/**
+ * Applies retention now and then hourly, until the timer it returns is cleared, saying in `log` why
+ * a later pass failed.
+ */
 export async function startRetention(
   database: BridgeDatabase,
   onError: (error: unknown) => void,
+  log: Log = bridgeLog,
 ): Promise<Timer> {
   const apply = () => database.write((transaction) => applyRetention(transaction, Date.now()));
   await apply();

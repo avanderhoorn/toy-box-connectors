@@ -11,7 +11,7 @@ import {
 import type { BotClient, CallFailure } from "@slackapi/server/botClient";
 import { openSlackSocket, type SlackSocket } from "@slackapi/server/socketMode";
 import { retryDelay, type WakeTimings } from "@wakes/model";
-import { log } from "@/shared/log";
+import { log as bridgeLog, type Log } from "@/shared/log";
 import { sleep } from "@/shared/sleep";
 import type { BridgeDatabase } from "./database";
 import { confirmIdentity } from "./identity";
@@ -58,6 +58,8 @@ export type SlackSupervisorOptions = {
   /** How long losing a connection Slack said hello on waits to reconnect. */
   reconnectDelay?: number;
   helloTimeoutMs?: number;
+  /** Where the supervisor says what it's doing, the bridge's log unless set. */
+  log?: Log;
 };
 
 /** How one connection ended, which decides how long to wait before the next, or null for none. */
@@ -77,17 +79,19 @@ export function startSlackSupervisor(
     timings,
     reconnectDelay = 1_000,
     helloTimeoutMs,
+    log = bridgeLog,
   }: SlackSupervisorOptions,
 ): SlackSupervisor {
   const stopping = new AbortController();
   const { signal } = stopping;
-  const catchUp = startCatchUp(database, bot, { onChange, onError: halt, now, timings });
+  const catchUp = startCatchUp(database, bot, { onChange, onError: halt, now, timings, log });
   const receiver = startSlackReceiver(database, {
     onChange,
     onMissed: () => catchUp.poke(),
     onUninstalled: () => refuse({ reason: "uninstalled" }),
     onError: halt,
     now,
+    log,
   });
   let socket: SlackSocket | undefined;
   let workspace: string | null = null;

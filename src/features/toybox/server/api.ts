@@ -11,7 +11,7 @@ import {
   type RoutineRunOutcome,
   type ToyBoxChannel,
 } from "@toybox/model";
-import { log } from "@/shared/log";
+import { log as bridgeLog, type Log } from "@/shared/log";
 import { readServerSentEvents } from "./sse";
 
 // Toy Box answers on loopback, so a call this slow has failed rather than queued.
@@ -57,6 +57,7 @@ export async function runToyBoxRoutine(
   origin: URL,
   channelId: string,
   routineId: string,
+  log: Log = bridgeLog,
 ): Promise<RoutineRunOutcome> {
   const response = await fetch(channelsUrl(origin, channelId, "routines", routineId, "run"), {
     method: "POST",

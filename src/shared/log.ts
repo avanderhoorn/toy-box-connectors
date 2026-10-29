@@ -5,6 +5,9 @@
 // bridge, where console.error carried on. So `log` lets it fail quietly.
 process.stderr.on("error", () => {});
 
+/** Writes one line to the bridge's log, as `log` does. */
+export type Log = (...parts: unknown[]) => void;
+
 /** Writes `parts` to stderr as one line, strings as they are and anything else as Bun shows it. */
 export function log(...parts: unknown[]): void {
   const shown = parts.map((part) => (typeof part === "string" ? part : Bun.inspect(part)));

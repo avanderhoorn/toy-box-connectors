@@ -15,7 +15,7 @@ import type { BotClient } from "@slackapi/server/botClient";
 import { fetchHistoryPage, fetchThreadPage } from "@slackapi/server/history";
 import { markConnected, readConnectedAt, readInstallation } from "@slackapi/server/installation";
 import { defaultWakeTimings, retryDelay, type WakeTimings } from "@wakes/model";
-import { log } from "@/shared/log";
+import { log as bridgeLog, type Log } from "@/shared/log";
 import { sleep } from "@/shared/sleep";
 import { ingestMessageEvent } from "./ingest";
 
@@ -43,6 +43,8 @@ export type CatchUpOptions = {
   now?: () => number;
   /** A run that can't finish is retried on this backoff. */
   timings?: WakeTimings;
+  /** Where catching up says what it's doing, the bridge's log unless set. */
+  log?: Log;
 };
 
 /** Why a run can't finish, which the next one may not hit. */
@@ -67,6 +69,7 @@ export function startCatchUp(
     onError = () => {},
     now = Date.now,
     timings = defaultWakeTimings,
+    log = bridgeLog,
   }: CatchUpOptions = {},
 ): CatchUp {
   const stopping = new AbortController();

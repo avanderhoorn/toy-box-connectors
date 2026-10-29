@@ -1,7 +1,7 @@
 import type { BridgeDatabase } from "@bridge/server/database";
 import type { StoredRequest } from "@requests/server/database";
 import type { BotClient } from "@slackapi/server/botClient";
-import { log } from "@/shared/log";
+import { log as bridgeLog, type Log } from "@/shared/log";
 import { readDueReconciliations, readReadyOutbox } from "./database";
 import { createPostDelivery } from "./posts";
 import { createReconciliation } from "./reconcile";
@@ -21,11 +21,14 @@ export function startOutboxWorker(
     onChange,
     onError,
     now = Date.now,
+    log = bridgeLog,
   }: {
     ready: () => boolean;
     onChange: () => void;
     onError: (error: unknown) => void;
     now?: () => number;
+    /** Where the worker says why it stopped, the bridge's log unless set. */
+    log?: Log;
   },
 ): OutboxWorker {
   const posts = createPostDelivery(database, bot, { now });

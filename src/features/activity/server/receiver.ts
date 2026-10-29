@@ -1,5 +1,5 @@
 import { acksInTime, lifecycleAction, type SlackDelivery } from "@activity/model/receiver";
-import { log } from "@/shared/log";
+import { log as bridgeLog, type Log } from "@/shared/log";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { recordUninstall, suspendChannelLinks } from "@links/server/lifecycle";
@@ -47,6 +47,8 @@ export type SlackReceiverOptions = {
   /** Called when the receiver stops on an error, such as storage failing. */
   onError?: (error: unknown) => void;
   now?: () => number;
+  /** Where the receiver says what it's doing, the bridge's log unless set. */
+  log?: Log;
 };
 
 /** What a delivery did, which decides what follows its commit. */
@@ -63,6 +65,7 @@ export function startSlackReceiver(
     onUninstalled = () => {},
     onError = () => {},
     now = Date.now,
+    log = bridgeLog,
   }: SlackReceiverOptions = {},
 ): SlackReceiver {
   const queue = new SerialTaskQueue();
@@ -76,7 +79,7 @@ export function startSlackReceiver(
     if (stopped) return;
     let taken: Taken;
     try {
-      taken = await database.write((transaction) => take(transaction, delivery, now()));
+      taken = await database.write((transaction) => take(transaction, delivery, now(), log));
     } catch (error) {
       fail(error);
       return;
@@ -121,18 +124,23 @@ export function startSlackReceiver(
  * Takes a delivery. Nothing is taken before the bridge knows who it is, or once the app is
  * uninstalled. Taking a redelivery again changes nothing.
  */
-async function take(transaction: Bun.SQL, delivery: SlackDelivery, now: number): Promise<Taken> {
+async function take(
+  transaction: Bun.SQL,
+  delivery: SlackDelivery,
+  now: number,
+  log: Log,
+): Promise<Taken> {
   const installation = await readInstallation(transaction);
   if (installation === null || installation.status === "uninstalled") return unchanged;
   switch (delivery.kind) {
     case "event":
-      return takeEvent(transaction, delivery.callback, installation, now);
+      return takeEvent(transaction, delivery.callback, installation, now, log);
     case "rate_limited":
       await noteGap(transaction, now, now + 60_000);
       log("Slack held events back for a minute, so the bridge will catch up on them.");
       return missed;
     case "malformed":
-      return takeMalformed(transaction, "a frame", delivery.issues, now);
+      return takeMalformed(transaction, "a frame", delivery.issues, now, log);
     case "other":
       return unchanged;
   }
@@ -143,11 +151,13 @@ async function takeEvent(
   callback: EventCallback,
   installation: Installation,
   now: number,
+  log: Log,
 ): Promise<Taken> {
   if (!isForInstallation(callback, installation)) return unchanged;
   const event = readSlackEvent(callback.event);
   if (event.kind === "malformed") {
-    return takeMalformed(transaction, `an event of type ${callback.event.type}`, event.issues, now);
+    const what = `an event of type ${callback.event.type}`;
+    return takeMalformed(transaction, what, event.issues, now, log);
   }
   const taken =
     event.kind === "message"
@@ -188,6 +198,7 @@ async function takeMalformed(
   what: string,
   issues: string[],
   now: number,
+  log: Log,
 ): Promise<Taken> {
   await noteGap(transaction, now, now);
   log(`Couldn't read ${what} from Slack, so the bridge will catch up on it: ${issues.join(", ")}`);

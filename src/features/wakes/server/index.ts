@@ -9,7 +9,7 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { expireRequests } from "@requests/server/lifecycle";
 import { REQUESTS_COMMAND, type RoutineRunOutcome } from "@toybox/model";
 import { decideWake, defaultWakeTimings, type WakeTimings } from "@wakes/model";
-import { log } from "@/shared/log";
+import { log as bridgeLog, type Log } from "@/shared/log";
 import { pruneWakes, readLinkWakes, recordWake } from "./database";
 
 export interface WakeScheduler {
@@ -24,6 +24,8 @@ export type WakeSchedulerOptions = {
   onError?: (error: unknown) => void;
   now?: () => number;
   timings?: WakeTimings;
+  /** Where the scheduler says what it's doing, the bridge's log unless set. */
+  log?: Log;
 };
 
 /** Runs the routine that wakes the lead of a Toy Box channel. */
@@ -42,7 +44,12 @@ const unwoken: Record<Exclude<RoutineRunOutcome, "ran">, string> = {
 export function startWakeScheduler(
   database: BridgeDatabase,
   wakeLead: WakeLead,
-  { onError = () => {}, now = Date.now, timings = defaultWakeTimings }: WakeSchedulerOptions = {},
+  {
+    onError = () => {},
+    now = Date.now,
+    timings = defaultWakeTimings,
+    log = bridgeLog,
+  }: WakeSchedulerOptions = {},
 ): WakeScheduler {
   let timer: Timer | undefined;
   let deciding: Promise<void> | undefined;
