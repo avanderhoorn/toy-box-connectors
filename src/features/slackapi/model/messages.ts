@@ -75,7 +75,7 @@ export type SlackMessage = {
   version: SlackTs;
 };
 export type SlackMessageEvent =
-  | { kind: "message"; message: SlackMessage; edit: boolean }
+  | { kind: "message"; message: SlackMessage }
   | { kind: "deleted"; channelId: string; ts: SlackTs }
   | { kind: "replied" };
 type NormalizeContext = Pick<Installation, "botUserId" | "botId">;
@@ -87,22 +87,13 @@ export function normalizeMessageEvent(
   if (event.shape === "deleted")
     return { kind: "deleted", channelId: event.channel, ts: event.deletedTs };
   if (event.shape === "replied") return { kind: "replied" };
-  return snapshot(event.channel, event.message, context, event.shape === "changed");
+  return normalizeHistoryMessage(event.channel, event.message, context);
 }
 
 export function normalizeHistoryMessage(
   channelId: string,
   payload: SlackMessagePayload,
   context: NormalizeContext,
-): SlackMessageEvent {
-  return snapshot(channelId, payload, context, false);
-}
-
-function snapshot(
-  channelId: string,
-  payload: SlackMessagePayload,
-  context: NormalizeContext,
-  edit: boolean,
 ): SlackMessageEvent {
   // A deleted root with replies is a hidden tombstone, not an ordinary edit.
   if (payload.subtype === "tombstone" || isWithdrawn(payload))
@@ -115,7 +106,6 @@ function snapshot(
   ].sort();
   return {
     kind: "message",
-    edit,
     message: {
       channelId,
       ts: payload.ts,

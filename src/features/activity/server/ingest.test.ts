@@ -29,9 +29,9 @@ function ingest(database: BridgeDatabase, event: SlackMessageEvent) {
 test("only a linked channel's messages are stored, under their authors' own IDs, and a delete cancels the request it asked", async () => {
   const database = await openIngest();
   const elsewhere = askMessage("1700000200.000100", { channelId: "C-other" });
-  expect(await ingest(database, { kind: "message", message: elsewhere, edit: false })).toBe(false);
+  expect(await ingest(database, { kind: "message", message: elsewhere })).toBe(false);
   const aliased = { ...ask, userId: "W-owner" };
-  expect(await ingest(database, { kind: "message", message: aliased, edit: false })).toBe(true);
+  expect(await ingest(database, { kind: "message", message: aliased })).toBe(true);
   expect(await ingest(database, { kind: "replied" })).toBe(false);
   expect(await ingest(database, { kind: "deleted", channelId: "C-link", ts: ask.ts })).toBe(true);
 

@@ -31,7 +31,7 @@ test("roots, replies and edits retain exact identity and routing context", () =>
       hidden: true,
       message: edited,
     }),
-  ).toMatchObject({ edit: true, message: { version: edited.edited.ts } });
+  ).toMatchObject({ message: { version: edited.edited.ts } });
   expect(normalizeHistoryMessage("C1", slackMessageSchema.parse(edited), context)).toMatchObject({
     message: { channelId: "C1", version: edited.edited.ts },
   });
