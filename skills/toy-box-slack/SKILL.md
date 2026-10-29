@@ -28,6 +28,7 @@ A request is a question or an ask from someone on the allowlist, usually a menti
 
 Each request takes one reply. An edit or a follow-up before you reply changes the request, and reply refuses until inbox shows you the new text. After you reply, edits are ignored and a follow-up comes back as a new request, whose thread shows your answer, so answer it in that light. If your reply doesn't post, inbox shows the request again for you to answer.
 
+- A long thread shows its first message, the request's own messages and the newest 20 replies, and a long message its first 4,000 characters, each saying how much it left out. Answer from what inbox shows, and when the answer depends on what it left out, say so rather than guess.
 - Reply yourself, even when a member did the work. Members can't post in Slack.
 - `toy-box-slack dismiss r14 --reason "<why>"` ends a request that needs no answer, such as a thank-you. It posts nothing.
 - Slack questions don't need channel tasks. Add one only for substantial work the owner asked for.

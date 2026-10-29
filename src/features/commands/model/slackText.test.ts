@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  cutText,
   fenceFor,
   oneLine,
   personName,
@@ -130,6 +131,15 @@ test("oneLine cuts between graphemes", () => {
   expect(oneLine("ab👨‍👩‍👧 cd", 6)).toBe("ab…");
   expect(oneLine("cafe\u0301 au lait", 5)).toBe("caf…");
   expect(oneLine("short", 5)).toBe("short");
+});
+
+test("cutText keeps whole graphemes up to its limit, and counts the ones it cut", () => {
+  const start = "a".repeat(3_999);
+  expect(cutText(`${start}a`, 4_000)).toEqual({ text: `${start}a`, cut: 0 });
+  const family = "👨‍👩‍👧".repeat(1_000);
+  expect(cutText(family, 4_000)).toEqual({ text: family, cut: 0 });
+  expect(cutText(`${start}ab`, 4_000)).toEqual({ text: `${start}a`, cut: 1 });
+  expect(cutText(`${start}👨‍👩‍👧bc`, 4_000)).toEqual({ text: `${start}👨‍👩‍👧`, cut: 2 });
 });
 
 test("fenceFor is longer than any run of backticks in the text", () => {

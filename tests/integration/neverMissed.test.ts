@@ -6,7 +6,7 @@ import { askMessage } from "@slackapi/model/testFixtures";
 import type { SlackTs } from "@slackapi/model/ts";
 import { markConnected } from "@slackapi/server/installation";
 import { withDatabase } from "./bridgeProcess";
-import { ALICE, BOT, connectedBridge, posted, said, timestamps } from "./connectedBridge";
+import { ALICE, BOT, MALLORY, connectedBridge, posted, said, timestamps } from "./connectedBridge";
 import { waitFor } from "./waitFor";
 
 test("an event counts when Slack delivered it to the bot in its workspace, wherever it happened", async () => {
@@ -164,4 +164,32 @@ test("catching up waits out a rate limit, and stores a channel only once it has 
       "Caught up on messages the bridge may have missed.",
     ),
   });
+}, 15_000);
+
+test("a long thread reaches the lead cut down, saying how much it left out", async () => {
+  const { inbox, post, edit, stop, saying } = await connectedBridge();
+  const [rootTs, ...replyTs] = timestamps(31);
+  const [editedTs] = timestamps(1, Date.now());
+  // Alice pastes a long log, asks the bot in her 5th reply and follows up in her 8th, and Mallory,
+  // whom the link doesn't allow, says the rest.
+  await post(said(ALICE, rootTs, "migration 42 failed\n".repeat(250)));
+  const replies = replyTs.map((ts, index) => {
+    const text = index === 4 ? `<@${BOT}> why did the deploy fail?` : `Reply ${index}`;
+    return said(index < 5 || index === 7 ? ALICE : MALLORY, ts, text, { thread_ts: rootTs });
+  });
+  for (const reply of replies) await post(reply);
+
+  const [request] = (await inbox()).requests;
+  const shown = [rootTs, replyTs[4]!, replyTs[7]!, ...replyTs.slice(10)];
+  expect(request).toMatchObject({ id: 1, messages: shown.map((ts) => ({ ts })) });
+  expect(request!.messages[0]!.cut).toBe(1_000);
+  expect(request!.leftOut).toEqual({ [replyTs[4]!]: 4, [replyTs[7]!]: 2, [replyTs[10]!]: 2 });
+
+  // The follow-up is older than the newest replies, but inbox still shows its edit, so the lead
+  // can't answer a change it never read.
+  await edit(replies[7]!, "It's the 2pm one.", editedTs);
+  const [changed] = (await inbox()).requests;
+  expect(changed).toMatchObject({ id: 1, attention: "updated" });
+  expect(changed!.messages[2]).toMatchObject({ ts: replyTs[7], text: "It's the 2pm one." });
+  expect(await stop()).toEqual({ code: 0, stderr: saying() });
 }, 15_000);

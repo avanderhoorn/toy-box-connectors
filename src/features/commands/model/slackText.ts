@@ -72,6 +72,13 @@ export function oneLine(text: string, limit: number): string {
   return cut(neutralizeMentions(flat.trim().replaceAll("`", "'")), limit);
 }
 
+/** `text` cut after `limit` graphemes, so an emoji stays whole, and how many graphemes it cut. */
+export function cutText(text: string, limit: number): { text: string; cut: number } {
+  const characters = Array.from(graphemes.segment(text), ({ segment }) => segment);
+  if (characters.length <= limit) return { text, cut: 0 };
+  return { text: characters.slice(0, limit).join(""), cut: characters.length - limit };
+}
+
 /** A code fence longer than any run of backticks in `text`, so nothing in it can close the fence. */
 export function fenceFor(text: string): string {
   let longest = 0;

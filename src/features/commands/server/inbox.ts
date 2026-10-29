@@ -5,12 +5,15 @@ import type { AuthorRole } from "@activity/model/ledger";
 import type { BridgeDatabase } from "@bridge/server/database";
 import {
   inboxOrder,
+  inboxThread,
+  MESSAGE_LIMIT,
   presentInbox,
   type Inbox,
   type InboxMessage,
   type InboxRequest,
 } from "@commands/model/inbox";
 import {
+  cutText,
   mentionedUsers,
   permalink,
   personName,
@@ -84,7 +87,11 @@ async function readInboxRequest(
       AND (ts = ${request.rootTs} OR thread_ts = ${request.rootTs})
     ORDER BY ts
   `;
-  const names = await readPersonNames(sql, thread, request.requesterUserId);
+  const own = await sql<{ ts: string }[]>`
+    SELECT ts FROM request_messages WHERE request_id = ${request.id}
+  `;
+  const { messages, leftOut } = inboxThread(thread, new Set(own.map(({ ts }) => ts)));
+  const names = await readPersonNames(sql, messages, request.requesterUserId);
   return {
     id: request.id,
     requester: namedPerson(names, request.requesterUserId),
@@ -93,11 +100,12 @@ async function readInboxRequest(
     createdAt: request.createdAt,
     touchedAt: request.touchedAt,
     permalink: permalink(workspaceUrl, request),
-    messages: thread.map((message) => messageFromRow(message, names)),
+    messages: messages.map((message) => messageFromRow(message, names)),
+    leftOut,
   };
 }
 
-/** `row` as the lead reads it, with people named as `names` holds them. */
+/** `row` as the lead reads it, with people named as `names` holds them, and long text cut. */
 export function messageFromRow(
   { ts, userId, role, edited, text }: MessageRow,
   names: SlackNames,
@@ -107,7 +115,7 @@ export function messageFromRow(
     author: namedPerson(names, userId),
     role,
     edited: edited === 1,
-    text: renderSlackText(text, names),
+    ...cutText(renderSlackText(text, names), MESSAGE_LIMIT),
   };
 }
 

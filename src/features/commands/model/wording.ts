@@ -1,7 +1,7 @@
 // Every command gives time to the minute, so a span reads alike whenever the CLI prints it.
 
-export function count(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+export function count(n: number, noun: string, plural = `${noun}s`): string {
+  return `${n} ${n === 1 ? noun : plural}`;
 }
 
 export function ago(milliseconds: number): string {
