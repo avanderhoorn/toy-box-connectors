@@ -57,7 +57,7 @@ export function statusCommand({
         }
         const unconfirmed: UnconfirmedPost[] = [];
         for (const post of await sql<Omit<UnconfirmedPost, "permalink">[]>`
-          SELECT number AS post, unknown_since AS since, request_id AS request, series,
+          SELECT number AS post, attempt_started_at AS since, request_id AS request, series,
             scheduled_at AS scheduledAt
           FROM outbox WHERE link_id = ${id} AND state = 'delivery_unknown' ORDER BY number
         `) {

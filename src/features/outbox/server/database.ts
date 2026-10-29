@@ -37,7 +37,6 @@ export type OutboxItem = {
   attempts: number;
   attemptStartedAt: number | null;
   nextAttemptAt: number | null;
-  unknownSince: number | null;
   reconcilePass: number;
   slackTs: SlackTs | null;
   error: string | null;
@@ -60,7 +59,6 @@ type OutboxRow = {
   attempts: number;
   attempt_started_at: number | null;
   next_attempt_at: number | null;
-  unknown_since: number | null;
   reconcile_pass: number;
   slack_ts: SlackTs | null;
   error: string | null;
@@ -214,7 +212,6 @@ export async function settleOutboxAttempt(
   const [row] = await tx<OutboxRow[]>`
     UPDATE outbox SET state = ${outcome.state}, slack_ts = ${ts},
       error = ${outcome.state === "sent" ? null : outcome.error}, next_attempt_at = ${next},
-      unknown_since = ${unknown ? (item.unknownSince ?? now) : null},
       updated_at = ${now}
     WHERE id = ${item.id} AND state = ${item.state} AND state IN ('sending', 'delivery_unknown')
       AND (state = 'sending' OR ${outcome.state} = 'sent')
@@ -261,8 +258,8 @@ export async function advanceReconciliation(
 
 export async function recoverOutboxAttempts(tx: Bun.SQL, now: number): Promise<string[]> {
   const rows = await tx<{ id: string }[]>`
-    UPDATE outbox SET state = 'delivery_unknown', unknown_since = ${now},
-      error = 'interrupted_send', next_attempt_at = attempt_started_at + 60000, updated_at = ${now}
+    UPDATE outbox SET state = 'delivery_unknown', error = 'interrupted_send',
+      next_attempt_at = attempt_started_at + 60000, updated_at = ${now}
     WHERE state = 'sending' RETURNING id
   `;
   return rows.map((row) => row.id);
@@ -364,7 +361,6 @@ function outboxItem(row: OutboxRow): OutboxItem {
     attempts: row.attempts,
     attemptStartedAt: row.attempt_started_at,
     nextAttemptAt: row.next_attempt_at,
-    unknownSince: row.unknown_since,
     reconcilePass: row.reconcile_pass,
     slackTs: row.slack_ts,
     error: row.error,

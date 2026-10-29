@@ -78,7 +78,6 @@ test("accepted then deleted posts remain unknown after two clean misses, and fai
   for (const message of world.slack.getMessages("C-link")) {
     if (message.bot_id === "B-bot") world.slack.deleteMessage("C-link", message.ts);
   }
-  const unknownSince = (await world.read(item.id))!.unknownSince;
   const checks = createReconciliation(world.database, world.bot, { now: world.now });
   world.advance(60_000);
   world.slack.failNext("conversations.history", { retryAfter: 60 });
@@ -92,7 +91,6 @@ test("accepted then deleted posts remain unknown after two clean misses, and fai
     state: "delivery_unknown",
     reconcilePass: 2,
     nextAttemptAt: null,
-    unknownSince,
   });
   await expect(
     world.database.write((tx) => queuePublication(tx, input, world.now())),

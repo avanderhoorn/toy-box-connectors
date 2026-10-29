@@ -12,7 +12,7 @@ export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
         'queued', 'sending', 'sent', 'failed', 'delivery_unknown', 'retracted', 'cancelled'
       )),
       attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
-      attempt_started_at INTEGER, next_attempt_at INTEGER, unknown_since INTEGER,
+      attempt_started_at INTEGER, next_attempt_at INTEGER,
       reconcile_pass INTEGER NOT NULL DEFAULT 0 CHECK (reconcile_pass BETWEEN 0 AND 2),
       slack_ts TEXT, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
       UNIQUE(link_id, series, scheduled_at),

@@ -51,7 +51,7 @@ export type LinkStatus = {
 /** A post Slack never confirmed: an answer to a request, or a series' post for a scheduled run. */
 export type UnconfirmedPost = {
   post: number;
-  /** When the bridge stopped knowing whether it landed. */
+  /** When the bridge tried to post it. */
   since: number;
   request: number | null;
   /** The request's Slack link, or null when Slack hasn't said the workspace's URL. */

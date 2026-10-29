@@ -37,7 +37,7 @@ test("lists the posts Slack never confirmed, linking each answer to its request"
   const shown = async () =>
     (await status({}, { caller: { role: "lead", channelId: "toybox-link" }, at })).text;
   const notes = { kind: "publication", request_id: null, thread_ts: null, series: "notes" };
-  const unknown = { state: "delivery_unknown", unknown_since: at - 2 * HOUR };
+  const unknown = { state: "delivery_unknown", attempt_started_at: at - 2 * HOUR };
   await createStoredOutboxItem(database, 1, { ...notes, scheduled_at: 0, state: "sent" });
   await createStoredOutboxItem(database, 2, { ...notes, scheduled_at: at });
   expect(await shown()).not.toContain("- Posts");
