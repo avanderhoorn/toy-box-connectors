@@ -17,21 +17,21 @@ test("approving a link again makes it active with the new audience and settings"
   expect(stored).toMatchObject({ id: "link", status: "active", ...settings, approved });
 });
 
-test("a link whose Toy Box channel was deleted stays suspended for that until unlink", async () => {
+test("a link whose Slack channel has a new ID stays suspended for that until unlink", async () => {
   const database = await openTestDatabase();
   await createStoredLink(database, "link", {
     status: "suspended",
-    status_reason: "toybox_channel_deleted",
+    status_reason: "channel_id_changed",
   });
 
   const changed = await database.write(async (transaction) => {
     await pauseLink(transaction, "link", 60_000);
-    return suspendLink(transaction, "link", "bot_removed", 60_000);
+    return suspendLink(transaction, "link", "channel_not_found", 60_000);
   });
 
   expect(changed).toBe(false);
   expect(await database.read((sql) => sql`SELECT status, status_reason FROM links`)).toEqual([
-    { status: "suspended", status_reason: "toybox_channel_deleted" },
+    { status: "suspended", status_reason: "channel_id_changed" },
   ]);
 });
 

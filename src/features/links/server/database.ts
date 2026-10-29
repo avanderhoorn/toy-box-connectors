@@ -1,4 +1,5 @@
 import type { Audience } from "@links/model/audience";
+import type { SuspendReason } from "@links/model/status";
 import type { SlackTs } from "@slackapi/model/ts";
 
 // Stored links.
@@ -9,6 +10,8 @@ export type ChannelLink = {
   toyBoxChannelId: string;
   slackChannelId: string;
   status: "active" | "paused" | "suspended";
+  /** Why the bridge suspended the link, while it's suspended. */
+  statusReason: SuspendReason | null;
   requestMode: "mention" | "all";
   observe: "requesters" | "channel";
   linkedAtTs: SlackTs;
@@ -35,7 +38,8 @@ async function readLink(
 ): Promise<ChannelLink | null> {
   const [link] = await sql<(Omit<ChannelLink, "approved" | "allowlist"> & { approved: string })[]>`
     SELECT id, toybox_channel_id AS toyBoxChannelId, slack_channel_id AS slackChannelId, status,
-      request_mode AS requestMode, observe, linked_at_ts AS linkedAtTs, approved_audience AS approved
+      status_reason AS statusReason, request_mode AS requestMode, observe,
+      linked_at_ts AS linkedAtTs, approved_audience AS approved
     FROM links WHERE ${sql(column)} = ${channelId}
   `;
   if (!link) return null;

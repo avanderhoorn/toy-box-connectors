@@ -2,19 +2,16 @@ import type { ChannelSuspendReason } from "./audience";
 
 // Why a link is suspended.
 //
-// The bridge suspends a link when Slack or Toy Box makes continuing unsafe, and the link keeps its
-// settings and data until someone resumes or unlinks it. Resuming can widen who reads the lead
-// again, so only the owner can. A link whose Toy Box channel was deleted ends only with unlink, and
-// one whose Slack channel has a new ID only with unlink and then a link to the new ID. Each reason
-// says why after "suspended", and what ends it, for the banner and status.
+// The bridge suspends a link when Slack makes continuing unsafe, and the link keeps its settings
+// and data until someone resumes or unlinks it. Resuming can widen who reads the lead again, so
+// only the owner can. A link whose Slack channel has a new ID ends only with unlink and then a
+// link to the new ID. Each reason says why after "suspended", and what ends it, for the banner and
+// status.
 
 /** Why the bridge suspended a link. */
 export type SuspendReason =
-  /** Its Toy Box channel was deleted, which nothing but unlink ends. */
-  | "toybox_channel_deleted"
   /** Slack gave its channel a new ID, as it can when shared, which unlink and a new link end. */
-  | "channel_id_changed"
-  | ChannelSuspendReason;
+  "channel_id_changed" | ChannelSuspendReason;
 
 /** Why a link is suspended, as a clause that reads after "suspended", and what ends it. */
 export type Suspension = { because: string; fix: string };
@@ -22,10 +19,6 @@ export type Suspension = { because: string; fix: string };
 const resume = "then have the owner run `toy-box-slack resume`.";
 
 export const suspensions: Record<SuspendReason, Suspension> = {
-  toybox_channel_deleted: {
-    because: "because its Toy Box channel was deleted",
-    fix: "Run `toy-box-slack unlink` to remove the link.",
-  },
   channel_id_changed: {
     because: "because Slack gave its channel a new ID",
     fix: "Run `toy-box-slack unlink`, then have the owner link the channel again by its new ID.",

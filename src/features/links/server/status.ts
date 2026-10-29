@@ -5,8 +5,8 @@ import type { ChannelLink } from "./database";
 // A link's status.
 //
 // The owner's approval makes a link active. A lead or the operator pauses it, and the bridge
-// suspends it when Slack or Toy Box makes continuing unsafe. Either way it keeps its settings and
-// data until the owner resumes it, or until unlink deletes it.
+// suspends it when Slack makes continuing unsafe. Either way it keeps its settings and data until
+// the owner resumes it, or until unlink deletes it.
 
 /** A link as the owner approves it. */
 export type ApprovedLink = Pick<
@@ -49,8 +49,8 @@ export async function pauseLink(transaction: Bun.SQL, linkId: string, now: numbe
 }
 
 /**
- * Suspends the link for `reason`. A link already suspended for that reason, or because its Toy Box
- * channel was deleted, which only unlink ends, stays as it is. Returns whether anything changed.
+ * Suspends the link for `reason`. A link already suspended for that reason, or because Slack gave
+ * its channel a new ID, which only unlink ends, stays as it is. Returns whether anything changed.
  */
 export async function suspendLink(
   transaction: Bun.SQL,
@@ -61,7 +61,7 @@ export async function suspendLink(
   const suspended = await transaction`
     UPDATE links SET status = 'suspended', status_reason = ${reason}, updated_at = ${now}
     WHERE id = ${linkId} AND NOT (status = 'suspended'
-      AND (status_reason IS ${reason} OR status_reason IS 'toybox_channel_deleted'))
+      AND (status_reason IS ${reason} OR status_reason IS 'channel_id_changed'))
     RETURNING id
   `;
   return suspended.length > 0;

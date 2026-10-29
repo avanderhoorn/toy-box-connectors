@@ -10,6 +10,7 @@ import { channelName, oneLine, personName } from "@commands/model/slackText";
 import { count } from "@commands/model/wording";
 import { admissionProblem } from "@links/model/admission";
 import { approvableAudience } from "@links/model/audience";
+import { suspensions } from "@links/model/status";
 import { allowPerson, denyPeople, readChannelLink, readToyBoxLink } from "@links/server/database";
 import { approveLink, deleteLink, pauseLink } from "@links/server/status";
 import { deleteLinkRequests, readActiveRequests } from "@requests/server/database";
@@ -38,9 +39,14 @@ export function linkCommand(options: SetupCommandOptions): CommandHandler<"link"
     linkChannel(options, context, slackChannel, { requestMode: requests, observe });
 }
 
+/** Refuses a link Slack gave a new channel ID, which only unlink and a new link end. */
 export function resumeCommand(options: SetupCommandOptions): CommandHandler<"resume"> {
   return async (_input, context) => {
     const link = await options.database.read((sql) => readCallerLink(sql, context.caller));
+    if (link.statusReason === "channel_id_changed") {
+      const { because, fix } = suspensions.channel_id_changed;
+      throw new CommandRefusedError(`The link to ${link.channel} is suspended ${because}. ${fix}`);
+    }
     return linkChannel(options, context, link.slackChannelId, {});
   };
 }
