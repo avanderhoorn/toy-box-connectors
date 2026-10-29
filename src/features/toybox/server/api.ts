@@ -38,7 +38,7 @@ export async function readToyBoxChannel(
     );
   }
   // Leaving the loop cancels the body, which closes the stream.
-  for await (const { data } of readServerSentEvents(response.body)) {
+  for await (const data of readServerSentEvents(response.body)) {
     const frame = firstFrameSchema.parse(JSON.parse(data));
     if (frame.type === "deleted") return null;
     const { channel, routines } = frame.state;

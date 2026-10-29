@@ -94,7 +94,7 @@ export async function* readChannelFrames(
   if (response.status !== 200 || !response.body) {
     throw new Error(`Toy Box answered ${response.status} for channel ${channelId}'s stream.`);
   }
-  for await (const { data } of readServerSentEvents(response.body)) {
+  for await (const data of readServerSentEvents(response.body)) {
     yield frameSchema.parse(JSON.parse(data));
   }
 }
