@@ -1,3 +1,12 @@
+## 📅 v0.2.1 (10/30/26)
+
+- Whoever asks sees 👀 as soon as the lead is woken, rather than when it reads the request
+- A burst of messages settles in 3 seconds before the lead is woken, rather than 10
+- `allow` reads naturally for one person, and names the channel as Slack does rather than by its ID
+- `status` says whom a link answers as plainly for one person as for several
+- `status` names each link's Slack and Toy Box channels, and shows a channel by its ID when Slack or Toy Box can't name it within two seconds. With `--json`, `slackChannel` now holds the name, beside the new `slackChannelId` and `toyBoxChannel`
+- Updating and restarting `serve` is all it takes, and leads keep the routines they have
+
 ## 📅 v0.2.0 (10/29/26)
 
 - The passphrase is gone. `link`, `allow` and `resume` still run only at your terminal, never in a lead's shell, and now apply at once and say what changed, with names from Slack. `deny`, `pause` and `unlink` undo them
