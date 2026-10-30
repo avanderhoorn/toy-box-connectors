@@ -68,7 +68,7 @@ test.each([
   [{ user: "USLACKBOT" }, "bot"],
   [{ subtype: "channel_join" }, "notice"],
   [{ subtype: "file_share" }, "person"],
-])("authorship, not just subtype, prevents bot loops", (fields, author) => {
+])("authorship, not just subtype, prevents bot loops: %j means %s", (fields, author) => {
   expect(normalize({ ...message, ...fields, channel: "C1" })).toMatchObject({
     message: { author },
   });

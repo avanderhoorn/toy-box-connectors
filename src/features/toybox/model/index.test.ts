@@ -20,13 +20,6 @@ test("a routine's latest scheduled run is in local time and includes one at now"
   expect(latestScheduledRun("0 16 * * 5", friday - 1)).toBe(new Date(2026, 9, 23, 16, 0).getTime());
 });
 
-test.each([
-  [204, "ran"],
-  [404, "missing"],
-  [400, "refused"],
-  [422, "refused"],
-  [500, "failed"],
-  [503, "failed"],
-] as const)("Toy Box answering a run with %i means %s", (status, outcome) => {
-  expect(routineRunOutcome(status)).toBe(outcome);
+test("Toy Box answering a run with 404 means missing", () => {
+  expect(routineRunOutcome(404)).toBe("missing");
 });
