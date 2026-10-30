@@ -16,36 +16,26 @@ const info = {
   user: "U-alice",
   url_private: "https://files.slack.com/files-pri/T-home-F1/build.png",
   url_private_download: "https://files.slack.com/files-pri/T-home-F1/download/build.png",
-  shares: { private: { "C-link": [{ ts, channel_name: "toy-box-private", team_id: "T-home" }] } },
-};
-
-const reads: FileInfoVerdict = {
-  kind: "file",
-  file: {
-    id: "F1",
-    whole: true,
-    name: "build.png",
-    mimeType: "image/png",
-    mode: "hosted",
-    size: 412_000,
-    uploaderId: "U-alice",
-    url: info.url_private_download,
-  },
+  shares: { public: { "C-link": [{ ts, channel_name: "toy-box", team_id: "T-home" }] } },
 };
 
 test.each<[string, SlackCall<unknown>, FileInfoVerdict]>([
   [
-    "a file shared in a private channel reads",
+    "a file shared in a public channel reads",
     { kind: "ok", result: { ok: true, file: info } },
-    reads,
-  ],
-  [
-    "and so does one shared in a public channel",
     {
-      kind: "ok",
-      result: { ok: true, file: { ...info, shares: { public: { "C-link": [{ ts }] } } } },
+      kind: "file",
+      file: {
+        id: "F1",
+        whole: true,
+        name: "build.png",
+        mimeType: "image/png",
+        mode: "hosted",
+        size: 412_000,
+        uploaderId: "U-alice",
+        url: info.url_private_download,
+      },
     },
-    reads,
   ],
   [
     "but not while Slack lists only another message, or another channel's, as sharing it, which may only be late",

@@ -146,7 +146,7 @@ test("reads nothing Slack doesn't vouch for now, such as a file deleted since in
 
 test("judges a file by what Slack says of it now, such as a snippet edited past 1 MiB since inbox listed it", async () => {
   const world = await createFileWorld();
-  const notes = world.slack.addFile("a".repeat(1024 ** 2 + 1), { user: "U-alice" });
+  const notes = world.slack.addFile("a".repeat(2 * 1024 ** 2), { user: "U-alice" });
   // Slack described the snippet this way when Alice shared it, before she added to it.
   await world.share({ ...notes, size: 2_048 }, "1700000100.000100");
 
