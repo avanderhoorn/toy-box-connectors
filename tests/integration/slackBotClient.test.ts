@@ -7,7 +7,7 @@ import { startFakeSlack } from "../fakes/slack";
 /** How Slack explains blocks it can't accept, which names where they went wrong. */
 const BLOCKS_FAULT = "[ERROR] failed to match all allowed schemas [json-pointer:/blocks/0/text]";
 
-async function setup() {
+async function setup(token?: string) {
   let at = 1000;
   const now = () => at;
   const slack = startFakeSlack({ now });
@@ -15,7 +15,7 @@ async function setup() {
   const database = await openTestDatabase();
   await createStoredInstallation(database);
   const restart = () =>
-    createBotClient(database, slack.botToken, {
+    createBotClient(database, token ?? slack.botToken, {
       slackApiUrl: slack.url,
       timeoutMs: 50,
       now,
@@ -78,4 +78,13 @@ test("logs the method and code of a request Slack found fault with, and no other
   slack.failNext("chat.postMessage", { error: "invalid_blocks", messages: [BLOCKS_FAULT] });
   expect(await post()).toMatchObject({ kind: "error", error: "invalid_blocks" });
   expect(logged()).toEqual(["Slack refused chat.postMessage with invalid_blocks."]);
+});
+test("a download Slack sends to sign in is refused, not followed", async () => {
+  const { slack, bot } = await setup("xoxb-revoked");
+  const file = slack.addFile("Release notes", { user: "UALICE" });
+  // Following it would reach the fake's sign-in page, a route it fails the test for when it stops.
+  expect(await bot.download({ url: file.url_private_download, size: file.size })).toEqual({
+    kind: "refused",
+    reason: "Slack answered with HTTP 302",
+  });
 });

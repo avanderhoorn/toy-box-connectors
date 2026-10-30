@@ -29,20 +29,23 @@ async function until(condition: () => boolean) {
   }
 }
 
-test("the supported SDK transcript matches captured live shapes and reply-deletion order", async () => {
-  const fake = startFakeSlack();
-  onTestFinished(() => fake.stop());
-  const clientOptions = {
-    slackApiUrl: fake.url,
+function clientOptions(slackApiUrl: string) {
+  return {
+    slackApiUrl,
     timeout: 1000,
     retryConfig: { retries: 0 },
     rejectRateLimitedCalls: true,
     logLevel: LogLevel.ERROR,
   };
-  const web = new WebClient(fake.botToken, clientOptions);
+}
+
+test("the supported SDK transcript matches captured live shapes and reply-deletion order", async () => {
+  const fake = startFakeSlack();
+  onTestFinished(() => fake.stop());
+  const web = new WebClient(fake.botToken, clientOptions(fake.url));
   const socket = new SocketModeClient({
     appToken: fake.appToken,
-    clientOptions,
+    clientOptions: clientOptions(fake.url),
     logLevel: LogLevel.ERROR,
   });
   onTestFinished(() => socket.disconnect());
@@ -104,4 +107,19 @@ test("the supported SDK transcript matches captured live shapes and reply-deleti
   expect(fake.getMessages(channel)).toEqual([]);
   await Promise.all(acknowledgements);
   await until(() => fake.acks.length === 8);
+});
+
+test("a shared file matches its captured live shapes in history and files.info", async () => {
+  const fake = startFakeSlack();
+  onTestFinished(() => fake.stop());
+  const web = new WebClient(fake.botToken, clientOptions(fake.url));
+  const channel = fake.addChannel({ name: "general" });
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const file = fake.addFile(png, { user: "UALICE", name: "screenshot.png", mimetype: "image/png" });
+  fake.setMessage(channel, { ts: "1.000001", user: "UALICE", files: [file] });
+  const history = await web.conversations.history({ channel });
+  expectShape(history.messages?.[0]?.files?.[0], shapes.historyFile);
+  const info = await web.files.info({ file: file.id });
+  expectShape(info, shapes.fileInfo);
+  expectShape(info.file?.shares?.public?.[channel]?.[0], shapes.share);
 });

@@ -2,7 +2,8 @@
   "capture": {
     "date": "2026-10-28",
     "source": "Dedicated free test workspace and test app, Socket Mode and Web API",
-    "projection": "Observed protocol and reconciliation keys and types only. Rendering, bot profiles and user-controlled payload details are omitted."
+    "projection": "Observed protocol and reconciliation keys and types only. Rendering, bot profiles and user-controlled payload details are omitted.",
+    "files": "historyFile, fileInfo and share come from a PNG shared in the same workspace on 2026-10-30"
   },
   "hello": {
     "type": "string",
@@ -146,5 +147,36 @@
     "ok": "boolean",
     "channel": "string",
     "ts": "string"
+  },
+  "historyFile": {
+    "id": "string",
+    "name": "string",
+    "mimetype": "string",
+    "mode": "string",
+    "size": "number",
+    "user": "string",
+    "file_access": "string",
+    "shares": "undefined"
+  },
+  "fileInfo": {
+    "ok": "boolean",
+    "file.id": "string",
+    "file.name": "string",
+    "file.mimetype": "string",
+    "file.mode": "string",
+    "file.size": "number",
+    "file.user": "string",
+    "file.is_external": "boolean",
+    "file.file_access": "string",
+    "file.url_private": "string",
+    "file.url_private_download": "string",
+    "file.shares.public": "object",
+    "file.has_more_shares": "boolean"
+  },
+  "share": {
+    "ts": "string",
+    "channel_name": "string",
+    "team_id": "string",
+    "share_user_id": "string"
   }
 }

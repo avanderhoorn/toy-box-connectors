@@ -17,6 +17,10 @@
 // https://docs.slack.dev/reference/methods/reactions.add/
 // Edit versions and nested message identity:
 // https://docs.slack.dev/reference/events/message/message_changed/
+// Files, where they're shared, and their bytes, which Slack serves only with a token:
+// https://docs.slack.dev/reference/methods/files.info/
+// https://docs.slack.dev/reference/objects/file-object/
+// https://docs.slack.dev/messaging/working-with-files/#download
 
 import { z } from "zod";
 import type { FakeSlackCall, FakeSlackFailure, FakeSlackIdentity } from "./index";
@@ -32,6 +36,14 @@ export type FakeSlackMessage = {
   thread_ts?: string;
   [key: string]: unknown;
 };
+/** A file as a message's `files` lists it. */
+export type FakeSlackFile = {
+  id: string;
+  mimetype: string;
+  size: number;
+  url_private_download: string;
+  [key: string]: unknown;
+};
 type PageMethod = "conversations.history" | "conversations.replies";
 
 export function createFakeSlackStore() {
@@ -39,6 +51,7 @@ export function createFakeSlackStore() {
     channels: new Map<string, FakeSlackChannel>(),
     users: new Map<string, Map<string, FakeSlackUser>>(),
     messages: new Map<string, Map<string, FakeSlackMessage>>(),
+    files: new Map<string, { file: FakeSlackFile; bytes: Uint8Array }>(),
     timestampMicros: 0n,
   };
 }
@@ -52,6 +65,7 @@ const BOT_SCOPES = [
   "chat:write",
   "metadata.message:read",
   "reactions:write",
+  "files:read",
 ];
 const bool = z
   .union([z.boolean(), z.enum(["true", "false", "1", "0"])])
@@ -81,6 +95,7 @@ const json = z.string().transform((text, context): unknown => {
 const object = z.record(z.string(), z.unknown());
 const blocks = z.union([json, z.array(object)]).pipe(z.array(object));
 const metadata = z.union([json, object]).pipe(object);
+const listedFiles = z.array(z.object({ id: z.string() }));
 const schemas = {
   "apps.connections.open": z.object({}).strict(),
   "auth.test": z.object({}).strict(),
@@ -107,6 +122,7 @@ const schemas = {
   "reactions.add": z
     .object({ channel: z.string().min(1), timestamp: ts, name: z.string().min(1) })
     .strict(),
+  "files.info": z.object({ file: z.string().min(1) }).strict(),
 };
 
 export function createFakeSlackApi(options: {
@@ -116,11 +132,13 @@ export function createFakeSlackApi(options: {
   appToken: string;
   now: () => number;
   connectionUrl: () => string;
+  /** Where the fake serves files' bytes. */
+  filesOrigin: string;
   pageSize?: number;
   emitEvent: (event: Record<string, unknown>, context: Record<string, unknown>) => void;
 }) {
   const { identity, now, store } = options;
-  const { channels, messages } = store;
+  const { channels, messages, files } = store;
   const users = store.users.get(identity.teamId) ?? new Map<string, FakeSlackUser>();
   store.users.set(identity.teamId, users);
   const calls: FakeSlackCall[] = [];
@@ -184,6 +202,42 @@ export function createFakeSlackApi(options: {
       requireChannel(channelId);
       const store = messages.get(channelId)!;
       store.delete(timestamp);
+    },
+    /** A file `user` uploaded, to share by listing it in a message's `files`. */
+    addFile(content: string | Uint8Array, settings: Partial<FakeSlackFile> & { user: string }) {
+      const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
+      const id = settings.id ?? `F${crypto.randomUUID().replaceAll("-", "").toUpperCase()}`;
+      const name = typeof settings.name === "string" ? settings.name : "notes.txt";
+      const mimetype = settings.mimetype ?? "text/plain";
+      const address = (path: string) =>
+        new URL(`/files-pri/${identity.teamId}-${id}/${path}`, options.filesOrigin).href;
+      const created = Math.floor(now() / 1000);
+      // Slack shows a text file's first lines, which the bridge must never keep.
+      const preview = mimetype.startsWith("text/")
+        ? new TextDecoder().decode(bytes).split("\n").slice(0, 5).join("\n")
+        : undefined;
+      const file: FakeSlackFile = {
+        id,
+        created,
+        timestamp: created,
+        name,
+        title: name,
+        mimetype,
+        user_team: identity.teamId,
+        size: bytes.length,
+        mode: "hosted",
+        is_external: false,
+        url_private: address(encodeURIComponent(name)),
+        url_private_download: address(`download/${encodeURIComponent(name)}`),
+        file_access: "visible",
+        ...(preview !== undefined && {
+          preview,
+          preview_highlight: `<div class="CodeMirror">${Bun.escapeHTML(preview)}</div>`,
+        }),
+        ...settings,
+      };
+      files.set(id, { file: structuredClone(file), bytes: bytes.slice() });
+      return structuredClone(file);
     },
     getMessages(channelId: string) {
       requireChannel(channelId);
@@ -490,6 +544,63 @@ export function createFakeSlackApi(options: {
     return paged(method, args, projected);
   }
 
+  function fileInfo(input: z.output<(typeof schemas)["files.info"]>): Response {
+    const stored = files.get(input.file);
+    if (!stored) return failure("file_not_found");
+    const shares: Record<"public" | "private", Record<string, unknown[]>> = {
+      public: {},
+      private: {},
+    };
+    for (const [channelId, list] of messages) {
+      const channel = channelForApp(channelId);
+      if (!channel) continue;
+      for (const message of [...list.values()].sort((a, b) => compareTs(a.ts, b.ts))) {
+        const listed = listedFiles.safeParse(message.files);
+        if (!listed.success || !listed.data.some(({ id }) => id === input.file)) continue;
+        (shares[channel.is_private ? "private" : "public"][channelId] ??= []).push({
+          ts: message.ts,
+          channel_name: channel.name,
+          team_id: identity.teamId,
+          share_user_id: message.user,
+        });
+      }
+    }
+    return Response.json({
+      ok: true,
+      file: {
+        ...stored.file,
+        shares: Object.fromEntries(
+          Object.entries(shares).filter(([, listed]) => Object.keys(listed).length > 0),
+        ),
+        channels: Object.keys(shares.public),
+        groups: Object.keys(shares.private),
+        ims: [],
+        has_more_shares: false,
+        comments_count: 0,
+      },
+      comments: [],
+      response_metadata: { next_cursor: "" },
+    });
+  }
+
+  function download(request: Request): Response {
+    if (request.method !== "GET") return unexpected(`A file download used ${request.method}.`);
+    const address = new URL(request.url);
+    const token = request.headers.get("authorization")?.replace(/^Bearer /, "") ?? null;
+    // The test workspace answered a download without the bot's token with a redirect to sign in.
+    if (token !== options.botToken)
+      return new Response("<html><body>Redirecting to sign in.</body></html>", {
+        status: 302,
+        headers: {
+          location: new URL(`/signin?redir=${encodeURIComponent(address.pathname)}`, address).href,
+          "content-type": "text/html; charset=utf-8",
+        },
+      });
+    const stored = files.get(address.pathname.split("/")[2]?.split("-").at(-1) ?? "");
+    if (!stored) return new Response("Not found", { status: 404 });
+    return new Response(stored.bytes, { headers: { "content-type": stored.file.mimetype } });
+  }
+
   async function handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const method = url.pathname.slice("/api/".length);
@@ -596,6 +707,8 @@ export function createFakeSlackApi(options: {
         return run(schemas[method], remove);
       case "reactions.add":
         return run(schemas[method], reaction);
+      case "files.info":
+        return run(schemas[method], fileInfo);
       default:
         return unexpected(`Unknown fake Slack method: ${method}`);
     }
@@ -606,6 +719,7 @@ export function createFakeSlackApi(options: {
     calls,
     problems,
     handle,
+    download,
     isMember(channelId: string) {
       return membership.has(channelId) && membership.get(channelId) !== false;
     },

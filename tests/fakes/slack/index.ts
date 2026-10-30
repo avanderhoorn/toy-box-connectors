@@ -7,7 +7,7 @@
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import { createFakeSlackApi, createFakeSlackStore } from "./api";
-export type { FakeSlackChannel, FakeSlackUser, FakeSlackMessage } from "./api";
+export type { FakeSlackChannel, FakeSlackUser, FakeSlackMessage, FakeSlackFile } from "./api";
 
 export type FakeSlackIdentity = {
   appId: string;
@@ -172,12 +172,12 @@ export function startFakeSlack(
       if (server.upgrade(request, { data: { id: ++connectionSequence, app } })) return;
       return new Response("WebSocket upgrade required", { status: 400 });
     }
-    if (!target.pathname.startsWith("/api/")) {
-      problems.push(`Unexpected Slack route: ${target.pathname}`);
-      return new Response("Unknown fake Slack route", { status: 404 });
-    }
     const token = request.headers.get("authorization")?.replace(/^Bearer /i, "");
-    return (tokens.get(token ?? "") ?? apps.get(primary.appToken)!.api).handle(request);
+    const api = tokens.get(token ?? "") ?? apps.get(primary.appToken)!.api;
+    if (target.pathname.startsWith("/api/")) return api.handle(request);
+    if (target.pathname.startsWith("/files-pri/")) return api.download(request);
+    problems.push(`Unexpected Slack route: ${target.pathname}`);
+    return new Response("Unknown fake Slack route", { status: 404 });
   }
 
   function sendFrame(app: AppConnection, frame: Record<string, unknown>): FakeSlackDelivery {
@@ -279,6 +279,7 @@ export function startFakeSlack(
       botToken,
       appToken,
       now,
+      filesOrigin: server.url.origin,
       pageSize: options.pageSize,
       emitEvent: broadcastEvent,
       connectionUrl() {

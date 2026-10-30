@@ -184,3 +184,47 @@ test("apps share messages but keep membership, authorship, reactions and deletio
     first.ts,
   ]);
 });
+
+test("files.info finds a file's shares in its messages, and only the bot's token gets its bytes", async () => {
+  const { fake, client } = setup();
+  const open = fake.addChannel({ name: "general" });
+  const closed = fake.addChannel({ name: "team", is_private: true });
+  const text = "First line\nSecond line";
+  const file = fake.addFile(text, { user: "UALICE" });
+  fake.setMessage(open, { ts: "1.000001", user: "UALICE", files: [file] });
+  fake.setMessage(closed, {
+    ts: "1.000002",
+    user: "UBOB",
+    files: [{ id: file.id, file_access: "check_file_info" }],
+  });
+  fake.setMessage(open, { ts: "1.000003", user: "UALICE", text: "No file here" });
+  const share = (ts: string, channel_name: string, share_user_id: string) => [
+    { ts, channel_name, team_id: fake.identity.teamId, share_user_id },
+  ];
+  expect((await client.files.info({ file: file.id })).file).toMatchObject({
+    preview: text,
+    preview_highlight: expect.stringContaining("Second line"),
+    shares: {
+      public: { [open]: share("1.000001", "general", "UALICE") },
+      private: { [closed]: share("1.000002", "team", "UBOB") },
+    },
+    has_more_shares: false,
+  });
+  await expect(client.files.info({ file: "FMISSING" })).rejects.toMatchObject({
+    data: { error: "file_not_found" },
+  });
+  const download = (headers: Record<string, string>) =>
+    fetch(file.url_private_download, { headers, redirect: "manual" });
+  const served = await download({ authorization: `Bearer ${fake.botToken}` });
+  expect([served.status, served.headers.get("content-type"), await served.text()]).toEqual([
+    200,
+    "text/plain",
+    text,
+  ]);
+  const unsigned = await download({});
+  expect([
+    unsigned.status,
+    unsigned.headers.get("content-type"),
+    new URL(unsigned.headers.get("location")!).pathname,
+  ]).toEqual([302, "text/html; charset=utf-8", "/signin"]);
+});
