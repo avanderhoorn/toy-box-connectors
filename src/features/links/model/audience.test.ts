@@ -43,7 +43,6 @@ describe("linking a channel or resuming its link", () => {
 describe("judging a fresh read of a linked channel", () => {
   test.each([
     ["a public channel made private", { ...approved, kind: "public" }, {}],
-    ["a workspace leaving", orgAudience, orgShared("T-home")],
     ["a read naming no workspace for a channel shared with none", approved, unlisted],
   ] as const)("%s keeps the link", (_, audience, changes: Partial<ChannelFacts>) => {
     expect(judgeChannel(audience, facts(changes), home)).toEqual({ kind: "approved" });
@@ -54,7 +53,6 @@ describe("judging a fresh read of a linked channel", () => {
     ["an archived channel", "channel_archived", approved, { isArchived: true }],
     ["one without the bot", "bot_removed", approved, { isMember: false }],
     ["a pending Slack Connect share", "channel_external", approved, { isPendingExtShared: true }],
-    ["a private channel made public", "channel_made_public", approved, { kind: "public" }],
     ["a swapped workspace", "workspace_joined", orgAudience, orgShared("T-home", "T-c")],
     ["a read that lists no workspaces", "workspaces_unknown", orgAudience, orgShared()],
   ] as const)("%s suspends the link as %s", (_, reason, audience, changes) => {

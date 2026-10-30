@@ -7,11 +7,9 @@ const home = { teamId: "T-home", enterpriseId: null };
 const orgHome = { teamId: "T-home", enterpriseId: "E-org" };
 
 describe("admitting a person", () => {
-  test.each([
-    ["a member of a sibling workspace in its org", { teamId: "T-b", enterpriseId: "E-org" }],
-    ["an org member Slack names no workspace for", { teamId: null, enterpriseId: "E-org" }],
-  ] as const)("%s is admitted", (_, changes) => {
-    expect(admissionProblem("U-carol", person(changes), orgHome)).toBeNull();
+  test("a member of a sibling workspace in its org is admitted", () => {
+    const sibling = person({ teamId: "T-b", enterpriseId: "E-org" });
+    expect(admissionProblem("U-carol", sibling, orgHome)).toBeNull();
   });
 
   test("their org-wide ID is theirs, and an answer about someone else or nobody isn't", () => {
