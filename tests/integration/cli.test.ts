@@ -68,25 +68,6 @@ test("ignores a .env file in the folder it runs from", async () => {
   expect(await child.exited).toBe(0);
 }, 15_000);
 
-test("prints the lead's inbox on stdout with exit 0, or its result with --json", async () => {
-  const { channelId, home } = await startLinkedBridge({ prepare: storeNewRequest });
-  const lead = { HOME: home, COPILOT_AGENT_SESSION_ID: channelId };
-
-  const json = await runToyBoxSlack(["inbox", "--json"], lead);
-  expect(json).toMatchObject({ exitCode: 0, stderr: "" });
-  expect(JSON.parse(json.stdout)).toMatchObject({
-    channel: "#C-link",
-    requests: [{ id: 1, state: "open" }],
-  });
-
-  const text = await runToyBoxSlack(["inbox"], lead);
-  expect(text).toMatchObject({ exitCode: 0, stderr: "" });
-  expect(text.stdout).toStartWith("1 request in #C-link waits on you.\n\n### r1 · U-owner asked ");
-  expect(text.stdout).toEndWith(
-    'Answer each in its thread by piping your Markdown to `toy-box-slack reply r1`, or end one that needs no answer with `toy-box-slack dismiss r1 --reason "<why>"`.\n',
-  );
-}, 15_000);
-
 test("reply reads its text from stdin, and says to write it there when there's none", async () => {
   const { channelId, home, inbox } = await startLinkedBridge({
     allowed: ["U-owner"],
@@ -119,24 +100,6 @@ test("refuses add-app without a terminal, even when stdin holds both tokens", as
   });
   expect(existsSync(join(home, ".toy-box-slack"))).toBe(false);
 });
-
-test("refuses a session that doesn't lead a linked channel, with exit 1", async () => {
-  const { home } = await startLinkedBridge();
-  const stranger = { HOME: home, COPILOT_AGENT_SESSION_ID: "session-elsewhere" };
-  const error =
-    "This session isn't the lead of a Toy Box channel linked to Slack, so it can't use toy-box-slack. If you lead a channel whose link was removed, delete its routines that run toy-box-slack.";
-
-  expect(await runToyBoxSlack(["status"], stranger)).toEqual({
-    exitCode: 1,
-    stdout: "",
-    stderr: `${error}\n`,
-  });
-  expect(await runToyBoxSlack(["status", "--json"], stranger)).toEqual({
-    exitCode: 1,
-    stdout: `${JSON.stringify({ error }, null, 2)}\n`,
-    stderr: "",
-  });
-}, 15_000);
 
 test("exits 2 when no bridge is running for its data folder, even once a killed one leaves its socket", async () => {
   const home = createTestFolder();

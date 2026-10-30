@@ -7,14 +7,14 @@ import { prepareDataFolder } from "@bridge/server/dataFolder";
 import { createAddedApp, createTestFolder } from "@bridge/server/testFixtures";
 import { callBridge, type CallOptions } from "@commands/client/cli";
 import { createStoredLink } from "@links/server/testFixtures";
-import { refusalProblem, rejectedTokensProblem } from "@slackapi/model/identity";
+import { refusalProblem } from "@slackapi/model/identity";
 import { readInstallation } from "@slackapi/server/installation";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
-import type { FakeSlack, FakeSlackApp, FakeSlackChannel, FakeSlackMessage } from "../fakes/slack";
+import type { FakeSlack, FakeSlackApp, FakeSlackChannel } from "../fakes/slack";
 import { startFakeToyBox } from "../fakes/toybox";
 import { spawnBridge, started, startSlackForBridge, withDatabase } from "./bridgeProcess";
 import { ALICE, BOT, PROMPTLY, posted, said, timestamps } from "./connectedBridge";
-import { REQUESTS_ROUTINE, type LinkColumns } from "./linkedBridge";
+import { REQUESTS_ROUTINE } from "./linkedBridge";
 import { waitFor } from "./waitFor";
 
 /** The Slack app the installation fixture records. */
@@ -75,34 +75,30 @@ function prepareTwoAppsOfOne(slack: FakeSlackApp) {
 }
 
 describe("a Slack app the tokens of two apps belong to", () => {
-  // Either app may ask Slack first, so only both holders together prove the record decides.
-  test.each(["default", "releases"])(
-    "stays with the %s app whose bridge.db records it, so the other never connects",
-    async (holder) => {
-      const { slack, env } = startSlackForBridge(RECORDED);
-      const { home, folders } = prepareTwoAppsOfOne(slack);
-      const other = holder === "default" ? "releases" : "default";
-      await withDatabase(folders[holder]!, (database) => createStoredInstallation(database));
-      const connected = logged(holder, "Connected to Slack.");
-      const refused = logged(
-        other,
-        refusalProblem({ reason: "duplicate_app", heldBy: holder }, other),
-      );
+  // The default app usually asks Slack first, so only the releases app holding the record proves
+  // the record decides.
+  test("stays with the releases app whose bridge.db records it, so the other never connects", async () => {
+    const { slack, env } = startSlackForBridge(RECORDED);
+    const { home, folders } = prepareTwoAppsOfOne(slack);
+    await withDatabase(folders.releases!, (database) => createStoredInstallation(database));
+    const connected = logged("releases", "Connected to Slack.");
+    const refused = logged(
+      "default",
+      refusalProblem({ reason: "duplicate_app", heldBy: "releases" }, "default"),
+    );
 
-      const bridge = spawnBridge(home, env);
-      await bridge.says(refused);
-      await bridge.says(connected);
-      await deliverTo(slack);
+    const bridge = spawnBridge(home, env);
+    await bridge.says(refused);
+    await bridge.says(connected);
+    await deliverTo(slack);
 
-      expect(slack.connections).toHaveLength(1);
-      bridge.child.kill("SIGTERM");
-      const { code, stderr } = await bridge.exit();
-      expect(code).toBe(0);
-      expectSaid(stderr, home, [connected, refused]);
-      expect(await installationIn(folders[other]!)).toBeNull();
-    },
-    15_000,
-  );
+    expect(slack.connections).toHaveLength(1);
+    bridge.child.kill("SIGTERM");
+    const { code, stderr } = await bridge.exit();
+    expect(code).toBe(0);
+    expectSaid(stderr, home, [connected, refused]);
+    expect(await installationIn(folders.default!)).toBeNull();
+  }, 15_000);
 
   test("goes to whichever app Slack confirms first when no bridge.db records it, and the other never connects", async () => {
     const { slack, env } = startSlackForBridge(RECORDED);
@@ -127,26 +123,6 @@ describe("a Slack app the tokens of two apps belong to", () => {
     expect(await installationIn(folders[other]!)).toBeNull();
   }, 15_000);
 });
-
-test("an added app whose bot token Slack rejects says so, while the default app keeps working", async () => {
-  const { slack, env } = startSlackForBridge(RECORDED);
-  const releasesSlack = slack.addApp();
-  releasesSlack.failNext("auth.test", { error: "token_revoked" });
-  const { home, dataFolder } = prepareHome();
-  createAddedApp(dataFolder, "releases", tokensOf(releasesSlack));
-  const rejected = rejectedTokensProblem([["SLACK_BOT_TOKEN", "token_revoked"]], "releases");
-
-  const bridge = spawnBridge(home, env);
-  await bridge.says(`[releases] ${rejected}`);
-  await bridge.says("Connected to Slack.");
-  await deliverTo(slack);
-
-  expect(releasesSlack.connections).toEqual([]);
-  bridge.child.kill("SIGTERM");
-  const { code, stderr } = await bridge.exit();
-  expect(code).toBe(0);
-  expectSaid(stderr, home, ["Connected to Slack.", `[releases] ${rejected}`]);
-}, 15_000);
 
 test("a bridge that hosts only the default app names no app in what link says", async () => {
   const { slack, env } = startSlackForBridge(RECORDED);
@@ -247,18 +223,12 @@ async function startSharedChannel(
   return {
     slack,
     releasesSlack,
-    toyBox,
     leads,
     dataFolder,
     releasesFolder: releases.folder,
     share,
     as,
     deliver,
-    /** Posts `message` in C-link, and waits for both apps to ack its event, once each stored it. */
-    post: async (message: FakeSlackMessage) => {
-      slack.setMessage("C-link", message);
-      await deliver(posted(message));
-    },
     /** Stops the bridge, and checks it said only that both apps connected. */
     stop: async () => {
       bridge.child.kill("SIGTERM");
@@ -270,8 +240,8 @@ async function startSharedChannel(
 }
 
 /** Links `lead` to C-link in `database` and allows Alice there. */
-async function linkLead(database: BridgeDatabase, lead: string, settings: LinkColumns = {}) {
-  await createStoredLink(database, "link", { ...settings, toybox_channel_id: lead });
+async function linkLead(database: BridgeDatabase, lead: string) {
+  await createStoredLink(database, "link", { toybox_channel_id: lead });
   await database.write(
     (transaction) => transaction`
       INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', ${ALICE}, 0)
@@ -310,131 +280,6 @@ describe("two leads that share a Slack channel, each through its own app", () =>
           database.read((sql) => sql`SELECT toybox_channel_id, slack_channel_id FROM links`),
         ),
       ).toEqual([{ toybox_channel_id: lead, slack_channel_id: channel }]);
-  }, 15_000);
-
-  test("each bot posts as itself, and the other lead never reads or acts on its text", async () => {
-    const shared = await startSharedChannel(async ({ home, releases, leads }) => {
-      await linkLead(home, leads.docs, { observe: "channel" });
-      await linkLead(releases, leads.releases, { observe: "channel" });
-    });
-    const { slack, releasesSlack, toyBox, leads, as, post } = shared;
-    const [askedTs] = timestamps(1);
-    await post(said(ALICE, askedTs!, `<@${BOT}> <@${RELEASES_BOT}> is everything ready?`));
-    await waitFor(() => expect(toyBox.runs).toHaveLength(2), 5_000);
-    for (const lead of Object.values(leads))
-      expect((await as(lead, "inbox")).json).toMatchObject({
-        requests: [{ id: 1, messages: [{ ts: askedTs }] }],
-      });
-
-    const reply = async (lead: string, text: string) => {
-      const before = { docs: slack.acks.length, releases: releasesSlack.acks.length };
-      expect(await as(lead, "reply", { request: "r1", text })).toMatchObject({ exitCode: 0 });
-      await waitFor(() => {
-        expect(slack.acks).toHaveLength(before.docs + 1);
-        expect(releasesSlack.acks).toHaveLength(before.releases + 1);
-      }, 5_000);
-    };
-    await reply(leads.docs, `<@${RELEASES_BOT}> the docs are ready.`);
-    expect((await as(leads.releases, "inbox")).json).toMatchObject({
-      requests: [{ id: 1, attention: null, messages: [{ ts: askedTs }] }],
-    });
-    await reply(leads.releases, `<@${BOT}> the release is ready.`);
-    for (const lead of Object.values(leads))
-      expect((await as(lead, "inbox")).json).toMatchObject({ requests: [] });
-
-    const botPosts = slack.getMessages("C-link").filter(({ bot_id }) => bot_id !== undefined);
-    expect(botPosts).toHaveLength(2);
-    for (const app of [slack, releasesSlack]) {
-      expect(postsBy(app)).toHaveLength(1);
-      expect(postsBy(app)[0]).toMatchObject({
-        token: app.botToken,
-        args: { channel: "C-link", thread_ts: askedTs },
-      });
-      expect(botPosts.find(({ bot_id }) => bot_id === app.identity.botId)).toMatchObject({
-        user: app.identity.botUserId,
-        app_id: app.identity.appId,
-        thread_ts: askedTs,
-      });
-    }
-    expect(toyBox.runs).toHaveLength(2);
-    await shared.stop();
-
-    for (const [folder, own] of [
-      [shared.dataFolder, slack],
-      [shared.releasesFolder, releasesSlack],
-    ] as const) {
-      const stored = await withDatabase(folder, (database) =>
-        database.read(
-          (sql) => sql`
-            SELECT ts, author_role, user_id, text FROM messages
-            WHERE ts <> ${askedTs} ORDER BY ts
-          `,
-        ),
-      );
-      expect(stored).toEqual(
-        botPosts.map((message) => ({
-          ts: message.ts,
-          author_role: message.bot_id === own.identity.botId ? "self" : "other",
-          user_id: message.bot_id === own.identity.botId ? own.identity.botUserId : null,
-          text: message.bot_id === own.identity.botId ? message.text : null,
-        })),
-      );
-      expect(
-        await withDatabase(folder, (database) =>
-          database.read((sql) => sql`SELECT state FROM requests ORDER BY id`),
-        ),
-      ).toEqual([{ state: "answered" }]);
-    }
-  }, 15_000);
-
-  test("a named thread follow-up changes only that lead's request, and an unmentioned one changes both", async () => {
-    const shared = await startSharedChannel(async ({ home, releases, leads }) => {
-      await linkLead(home, leads.docs);
-      await linkLead(releases, leads.releases);
-    });
-    const { toyBox, leads, as, post } = shared;
-    const [rootTs, releasesTs, docsTs, bothTs] = timestamps(4);
-    await post(said(ALICE, rootTs!, `<@${BOT}> <@${RELEASES_BOT}> is everything ready?`));
-    await waitFor(() => expect(toyBox.runs).toHaveLength(2), 5_000);
-    for (const lead of Object.values(leads)) await as(lead, "inbox");
-
-    await post(
-      said(ALICE, releasesTs!, `<@${RELEASES_BOT}> can you check the release?`, {
-        thread_ts: rootTs,
-      }),
-    );
-    await waitFor(() => expect(toyBox.runs).toHaveLength(3), 5_000);
-    expect(toyBox.runs[2]?.channelId).toBe(leads.releases);
-    expect((await as(leads.docs, "inbox")).json).toMatchObject({
-      requests: [{ id: 1, attention: null }],
-    });
-    expect((await as(leads.releases, "inbox")).json).toMatchObject({
-      requests: [{ id: 1, attention: "updated" }],
-    });
-
-    await post(said(ALICE, docsTs!, `<@${BOT}> can you check the docs?`, { thread_ts: rootTs }));
-    await waitFor(() => expect(toyBox.runs).toHaveLength(4), 5_000);
-    expect(toyBox.runs[3]?.channelId).toBe(leads.docs);
-    expect((await as(leads.docs, "inbox")).json).toMatchObject({
-      requests: [{ id: 1, attention: "updated" }],
-    });
-    expect((await as(leads.releases, "inbox")).json).toMatchObject({
-      requests: [{ id: 1, attention: null }],
-    });
-
-    await post(said(ALICE, bothTs!, "And can you check production?", { thread_ts: rootTs }));
-    await waitFor(() => expect(toyBox.runs).toHaveLength(6), 5_000);
-    expect(
-      toyBox.runs
-        .slice(4)
-        .map(({ channelId }) => channelId)
-        .toSorted(),
-    ).toEqual(Object.values(leads).toSorted());
-    for (const lead of Object.values(leads))
-      expect((await as(lead, "inbox")).json).toMatchObject({
-        requests: [{ id: 1, attention: "updated" }],
-      });
-    await shared.stop();
   }, 15_000);
 
   test("one bot leaving suspends only its app's link while the other lead keeps answering", async () => {

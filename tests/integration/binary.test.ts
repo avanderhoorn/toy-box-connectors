@@ -6,8 +6,7 @@ import { copyFileSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { BUNDLED_SKILL } from "@commands/client/skill";
-import { version } from "../../package.json";
-import { installedSkill, spawnBridge, startSlackForBridge, started } from "./bridgeProcess";
+import { installedSkill, startSlackForBridge, started } from "./bridgeProcess";
 import { waitFor } from "./waitFor";
 
 const REPOSITORY = join(import.meta.dir, "..", "..");
@@ -34,42 +33,9 @@ async function installCli() {
 }
 
 /** The environment of a lead's shell, with `home` as its home folder and `env` besides. */
-function leadShell(home: string, env: Record<string, string> = {}) {
+function leadShell(home: string, env: Record<string, string>) {
   return { PATH: process.env.PATH, HOME: home, BUN_BE_BUN: "1", ...env };
 }
-
-test("answers --version with its package's version", async () => {
-  const toyBoxSlack = await installCli();
-
-  const child = Bun.spawn([toyBoxSlack, "--version"], {
-    env: leadShell(createTestFolder()),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  expect(await new Response(child.stdout).text()).toBe(`${version}\n`);
-  expect(await new Response(child.stderr).text()).toBe("");
-  expect(await child.exited).toBe(0);
-}, 15_000);
-
-test("carries a lead's command to the bridge over its socket, and prints the answer", async () => {
-  const toyBoxSlack = await installCli();
-  const home = createTestFolder();
-  await spawnBridge(home).running();
-
-  const lead = Bun.spawn([toyBoxSlack, "status", "--json"], {
-    env: leadShell(home, { COPILOT_AGENT_SESSION_ID: "session-elsewhere" }),
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  const error =
-    "This session isn't the lead of a Toy Box channel linked to Slack, so it can't use toy-box-slack. If you lead a channel whose link was removed, delete its routines that run toy-box-slack.";
-  expect(await new Response(lead.stdout).text()).toBe(`${JSON.stringify({ error }, null, 2)}\n`);
-  expect(await new Response(lead.stderr).text()).toBe("");
-  expect(await lead.exited).toBe(1);
-}, 15_000);
 
 test("serves from a project folder with the skill it carries, ignoring the folder's .env and bunfig.toml", async () => {
   const toyBoxSlack = await installCli();

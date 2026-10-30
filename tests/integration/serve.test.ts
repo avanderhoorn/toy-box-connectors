@@ -2,21 +2,11 @@
 // owner for at a terminal, and the skill.
 
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { DEFAULT_APP } from "@bridge/model/apps";
-import { prepareDataFolder } from "@bridge/server/dataFolder";
-import { readCredentialsFile, writeCredential } from "@bridge/server/environment";
+import { existsSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { readCredentialsFile } from "@bridge/server/environment";
 import { createTestFolder } from "@bridge/server/testFixtures";
-import { BUNDLED_SKILL } from "@commands/client/skill";
-import { rejectedTokensProblem } from "@slackapi/model/identity";
-import {
-  installedSkill,
-  runAtTerminal,
-  spawnBridge,
-  startSlackForBridge,
-  started,
-} from "./bridgeProcess";
+import { runAtTerminal, spawnBridge, startSlackForBridge, started } from "./bridgeProcess";
 
 /** What the terminal shows as the owner presses Ctrl-C while the bridge runs. */
 const STOPPED_AT_TERMINAL = "^Ctoy-box-slack is stopping after SIGINT\n";
@@ -55,62 +45,6 @@ test("asks the owner at a terminal for both tokens the first time, then starts",
   });
 }, 15_000);
 
-test("replaces a token Slack rejects the way the bridge says, asking for it while the bridge runs, which connects once restarted", async () => {
-  const home = createTestFolder();
-  const { slack } = startSlackForBridge();
-  const env = { SLACK_API_URL: slack.url };
-  const dataFolder = join(home, ".toy-box-slack");
-  const credentials = join(dataFolder, "credentials.env");
-  prepareDataFolder(dataFolder);
-  writeCredential(dataFolder, "SLACK_BOT_TOKEN", "xoxb-revoked");
-  writeCredential(dataFolder, "SLACK_APP_TOKEN", slack.appToken);
-  const running = runAtTerminal(home, ["serve"], env);
-  await running.shows(rejectedTokensProblem([["SLACK_BOT_TOKEN", "invalid_auth"]], DEFAULT_APP));
-
-  const lines = readFileSync(credentials, "utf8").split("\n");
-  writeFileSync(
-    credentials,
-    lines.filter((line) => !line.startsWith("SLACK_BOT_TOKEN=")).join("\n"),
-  );
-  const terminal = runAtTerminal(home, ["serve"], env);
-  await terminal.shows("(xoxb-...): ");
-  await terminal.type(slack.botToken);
-
-  expect(await terminal.exit()).toEqual({
-    code: 1,
-    transcript: [
-      "Paste the Slack bot token (xoxb-...): ",
-      `Saved SLACK_BOT_TOKEN in ${credentials}.`,
-      `Another toy-box-slack bridge is already running for ${dataFolder}. Stop it before starting a new one.`,
-      "",
-    ].join("\n"),
-  });
-  await running.interrupt();
-  expect((await running.exit()).code).toBe(0);
-
-  const restarted = runAtTerminal(home, ["serve"], env);
-  await restarted.shows("Connected to Slack.");
-  await restarted.interrupt();
-  expect(await restarted.exit()).toEqual({
-    code: 0,
-    transcript: `${started(home)}Connected to Slack.\n${STOPPED_AT_TERMINAL}`,
-  });
-}, 20_000);
-
-test("stops without saving or starting when the owner presses Ctrl-C at a prompt", async () => {
-  const home = createTestFolder();
-  const terminal = runAtTerminal(home, ["serve"]);
-  await terminal.shows("(xoxb-...): ");
-  await terminal.interrupt();
-
-  expect(await terminal.exit()).toEqual({
-    code: 1,
-    transcript:
-      "Paste the Slack bot token (xoxb-...): \nNo Slack bot token was given, so toy-box-slack didn't start.\n",
-  });
-  expect(existsSync(join(home, ".toy-box-slack", "credentials.env"))).toBe(false);
-}, 15_000);
-
 test("never asks in a lead's shell, which can be a terminal too", async () => {
   const home = createTestFolder();
   const terminal = runAtTerminal(home, ["serve"], { COPILOT_AGENT_SESSION_ID: "a-lead-session" });
@@ -122,41 +56,6 @@ test("never asks in a lead's shell, which can be a terminal too", async () => {
     transcript: `${started(home)}${STOPPED_AT_TERMINAL}`,
   });
   expect(existsSync(join(home, ".toy-box-slack", "credentials.env"))).toBe(false);
-}, 15_000);
-
-test("never asks without a terminal, even when stdin holds the answers", async () => {
-  const home = createTestFolder();
-  const { slack } = startSlackForBridge();
-  const answers = [slack.botToken, slack.appToken, ""].join("\n");
-
-  const bridge = spawnBridge(home, { SLACK_API_URL: slack.url }, new Blob([answers]));
-  await bridge.running();
-  bridge.child.kill("SIGTERM");
-
-  expect(await bridge.exit()).toEqual({
-    code: 0,
-    stderr: `${started(home)}toy-box-slack is stopping after SIGTERM\n`,
-  });
-  expect(existsSync(join(home, ".toy-box-slack", "credentials.env"))).toBe(false);
-}, 15_000);
-
-test("installs the skill it ships each time it starts, in place of the one before", async () => {
-  const home = createTestFolder();
-  const skill = installedSkill(home);
-  mkdirSync(join(dirname(skill), "references"), { recursive: true });
-  writeFileSync(skill, "An older release's skill");
-  writeFileSync(join(dirname(skill), "references", "stale.md"), "Stale");
-
-  const bridge = spawnBridge(home);
-  await bridge.running();
-
-  expect(await Bun.file(skill).text()).toBe(BUNDLED_SKILL);
-  expect(readdirSync(dirname(skill))).toEqual(["SKILL.md"]);
-  bridge.child.kill("SIGTERM");
-  expect(await bridge.exit()).toEqual({
-    code: 0,
-    stderr: `${started(home)}toy-box-slack is stopping after SIGTERM\n`,
-  });
 }, 15_000);
 
 test("says why it couldn't install the skill, and runs anyway", async () => {

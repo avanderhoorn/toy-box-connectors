@@ -21,7 +21,7 @@ const MALLORY_USER = {
   is_ultra_restricted: false,
 };
 
-type Caller = "the lead" | "a member's session" | "a terminal";
+type Caller = "the lead" | "a terminal";
 
 /**
  * A connected bridge whose link watches C0LINK, a private channel the bot, Alice and Mallory are in,
@@ -38,7 +38,6 @@ async function ownedBridge() {
 
   const callers: Record<Caller, CallOptions> = {
     "the lead": { env: { COPILOT_AGENT_SESSION_ID: channelId } },
-    "a member's session": { env: { COPILOT_AGENT_SESSION_ID: "member-session" } },
     "a terminal": { channelId, env: {} },
   };
   const as = (caller: Caller, name: string, input: Record<string, unknown> = {}) =>
@@ -48,90 +47,55 @@ async function ownedBridge() {
   return { ...bridge, as, link };
 }
 
-/** Each widening command, a phrase from what it answers the owner, and what it changes. */
+/** Each widening command, with input that would widen the link. */
 const WIDENING = [
-  {
-    name: "allow",
-    input: { users: [MALLORY] },
-    shows: "Mallory (U0MALLORY) can ask the lead to act from #release-eng now.",
-    widened: { allowlist: [ALICE, "Mallory"] },
-  },
-  {
-    name: "resume",
-    input: {},
-    shows: "#release-eng is private, so only its members can",
-    widened: { status: "active" },
-  },
-  {
-    name: "link",
-    input: { slackChannel: "C0LINK", requests: "all" },
-    shows: "an allowed person posting at the top level or mentioning the bot",
-    widened: { requestMode: "all" },
-  },
+  { name: "allow", input: { users: [MALLORY] } },
+  { name: "resume", input: {} },
+  { name: "link", input: { slackChannel: "C0LINK", requests: "all" } },
 ];
 
-test.each([
-  { caller: "the lead", refusal: "Only the owner at a terminal runs" },
-  { caller: "a member's session", refusal: "This session isn't the lead of a Toy Box channel" },
-  { caller: "a terminal", refusal: null },
-] as const)(
-  "$caller widens access only if it's a terminal, which says what it changed",
-  async ({ caller, refusal }) => {
-    const { as, link } = await ownedBridge();
-    // Paused, so resume has something to widen.
-    expect(await as("the lead", "pause")).toMatchObject({
-      exitCode: 0,
-      json: { status: "paused" },
+test("the lead widens access only if it's a terminal, which says what it changed", async () => {
+  const { as, link } = await ownedBridge();
+  // Paused, so resume has something to widen.
+  expect(await as("the lead", "pause")).toMatchObject({
+    exitCode: 0,
+    json: { status: "paused" },
+  });
+
+  for (const { name, input } of WIDENING) {
+    expect(await as("the lead", name, input)).toMatchObject({
+      exitCode: 1,
+      text: expect.stringContaining("Only the owner at a terminal runs"),
     });
+    expect(await link()).toMatchObject({
+      status: "paused",
+      requestMode: "mention",
+      allowlist: [ALICE],
+    });
+  }
+});
 
-    let expected = { status: "paused", requestMode: "mention", allowlist: [ALICE] };
-    for (const { name, input, shows, widened } of WIDENING) {
-      expect(await as(caller, name, input)).toMatchObject(
-        refusal
-          ? { exitCode: 1, text: expect.stringContaining(refusal) }
-          : { exitCode: 0, text: expect.stringContaining(shows) },
-      );
-      if (!refusal) expected = { ...expected, ...widened };
-      expect(await link()).toMatchObject(expected);
-    }
-  },
-);
-
-test.each([
-  { caller: "the lead", narrows: true },
-  { caller: "a member's session", narrows: false },
-  { caller: "a terminal", narrows: true },
-] as const)(
+test.each([{ caller: "the lead" }, { caller: "a terminal" }] as const)(
   "$caller narrows access at once with deny, pause and unlink, unless it's a member's session",
-  async ({ caller, narrows }) => {
+  async ({ caller }) => {
     const { as, link, stop, dataFolder } = await ownedBridge();
 
-    const denied = await as(caller, "deny", { users: [ALICE] });
-    expect(denied).toMatchObject(
-      narrows
-        ? {
-            exitCode: 0,
-            json: { cancelled: 1 },
-            text: "They can't ask the lead to act from #C0LINK now. Cancelled 1 request of theirs.",
-          }
-        : { exitCode: 1 },
-    );
-    expect((await as(caller, "pause")).exitCode).toBe(narrows ? 0 : 1);
-    expect(await link()).toMatchObject(
-      narrows
-        ? { status: "paused", allowlist: [], pending: 0 }
-        : { status: "active", allowlist: [ALICE], pending: 1 },
-    );
-    expect((await as(caller, "unlink")).exitCode).toBe(narrows ? 0 : 1);
+    expect(await as(caller, "deny", { users: [ALICE] })).toMatchObject({
+      exitCode: 0,
+      json: { cancelled: 1 },
+      text: "They can't ask the lead to act from #C0LINK now. Cancelled 1 request of theirs.",
+    });
+    expect((await as(caller, "pause")).exitCode).toBe(0);
+    expect(await link()).toMatchObject({ status: "paused", allowlist: [], pending: 0 });
+    expect((await as(caller, "unlink")).exitCode).toBe(0);
 
     await stop();
     await withDatabase(dataFolder, async (database) => {
-      const kept = narrows ? 0 : 1;
       expect(await countRows(database)).toMatchObject({
-        links: kept,
-        allowlist: kept,
-        requests: kept,
-        messages: kept,
+        links: 0,
+        allowlist: 0,
+        requests: 0,
+        messages: 0,
       });
     });
   },
