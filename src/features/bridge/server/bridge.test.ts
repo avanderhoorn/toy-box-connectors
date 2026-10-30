@@ -1,6 +1,6 @@
 import { expect, onTestFinished, test } from "bun:test";
-import { chmodSync, existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { startBridge } from "./bridge";
 import { acquireBridgeLock } from "./lock";
 import { BridgeRefusedError } from "./refusal";
@@ -28,11 +28,14 @@ test("refuses an added app's tokens that others can open before it creates anyth
   expect(contents(dataFolder)).toEqual(before);
 });
 
-test("refuses while another bridge holds an added app's lock, letting go of the locks it took", async () => {
+test("refuses while another bridge holds an added app's lock, leaving its images and letting go of the locks it took", async () => {
   const dataFolder = createTestFolder();
   const releases = createAddedApp(dataFolder, "releases");
   const held = await acquireBridgeLock(releases.lock);
   onTestFinished(() => held.release());
+  const image = join(dataFolder, "viewing", `f1-${crypto.randomUUID()}.png`);
+  mkdirSync(dirname(image));
+  writeFileSync(image, "");
 
   await expect(startBridge(dataFolder, env)).rejects.toThrow(
     `Another toy-box-slack bridge is already running for ${releases.folder}. Stop it before starting a new one.`,
@@ -40,6 +43,7 @@ test("refuses while another bridge holds an added app's lock, letting go of the 
 
   expect(existsSync(join(dataFolder, "bridge.db"))).toBe(false);
   expect(existsSync(releases.database)).toBe(false);
+  expect(existsSync(image)).toBe(true);
   const lock = await acquireBridgeLock(join(dataFolder, "bridge.lock"));
   await lock.release();
 });

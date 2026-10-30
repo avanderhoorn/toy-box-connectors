@@ -9,19 +9,22 @@
 // before anything talks to Slack.
 // Then it starts each app's work, and answers commands on its socket.
 // It lets go of everything in the reverse order, so it stops taking commands
-// before anything they use stops, and lets go of the default app's lock last.
+// before anything they use stops, deletes the images the lead viewed once no
+// command can show another, and lets go of the default app's lock last.
 //
 // A part that fails in a way retrying can't fix, such as a storage error in
 // any app, reports it through one fatal path, and the bridge exits with code 1,
 // so a login job starts it afresh and an owner at a terminal sees why it
 // stopped.
 
+import { join } from "node:path";
 import { claimSlackApp, recordedHolders, type ClaimSlackApp } from "@bridge/model/claims";
 import { askForMissingCredentials } from "@commands/client/firstRun";
 import { installSkill } from "@commands/client/skill";
 import { resolveSessionId } from "@commands/model/callers";
 import { serveCommands } from "@commands/server/serve";
 import { statusCommand } from "@commands/server/status";
+import { openViewingFolder, type ViewingFolder } from "@files/server/viewing";
 import { log } from "@/shared/log";
 import { listApps, readAppTokens } from "./apps";
 import { prepareDataFolder, resolveDataFolder } from "./dataFolder";
@@ -78,12 +81,14 @@ export async function startBridge(
   const failure = Promise.withResolvers<unknown>();
   const locks: BridgeLock[] = [];
   const apps: HostedApp[] = [];
+  let viewing: ViewingFolder | undefined;
   let socket: CommandSocket | undefined;
 
   async function stop() {
     try {
       await socket?.stop();
       await settle(apps.map((app) => app.stop()));
+      viewing?.close();
     } finally {
       // A bridge starting meanwhile takes the default app's lock first, so it stops there.
       for (const lock of locks.toReversed()) await lock.release();
@@ -92,6 +97,7 @@ export async function startBridge(
 
   try {
     for (const { app } of listed) locks.push(await acquireBridgeLock(app.lock));
+    viewing = openViewingFolder(join(dataFolder, "viewing"), failure.resolve);
     for (const { app, tokens } of listed) {
       apps.push(await openApp(app, tokens, { settings, onError: failure.resolve }));
     }
