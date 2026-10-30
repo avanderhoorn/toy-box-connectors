@@ -8,6 +8,22 @@ import {
   type SlackState,
 } from "./status";
 
+const connected: SlackState = { connection: "connected", problem: null };
+const link: LinkStatus = {
+  toyBoxChannelId: "toybox-link",
+  slackChannel: "#release-eng",
+  status: "active",
+  statusReason: null,
+  requestMode: "mention",
+  observe: "requesters",
+  allowlist: [],
+  pending: 0,
+  read: 0,
+  unconfirmed: [],
+  wake: { kind: "idle" },
+  lastWake: null,
+};
+
 test("Slack is set up once both tokens are, and until then serve asks the owner for each missing one", () => {
   const shown = (tokens: Parameters<typeof unconfiguredSlack>[0], app = DEFAULT_APP) => {
     const slack = unconfiguredSlack(tokens, app);
@@ -29,23 +45,25 @@ test("Slack is set up once both tokens are, and until then serve asks the owner 
   );
 });
 
+test("says whom a link answers and when, for one person, several or nobody yet", () => {
+  const answers = (changes: Partial<LinkStatus>) =>
+    presentStatus({ slack: connected, links: [{ ...link, ...changes }] }, 0)
+      .split("\n")
+      .find((line) => line.startsWith("- Answers:"));
+
+  expect(answers({ allowlist: ["Ada"] })).toBe(
+    "- Answers: Ada when they mention the bot. Threads show only the people it answers.",
+  );
+  expect(answers({ allowlist: ["Ada", "Bo"], requestMode: "all", observe: "channel" })).toBe(
+    "- Answers: Ada and Bo when they post or mention the bot. Threads show everyone.",
+  );
+  expect(answers({ allowlist: [] })).toBe(
+    "- Answers: nobody yet. Threads show only the people it answers.",
+  );
+});
+
 test("shows each app's status under its name, saying when no Toy Box channel links through one", () => {
-  const connected: SlackState = { connection: "connected", problem: null };
   const refused: SlackState = { connection: "refused", problem: "Have the owner fix it." };
-  const link: LinkStatus = {
-    toyBoxChannelId: "toybox-link",
-    slackChannel: "#release-eng",
-    status: "active",
-    statusReason: null,
-    requestMode: "mention",
-    observe: "requesters",
-    allowlist: [],
-    pending: 0,
-    read: 0,
-    unconfirmed: [],
-    wake: { kind: "idle" },
-    lastWake: null,
-  };
 
   const shown = presentAppStatuses(
     [

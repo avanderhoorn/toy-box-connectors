@@ -102,13 +102,14 @@ function presentSections({ slack, links }: Status, at: number, unlinked: string)
 }
 
 function presentLink(link: LinkStatus, at: number): string {
-  const asks = link.requestMode === "all" ? "posts or mentions the bot" : "mentions the bot";
-  const people = new Intl.ListFormat("en").format(link.allowlist) || "nobody yet";
+  const asks = link.requestMode === "all" ? "post or mention the bot" : "mention the bot";
+  const people = new Intl.ListFormat("en").format(link.allowlist);
+  const answers = people ? `${people} when they ${asks}` : "nobody yet";
   const threads = link.observe === "channel" ? "everyone" : "only the people it answers";
   return [
     `## ${link.slackChannel} and Toy Box channel ${link.toyBoxChannelId}`,
     `- Link: ${presentLinkState(link)}`,
-    `- Answers: ${people}, when one ${asks}. Threads show ${threads}.`,
+    `- Answers: ${answers}. Threads show ${threads}.`,
     `- Requests: ${link.pending} new or changed, ${link.read} read and not answered.`,
     ...presentUnconfirmed(link.unconfirmed, at),
     `- Wakes: ${presentWake(link, at)}`,
