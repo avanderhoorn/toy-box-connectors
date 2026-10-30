@@ -23,12 +23,12 @@ test.each([
 test.each([
   "yes",
   "lgtm",
-  "thanks, can you also check staging?",
-  "thanksgiving plans?",
-  "is it ok?",
+  "thanks, can you also check staging",
+  "thanksgiving",
+  "is it ok",
   "ok?",
+  "ok？",
   "?",
-  "<@U-bot|toy-box> ？",
 ])("%p could carry a decision or a question", (text) => {
   expect(courtesy(text)).toBe(false);
 });
