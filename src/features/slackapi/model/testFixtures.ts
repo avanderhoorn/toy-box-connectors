@@ -1,4 +1,5 @@
 import type { ChannelFacts } from "./channels";
+import type { WholeFile } from "./files";
 import type { SlackMessage } from "./messages";
 import type { SlackTs } from "./ts";
 import type { SlackPerson } from "./users";
@@ -57,6 +58,20 @@ export function editMessage(message: SlackMessage, editedTs: SlackTs, text: stri
     mentionsBot: mentions.length > 0,
     editedTs,
     version: editedTs,
+  };
+}
+
+/** The owner's screenshot with ID `id`, as a message shares it. `changes` replace its fields. */
+export function sharedFile(id: string, changes: Partial<WholeFile> = {}): WholeFile {
+  return {
+    id,
+    whole: true,
+    name: "build-error.png",
+    mimeType: "image/png",
+    mode: "hosted",
+    size: 412_000,
+    uploaderId: "U-owner",
+    ...changes,
   };
 }
 

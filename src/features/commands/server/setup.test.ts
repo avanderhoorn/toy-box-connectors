@@ -9,7 +9,7 @@ import { createOutboxWorld } from "@outbox/server/testFixtures";
 import { readRequest } from "@requests/server/database";
 import { cancelStoredRequest } from "@requests/server/lifecycle";
 import { createStoredRequest } from "@requests/server/testFixtures";
-import { askMessage } from "@slackapi/model/testFixtures";
+import { askMessage, sharedFile } from "@slackapi/model/testFixtures";
 import type { BotClient } from "@slackapi/server/botClient";
 import { startFakeToyBox } from "../../../../tests/fakes/toybox";
 import {
@@ -107,7 +107,7 @@ test("unlink deletes what the bridge kept for its link, and nothing of another l
   await fillEveryTable(database);
   const before = await countRows(database);
   await createStoredLink(database, "gone");
-  const message = askMessage(undefined, { channelId: "C-gone" });
+  const message = askMessage(undefined, { channelId: "C-gone", files: [sharedFile("F2")] });
   await createStoredMessage(database, message);
   await createStoredRequest(database, { linkId: "gone", channelId: "C-gone" });
 

@@ -13,7 +13,8 @@ import { compareTs, slackTsSchema, type SlackTs } from "./ts";
 
 /** A file a message shares, as the message describes it. A partial one has only its ID. */
 export type SlackFile = WholeFile | { id: string; whole: false };
-type WholeFile = {
+/** A file a message describes in full. */
+export type WholeFile = {
   id: string;
   whole: true;
   name: string | null;

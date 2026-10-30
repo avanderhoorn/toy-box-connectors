@@ -23,6 +23,28 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       CHECK (text IS NULL OR (deleted = 0 AND author_role <> 'other'))
     );
 
+    -- Each file a message shares while the ledger keeps its text, as Slack last described it, with
+    -- no address or bytes. A partial file has only its ID, since only files.info has the rest. The
+    -- id is the reference the lead reads a file by, and AUTOINCREMENT never hands one out again.
+    CREATE TABLE message_files (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel_id  TEXT NOT NULL,
+      ts          TEXT NOT NULL,
+      file_id     TEXT NOT NULL,
+      whole       INTEGER NOT NULL CHECK (whole IN (0, 1)),
+      name        TEXT,
+      mime_type   TEXT,
+      mode        TEXT,
+      size        INTEGER,
+      uploader_id TEXT,
+      UNIQUE (channel_id, ts, file_id),
+      FOREIGN KEY (channel_id, ts) REFERENCES messages (channel_id, ts) ON DELETE CASCADE,
+      CHECK (whole = 1 OR COALESCE(name, mime_type, mode, size, uploader_id) IS NULL),
+      CHECK (whole = 0 OR (
+        mime_type IS NOT NULL AND mode IS NOT NULL AND size IS NOT NULL AND uploader_id IS NOT NULL
+      ))
+    );
+
     -- AUTOINCREMENT never hands a seq out again, even once its change is gone, so every new change
     -- comes after every cursor.
     CREATE TABLE changes (
@@ -48,6 +70,34 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       id        INTEGER PRIMARY KEY AUTOINCREMENT,
       starts_at INTEGER NOT NULL,
       ends_at   INTEGER NOT NULL
+    );
+  `);
+}
+
+/**
+ * Takes version 3's ledger, which kept no files, to version 4's, which describes each file a kept
+ * message shares. It keeps its own copy of version 4's table, so a later change to the table can't
+ * change what it makes.
+ */
+export async function addMessageFiles(db: Bun.SQL): Promise<void> {
+  await db.unsafe(`
+    CREATE TABLE message_files (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel_id  TEXT NOT NULL,
+      ts          TEXT NOT NULL,
+      file_id     TEXT NOT NULL,
+      whole       INTEGER NOT NULL CHECK (whole IN (0, 1)),
+      name        TEXT,
+      mime_type   TEXT,
+      mode        TEXT,
+      size        INTEGER,
+      uploader_id TEXT,
+      UNIQUE (channel_id, ts, file_id),
+      FOREIGN KEY (channel_id, ts) REFERENCES messages (channel_id, ts) ON DELETE CASCADE,
+      CHECK (whole = 1 OR COALESCE(name, mime_type, mode, size, uploader_id) IS NULL),
+      CHECK (whole = 0 OR (
+        mime_type IS NOT NULL AND mode IS NOT NULL AND size IS NOT NULL AND uploader_id IS NOT NULL
+      ))
     );
   `);
 }

@@ -4,7 +4,7 @@ import type { Audience } from "@links/model/audience";
 import { privateAudience } from "@links/model/testFixtures";
 import { createStoredOutboxItem } from "@outbox/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
-import { askMessage } from "@slackapi/model/testFixtures";
+import { askMessage, sharedFile } from "@slackapi/model/testFixtures";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 
 /**
@@ -45,7 +45,10 @@ export function createStoredLink(
 export async function fillEveryTable(database: BridgeDatabase): Promise<void> {
   await createStoredInstallation(database);
   await createStoredLink(database);
-  await createStoredMessage(database, askMessage());
+  await createStoredMessage(
+    database,
+    askMessage("1700000100.000100", { files: [sharedFile("F1")] }),
+  );
   await createStoredRequest(database);
   await createStoredOutboxItem(database, 1);
   await database.write(async (transaction) => {

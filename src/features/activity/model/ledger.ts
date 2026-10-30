@@ -67,12 +67,14 @@ export function keepsText(
 }
 
 /**
- * The exact text and mentions that make a message's content, for the server to
- * hash. Attachments, unfurls and reply counts aren't in it, so they never count
- * as edits.
+ * The exact text, mentions and shared files that make a message's content, for the server to hash.
+ * Attachments, unfurls and reply counts aren't in it, so they never count as edits. A message that
+ * shares no files hashes as it did before the ledger kept files, so updating edits nothing.
  */
 export function fingerprintSource(message: SlackMessage): string {
-  return JSON.stringify([message.text, message.mentions]);
+  if (message.files.length === 0) return JSON.stringify([message.text, message.mentions]);
+  const fileIds = message.files.map((file) => file.id).toSorted();
+  return JSON.stringify([message.text, message.mentions, fileIds]);
 }
 
 /** What the ledger holds for a message. A marker or a tombstone has no content hash. */

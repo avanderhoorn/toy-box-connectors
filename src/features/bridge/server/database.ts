@@ -6,7 +6,7 @@
 // statement, reads included, goes through one serial queue, and every write
 // runs in its own `BEGIN IMMEDIATE` transaction.
 
-import { initializeActivitySchema } from "@activity/server/schema";
+import { addMessageFiles, initializeActivitySchema } from "@activity/server/schema";
 import { initializeLinkSchema } from "@links/server/schema";
 import { allowOutboxPosts, initializeOutboxSchema } from "@outbox/server/schema";
 import { initializeRequestSchema } from "@requests/server/schema";
@@ -72,11 +72,12 @@ async function configure(sql: Bun.SQL): Promise<void> {
 // changing a table raises the version, records its tables in `schemas/`, and migrates a `bridge.db`
 // that any recorded version made. The bridge refuses a `bridge.db` any other version made rather
 // than fail on it later, and one a newer version made needs that version, not a fresh start.
-const schemaVersion = 3;
+const schemaVersion = 4;
 
 /** Each step takes a `bridge.db` from the version it's keyed by to the next one. */
 const migrations: Record<number, (transaction: Bun.SQL) => Promise<void>> = {
   2: allowOutboxPosts,
+  3: addMessageFiles,
 };
 
 async function initializeSchema(sql: Bun.SQL, path: string): Promise<void> {

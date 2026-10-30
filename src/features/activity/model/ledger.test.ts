@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
-import { askMessage } from "@slackapi/model/testFixtures";
+import type { SlackFile } from "@slackapi/model/files";
+import { askMessage, sharedFile } from "@slackapi/model/testFixtures";
 import {
   authorRole,
+  fingerprintSource,
   mergeSnapshot,
   type LinkAudience,
   type MergeDecision,
@@ -35,4 +37,20 @@ test.each<[string, StoredMessage | null, string, string | null, MergeDecision]>(
   ["kept text isn't lost to a marker's redelivery", kept, v1, null, ignored("duplicate")],
 ])("%s", (_, stored, version, contentHash, decision) => {
   expect(mergeSnapshot(stored, { version, contentHash })).toEqual(decision);
+});
+
+const sourceSharing = (...files: SlackFile[]) => fingerprintSource({ ...message, files });
+const [f1, f2] = [sharedFile("F1"), sharedFile("F2")];
+
+test.each<[string, string, SlackFile[], boolean]>([
+  [
+    "a message without files hashes as the ledger stored it before it kept files",
+    JSON.stringify([message.text, message.mentions]),
+    [],
+    false,
+  ],
+  ["swapping a file under the same caption is an edit", sourceSharing(f1), [f2], true],
+  ["sharing the same files in another order isn't", sourceSharing(f1, f2), [f2, f1], false],
+])("%s", (_, stored, files, edited) => {
+  expect(sourceSharing(...files) !== stored).toBe(edited);
 });

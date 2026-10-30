@@ -10,6 +10,7 @@ import {
   type MergeDecision,
   type StoredMessage,
 } from "@activity/model/ledger";
+import type { SlackFile } from "@slackapi/model/files";
 import type { SlackMessage } from "@slackapi/model/messages";
 import { compareTs, type SlackTs } from "@slackapi/model/ts";
 
@@ -64,13 +65,14 @@ export async function storeMessage(
       edited_ts: message.editedTs,
       version: message.version,
     });
+    await storeFiles(transaction, channelId, ts, kept ? message.files : []);
   }
   return { decision, role, mentionedBot: row?.mentions_bot === 1 };
 }
 
 /**
- * Merges a delete into the ledger, forgetting the message's text and who wrote it. A message the
- * ledger never saw leaves a tombstone, so its late original stays deleted.
+ * Merges a delete into the ledger, forgetting the message's text, its files and who wrote it. A
+ * message the ledger never saw leaves a tombstone, so its late original stays deleted.
  */
 export async function storeDelete(
   transaction: Bun.SQL,
@@ -88,6 +90,7 @@ export async function storeDelete(
       ? { author_role: "other", deleted: 1, version: ts }
       : { deleted: 1, user_id: null, text: null, content_hash: null, mentions_bot: 0 },
   );
+  await storeFiles(transaction, channelId, ts, []);
 }
 
 /** What our newest message in `message`'s thread from before it says, if one is there. */
@@ -166,7 +169,50 @@ async function appendChange(
   return change!.seq;
 }
 
-/** Deletes the messages and changes the ledger kept from a link's channel. */
+/**
+ * Makes a message's file rows describe the files it shares now. A file it still shares keeps its
+ * row, and so the reference the lead reads it by. An upsert would also keep the row, but SQLite
+ * would use up a reference for each file it updated.
+ */
+async function storeFiles(
+  transaction: Bun.SQL,
+  channelId: string,
+  ts: SlackTs,
+  files: readonly SlackFile[],
+): Promise<void> {
+  await transaction`
+    DELETE FROM message_files WHERE channel_id = ${channelId} AND ts = ${ts}
+      AND file_id NOT IN ${transaction(files.map((file) => file.id))}
+  `;
+  for (const file of files) {
+    const columns = fileColumns(file);
+    const [stored] = await transaction`
+      UPDATE message_files SET ${transaction(columns)}
+      WHERE channel_id = ${channelId} AND ts = ${ts} AND file_id = ${file.id}
+      RETURNING id
+    `;
+    if (!stored) {
+      const row = { channel_id: channelId, ts, file_id: file.id, ...columns };
+      await transaction`INSERT INTO message_files ${transaction(row)}`;
+    }
+  }
+}
+
+function fileColumns(file: SlackFile): Record<string, string | number | null> {
+  if (!file.whole) {
+    return { whole: 0, name: null, mime_type: null, mode: null, size: null, uploader_id: null };
+  }
+  return {
+    whole: 1,
+    name: file.name,
+    mime_type: file.mimeType,
+    mode: file.mode,
+    size: file.size,
+    uploader_id: file.uploaderId,
+  };
+}
+
+/** Deletes the messages, their files and the changes the ledger kept from a link's channel. */
 export async function deleteLinkActivity(
   transaction: Bun.SQL,
   link: { slackChannelId: string },
