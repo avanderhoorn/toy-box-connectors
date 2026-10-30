@@ -212,10 +212,12 @@ export function createFakeSlackApi(options: {
       const address = (path: string) =>
         new URL(`/files-pri/${identity.teamId}-${id}/${path}`, options.filesOrigin).href;
       const created = Math.floor(now() / 1000);
-      // Slack shows a text file's first lines, which the bridge must never keep.
-      const preview = mimetype.startsWith("text/")
-        ? new TextDecoder().decode(bytes).split("\n").slice(0, 5).join("\n")
+      // The test workspace kept an uploaded text file as a snippet, showing its first lines, which
+      // the bridge must never keep.
+      const lines = mimetype.startsWith("text/")
+        ? new TextDecoder().decode(bytes).split("\n")
         : undefined;
+      const preview = lines?.slice(0, 5).join("\n");
       const file: FakeSlackFile = {
         id,
         created,
@@ -225,14 +227,17 @@ export function createFakeSlackApi(options: {
         mimetype,
         user_team: identity.teamId,
         size: bytes.length,
-        mode: "hosted",
+        mode: lines ? "snippet" : "hosted",
         is_external: false,
         url_private: address(encodeURIComponent(name)),
         url_private_download: address(`download/${encodeURIComponent(name)}`),
         file_access: "visible",
-        ...(preview !== undefined && {
+        ...(lines && {
           preview,
-          preview_highlight: `<div class="CodeMirror">${Bun.escapeHTML(preview)}</div>`,
+          preview_highlight: `<div class="CodeMirror">${Bun.escapeHTML(preview!)}</div>`,
+          preview_is_truncated: lines.length > 5,
+          lines: lines.length,
+          lines_more: Math.max(0, lines.length - 5),
         }),
         ...settings,
       };
@@ -578,9 +583,20 @@ export function createFakeSlackApi(options: {
         has_more_shares: false,
         comments_count: 0,
       },
+      ...(stored.file.mode === "snippet" && snippetContent(stored.bytes)),
       comments: [],
       response_metadata: { next_cursor: "" },
     });
+  }
+
+  /** What files.info adds beside a snippet, which in the test workspace was all of its text. */
+  function snippetContent(bytes: Uint8Array) {
+    const content = new TextDecoder().decode(bytes);
+    return {
+      content,
+      content_highlight_html: `<div class="CodeMirror">${Bun.escapeHTML(content)}</div>`,
+      content_highlight_css: ".CodeMirror { font-family: monospace; }",
+    };
   }
 
   function download(request: Request): Response {
@@ -596,9 +612,15 @@ export function createFakeSlackApi(options: {
           "content-type": "text/html; charset=utf-8",
         },
       });
-    const stored = files.get(address.pathname.split("/")[2]?.split("-").at(-1) ?? "");
+    const [, , owner, path] = address.pathname.split("/");
+    const stored = files.get(owner?.split("-").at(-1) ?? "");
     if (!stored) return new Response("Not found", { status: 404 });
-    return new Response(stored.bytes, { headers: { "content-type": stored.file.mimetype } });
+    // The test workspace served a screenshot's download as its type, but a snippet's as this.
+    const type =
+      path === "download" && stored.file.mode === "snippet"
+        ? "application/force-download"
+        : stored.file.mimetype;
+    return new Response(stored.bytes, { headers: { "content-type": type } });
   }
 
   async function handle(request: Request): Promise<Response> {

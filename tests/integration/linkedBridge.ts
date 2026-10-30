@@ -7,6 +7,7 @@ import { openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database
 import { commandSocketPath } from "@bridge/server/socket";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { callBridge } from "@commands/client/cli";
+import type { Activity } from "@commands/model/activity";
 import type { Inbox } from "@commands/model/inbox";
 import { createStoredLink } from "@links/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
@@ -104,8 +105,13 @@ export async function startLinkedBridge({
       call("status", sessionId, channel),
     /** What inbox shows the channel's lead, which marks what it shows read. */
     inbox: async () => (await call("inbox", channelId)).json as Inbox,
+    /** What activity shows the channel's lead. */
+    activity: async () => (await call("activity", channelId)).json as Activity,
     /** Has the channel's lead answer request `id` with `text`. */
     reply: (id: number, text: string) =>
       call("reply", channelId, null, { request: `r${id}`, text }),
+    /** Has the channel's lead read file `reference`, at `page` as the CLI sends `--page`. */
+    file: (reference: string, page?: string) =>
+      call("file", channelId, null, { file: reference, page }),
   };
 }

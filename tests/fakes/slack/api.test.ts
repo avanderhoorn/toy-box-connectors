@@ -201,14 +201,21 @@ test("files.info finds a file's shares in its messages, and only the bot's token
   const share = (ts: string, channel_name: string, share_user_id: string) => [
     { ts, channel_name, team_id: fake.identity.teamId, share_user_id },
   ];
-  expect((await client.files.info({ file: file.id })).file).toMatchObject({
-    preview: text,
-    preview_highlight: expect.stringContaining("Second line"),
-    shares: {
-      public: { [open]: share("1.000001", "general", "UALICE") },
-      private: { [closed]: share("1.000002", "team", "UBOB") },
+  const info = await client.files.info({ file: file.id });
+  expect(info).toMatchObject({
+    file: {
+      mode: "snippet",
+      preview: text,
+      preview_highlight: expect.stringContaining("Second line"),
+      lines: 2,
+      lines_more: 0,
+      shares: {
+        public: { [open]: share("1.000001", "general", "UALICE") },
+        private: { [closed]: share("1.000002", "team", "UBOB") },
+      },
+      has_more_shares: false,
     },
-    has_more_shares: false,
+    content: text,
   });
   await expect(client.files.info({ file: "FMISSING" })).rejects.toMatchObject({
     data: { error: "file_not_found" },
@@ -218,7 +225,7 @@ test("files.info finds a file's shares in its messages, and only the bot's token
   const served = await download({ authorization: `Bearer ${fake.botToken}` });
   expect([served.status, served.headers.get("content-type"), await served.text()]).toEqual([
     200,
-    "text/plain",
+    "application/force-download",
     text,
   ]);
   const unsigned = await download({});
