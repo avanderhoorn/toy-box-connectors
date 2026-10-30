@@ -25,16 +25,25 @@ test.each([
   const refused = (problem: string) =>
     `\`${name}\` didn't run. ${problem} Run \`toy-box-slack ${name} --help\` to see what it takes.`;
 
-  expect([showing(3), showing(2, 1), showing(4)].map((input) => problemWith(name, input))).toEqual([
+  expect(
+    [showing(3), showing(2, 1), showing(1, 2), showing(4)].map((input) => problemWith(name, input)),
+  ).toEqual([
     null,
+    refused("--alt: Give one for each --image."),
     refused("--alt: Give one for each --image."),
     refused("--image: Give at most 3."),
   ]);
 });
 
-test("an --image is at most 5 MiB, and its --alt says what it shows in at most 1000 characters", () => {
+test("an --image is at most 5 MiB, and its --alt says what it shows in at most 1000 characters, each problem said once", () => {
+  /** Two of each, so a problem both images have is said once. */
   const reply = (image: string, alt: string) =>
-    problemWith("reply", { request: "r1", text: "Shipped.", image: [image], alt: [alt] });
+    problemWith("reply", {
+      request: "r1",
+      text: "Shipped.",
+      image: [image, image],
+      alt: [alt, alt],
+    });
   const refused = (problem: string) =>
     `\`reply\` didn't run. ${problem} Run \`toy-box-slack reply --help\` to see what it takes.`;
 
