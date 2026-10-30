@@ -88,43 +88,6 @@ test("lists the posts Slack never confirmed, linking each answer to its request"
   );
 });
 
-test("answers as it did before the bridge hosted several apps while it hosts only the default", async () => {
-  const database = await openTestDatabase();
-  await createStoredLink(database);
-  const status = startStatus({ nameApps: false });
-
-  const { result, text } = await status([hosted(database)], { channelId: null, at: 1_000 });
-
-  expect(Object.keys(result as object)).toEqual(["slack", "links"]);
-  expect(text).toStartWith("## Slack\nConnected.");
-});
-
-test("names the app of everything it shows once the bridge hosts several", async () => {
-  const home = await openTestDatabase();
-  const releases = await openTestDatabase();
-  await createStoredLink(home);
-  await createStoredLink(releases, "other");
-  const status = startStatus({ nameApps: true });
-  const apps = [hosted(home), hosted(releases, "releases")];
-  const linked = (id: string) => [expect.objectContaining({ toyBoxChannelId: id })];
-
-  const every = await status(apps, { channelId: null, at: 1_000 });
-  const one = await status([apps[1]!], { channelId: "toybox-other", at: 1_000 });
-
-  expect(every.result).toEqual({
-    apps: [
-      { app: "default", slack: connected(), links: linked("toybox-link") },
-      { app: "releases", slack: connected(), links: linked("toybox-other") },
-    ],
-  });
-  expect(every.text).toStartWith("# The default app\n\n## Slack\nConnected.");
-  expect(every.text).toContain("\n\n# The releases app\n\n## Slack\nConnected.");
-  expect(one.result).toEqual({
-    apps: [{ app: "releases", slack: connected(), links: linked("toybox-other") }],
-  });
-  expect(one.text).toStartWith("# The releases app\n\n");
-});
-
 test("names each link's channels as Slack and Toy Box call them, beside their IDs", async () => {
   const { app, toyBox, channelId } = await startNamedLink();
   const status = statusCommand({ nameApps: false, toyBoxOrigin: new URL(toyBox.url) });

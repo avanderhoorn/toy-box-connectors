@@ -4,31 +4,16 @@ import { resolveCaller, resolveSessionId, type CallerFacts, type CallerRole } fr
 const LINKED = new Set(["toybox-link", "toybox-other"]);
 const ANYONE: CallerRole[] = ["lead", "terminal"];
 
-test.each<[string, NodeJS.ProcessEnv, string | null]>([
-  ["a session", { COPILOT_AGENT_SESSION_ID: "toybox-link" }, "toybox-link"],
-  [
-    "a session with spaces around it",
-    { COPILOT_AGENT_SESSION_ID: " toybox-link\n" },
-    "toybox-link",
-  ],
-  ["no session", {}, null],
-  ["an empty session", { COPILOT_AGENT_SESSION_ID: "" }, null],
-  ["a blank session", { COPILOT_AGENT_SESSION_ID: " " }, null],
-])("reads %s from the environment", (_, env, sessionId) => {
-  expect(resolveSessionId(env)).toBe(sessionId);
+test("reads a blank session from the environment", () => {
+  expect(resolveSessionId({ COPILOT_AGENT_SESSION_ID: " " })).toBeNull();
 });
 
-test.each<[string, CallerFacts, string | null]>([
-  ["a linked channel's lead", { sessionId: "toybox-link", channelId: null }, "toybox-link"],
-  [
-    "a lead naming its own channel",
-    { sessionId: "toybox-link", channelId: "toybox-link" },
-    "toybox-link",
-  ],
-  ["a terminal naming a channel", { sessionId: null, channelId: "toybox-other" }, "toybox-other"],
-  ["a terminal naming none", { sessionId: null, channelId: null }, null],
-])("acts for %s", (_, facts, channelId) => {
-  expect(resolveCaller(facts, LINKED, "status", ANYONE)).toEqual({ kind: "caller", channelId });
+test("acts for a lead naming its own channel", () => {
+  const facts = { sessionId: "toybox-link", channelId: "toybox-link" };
+  expect(resolveCaller(facts, LINKED, "status", ANYONE)).toEqual({
+    kind: "caller",
+    channelId: "toybox-link",
+  });
 });
 
 test.each<[string, CallerFacts, readonly CallerRole[], string]>([

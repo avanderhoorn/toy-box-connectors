@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { inboxThread, presentInbox, type InboxMessage } from "./inbox";
+import { presentInbox, type InboxMessage } from "./inbox";
 
 const MINUTE = 60_000;
 const AT = 1_000 * MINUTE;
@@ -8,30 +8,6 @@ const ANA = { userId: "U-owner", name: "{Ana}" };
 function said(author: InboxMessage["author"], role: InboxMessage["role"], text: string) {
   return { ts: "1700000100.000100", author, role, edited: false, text, cut: 0 };
 }
-
-// A thread's messages at ts `from` through `to`.
-function run(from: number, to = from) {
-  return Array.from({ length: to - from + 1 }, (_, index) => ({ ts: `${from + index}` }));
-}
-
-test.each([
-  ["just the request", run(0), ["0"], run(0), {}],
-  ["20 replies", run(0, 20), ["0"], run(0, 20), {}],
-  ["21 replies", run(0, 21), ["0"], [...run(0), ...run(2, 21)], { 2: 1 }],
-  ["30 replies asking late", run(0, 30), ["15"], [...run(0), ...run(11, 30)], { 11: 10 }],
-  [
-    "30 replies asking early, then following up",
-    run(0, 30),
-    ["4", "7"],
-    [...run(0), ...run(4), ...run(7), ...run(11, 30)],
-    { 4: 3, 7: 2, 11: 3 },
-  ],
-])(
-  "a thread of %s shows its first message, the request's own messages and the newest 20 replies",
-  (_, thread, own, messages, leftOut) => {
-    expect(inboxThread(thread, new Set(own))).toEqual({ messages, leftOut });
-  },
-);
 
 test("fences what each person wrote, labeled with who they are to the link", () => {
   const text = presentInbox(

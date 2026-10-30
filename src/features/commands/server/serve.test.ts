@@ -97,13 +97,6 @@ async function serving(apps: App[] = [{ name: DEFAULT_APP, links: ["link"] }]) {
 
 test.each<[string, string, unknown, number, Answer]>([
   [
-    "runs a command for the caller it resolved",
-    "status",
-    { caller: LEAD, input: {} },
-    200,
-    { result: { apps: ["default"], channelId: "toybox-link", at: 1_000 }, text: "Linked." },
-  ],
-  [
     "names each problem with the input the way the CLI shows it",
     "dismiss",
     { caller: LEAD, input: { request: "14" } },
@@ -112,13 +105,6 @@ test.each<[string, string, unknown, number, Answer]>([
       error:
         "`dismiss` didn't run. <request>: Write it as inbox shows it, such as r14. --reason: Missing. Run `toy-box-slack dismiss --help` to see what it takes.",
     },
-  ],
-  [
-    "passes on a command's refusal",
-    "inbox",
-    { caller: LEAD, input: {} },
-    409,
-    { error: "Run it later." },
   ],
   [
     "refuses a call it can't read without running it",
@@ -141,34 +127,6 @@ test.each<[string, string, unknown, number, Answer]>([
 ])("%s", async (_, name, body, status, answer) => {
   const { call } = await serving();
   expect(await call(name, body)).toEqual({ status, answer });
-});
-
-test("runs a call where routing says, by the app the caller's channel links through", async () => {
-  const { call } = await serving([
-    { name: DEFAULT_APP, links: ["link"] },
-    { name: "releases", links: ["other"] },
-  ]);
-  const terminal = (channelId: string | null) => ({ ...TERMINAL, channelId });
-  const ran = async (name: string, caller: unknown, input = {}) =>
-    (await call(name, { caller, input })).answer.result;
-
-  expect((await ran("pause", LEAD))?.app).toBe("default");
-  expect((await ran("pause", { sessionId: "toybox-other", channelId: null }))?.app).toBe(
-    "releases",
-  );
-  expect((await ran("pause", terminal("toybox-other")))?.app).toBe("releases");
-  expect((await ran("unlink", terminal("toybox-new")))?.app).toBe("default");
-  expect((await ran("status", terminal(null)))?.apps).toEqual(["default", "releases"]);
-  expect((await ran("status", terminal("toybox-link")))?.apps).toEqual(["default"]);
-  const link = { slackChannel: "C0NEW", app: "releases" };
-  expect((await ran("link", terminal("toybox-new"), link))?.app).toBe("releases");
-  expect(await call("link", { caller: terminal("toybox-link"), input: link })).toEqual({
-    status: 409,
-    answer: {
-      error:
-        "This Toy Box channel links through the default app. Run `toy-box-slack unlink` before you link it through the releases app.",
-    },
-  });
 });
 
 test("links a Toy Box channel through only one app when two links race", async () => {

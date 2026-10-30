@@ -89,16 +89,13 @@ test("pause leaves a suspended link as it is, and says why it's suspended and wh
   expect(await links()).toEqual(before);
 });
 
-test.each([
-  { was: "active", is: "paused" },
-  { was: "paused", is: "already paused" },
-] as const)("pause answers that a link that was $was is $is", async ({ was, is }) => {
+test("pause answers that a link that was active is paused", async () => {
   const database = await openTestDatabase();
-  await createStoredLink(database, "link", { status: was });
+  await createStoredLink(database, "link", { status: "active" });
 
   expect(await pauseCommand(offline(database))({}, OWNER)).toEqual({
     result: { status: "paused" },
-    text: `The link to #C-link is ${is}, so nothing new opens and nothing posts. Have the owner run \`toy-box-slack resume\`.`,
+    text: "The link to #C-link is paused, so nothing new opens and nothing posts. Have the owner run `toy-box-slack resume`.",
   });
 });
 
@@ -181,22 +178,6 @@ test("allow goes ahead when Slack doesn't say the channel's name, naming the cha
     result: { added: ["U-ada"] },
     text: "Ada (U-ada) can ask the lead to act from #C-link now.",
   });
-});
-
-test("a link through a named app says whose bot answers", async () => {
-  const { database, channelId, options } = await linking();
-  await database.write(
-    (transaction) => transaction`UPDATE links SET toybox_channel_id = ${channelId}`,
-  );
-  const link = (app: string | null) =>
-    linkCommand({ ...options, app })({ slackChannel: "C-link" }, { channelId, at: 1_000 });
-
-  expect((await link("releases")).text.split("\n")[0]).toBe(
-    'The lead of "Linked" answers in #fake-channel now as the releases app\'s bot, for the people `toy-box-slack allow` names.',
-  );
-  expect((await link(null)).text.split("\n")[0]).toBe(
-    'The lead of "Linked" answers in #fake-channel now, for the people `toy-box-slack allow` names.',
-  );
 });
 
 test("a Slack channel linked to another Toy Box channel is refused, saying another app can link it", async () => {

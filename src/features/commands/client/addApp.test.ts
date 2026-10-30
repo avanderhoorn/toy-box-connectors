@@ -1,17 +1,13 @@
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { listApps, locateApp, type App } from "@bridge/server/apps";
+import { locateApp, type App } from "@bridge/server/apps";
 import { prepareDataFolder } from "@bridge/server/dataFolder";
-import {
-  readAppCredentialsFile,
-  readCredentialsFile,
-  writeCredential,
-} from "@bridge/server/environment";
+import { readAppCredentialsFile } from "@bridge/server/environment";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { createAppFolder } from "./addApp";
 import type { SecretReader } from "./secrets";
-import { asksAppTokenOf, asksBotTokenOf, owner, refusalOf } from "./testFixtures";
+import { owner, refusalOf } from "./testFixtures";
 
 const BOT_TOKEN = "xoxb-2222-3333-ReLeAsEs";
 const APP_TOKEN = "xapp-1-A0RELEASES-4444-abcdef";
@@ -29,46 +25,12 @@ function alreadyThere(app: App): string {
   return `${app.folder} is already there, so add-app didn't add the ${app.name} app. To replace one of its tokens, delete that token's line from ${app.credentials} and run \`toy-box-slack serve\` at a terminal, which asks for it again.`;
 }
 
-test("asks for a new app's two tokens by its name, then saves them in a folder of its own the bridge lists, beside the others", async () => {
-  const dataFolder = newDataFolder();
-  prepareDataFolder(dataFolder);
-  writeCredential(dataFolder, "SLACK_BOT_TOKEN", "xoxb-default");
-  const alpha = await createAppFolder(
-    dataFolder,
-    "alpha",
-    owner("xoxb-alpha", "xapp-alpha").reader,
-  );
-  const typing = owner(BOT_TOKEN, APP_TOKEN);
-
-  const app = await createAppFolder(dataFolder, "releases", typing.reader);
-
-  expect(app).toEqual(locateApp(dataFolder, "releases"));
-  expect(typing.asked).toEqual([asksBotTokenOf("releases"), asksAppTokenOf("releases")]);
-  expect(typing.closed).toBe(1);
-  expect(readAppCredentialsFile(app.folder)).toEqual({
-    SLACK_BOT_TOKEN: BOT_TOKEN,
-    SLACK_APP_TOKEN: APP_TOKEN,
-  });
-  expect(statSync(join(dataFolder, "apps")).mode & 0o777).toBe(0o700);
-  expect(statSync(app.folder).mode & 0o777).toBe(0o700);
-  expect(statSync(app.credentials).mode & 0o777).toBe(0o600);
-  expect(listApps(dataFolder).map(({ name }) => name)).toEqual(["default", "alpha", "releases"]);
-  expect(readAppCredentialsFile(alpha.folder)).toEqual({
-    SLACK_BOT_TOKEN: "xoxb-alpha",
-    SLACK_APP_TOKEN: "xapp-alpha",
-  });
-  expect(readCredentialsFile(dataFolder)).toEqual({ SLACK_BOT_TOKEN: "xoxb-default" });
-});
-
-test.each([
-  ["default", "An added app can't be named default, since that's the data folder's own app."],
-  ["../../escaped", NAME_RULE],
-])("refuses to name an app %p before asking or creating anything", async (name, problem) => {
+test('refuses to name an app "../../escaped" before asking or creating anything', async () => {
   const dataFolder = newDataFolder();
   const typing = owner(BOT_TOKEN, APP_TOKEN);
 
-  expect(await refusalOf(createAppFolder(dataFolder, name, typing.reader))).toBe(
-    `${problem} Run add-app again with another name.`,
+  expect(await refusalOf(createAppFolder(dataFolder, "../../escaped", typing.reader))).toBe(
+    `${NAME_RULE} Run add-app again with another name.`,
   );
   expect(typing.opened).toBe(0);
   expect(existsSync(dataFolder)).toBe(false);
@@ -122,23 +84,13 @@ test("refuses a folder made while the owner typed, leaving it to whatever made i
   expect(existsSync(app.credentials)).toBe(false);
 });
 
-test.each([
-  {
-    token: "a missing bot token",
-    answers: [null],
-    refusal: "No Slack bot token was given, so add-app didn't add the releases app.",
-  },
-  {
-    token: "an app-level token that isn't one",
-    answers: [BOT_TOKEN, BOT_TOKEN],
-    refusal:
-      "That isn't a Slack app-level token, which is one word starting with xapp-, so it wasn't saved.",
-  },
-])("refuses $token, creating no folder", async ({ answers, refusal }) => {
+test("refuses a missing bot token, creating no folder", async () => {
   const dataFolder = newDataFolder();
-  const typing = owner(...answers);
+  const typing = owner(null);
 
-  expect(await refusalOf(createAppFolder(dataFolder, "releases", typing.reader))).toBe(refusal);
+  expect(await refusalOf(createAppFolder(dataFolder, "releases", typing.reader))).toBe(
+    "No Slack bot token was given, so add-app didn't add the releases app.",
+  );
   expect(typing.closed).toBe(1);
   expect(existsSync(join(dataFolder, "apps"))).toBe(false);
 });

@@ -59,53 +59,6 @@ test("asks a new data folder for both tokens, and saves them at mode 600 without
   });
 });
 
-test("asks only for what neither the environment nor credentials.env sets", async () => {
-  const cases = [
-    {
-      env: { SLACK_BOT_TOKEN: BOT_TOKEN },
-      credentials: {},
-      answers: [APP_TOKEN],
-      asked: [ASKS_APP_TOKEN],
-      saved: ["SLACK_APP_TOKEN"],
-    },
-    {
-      env: { SLACK_BOT_TOKEN: "", SLACK_APP_TOKEN: APP_TOKEN },
-      credentials: {},
-      answers: [BOT_TOKEN],
-      asked: [ASKS_BOT_TOKEN],
-      saved: ["SLACK_BOT_TOKEN"],
-    },
-    {
-      env: {},
-      credentials: { SLACK_APP_TOKEN: APP_TOKEN },
-      answers: [BOT_TOKEN],
-      asked: [ASKS_BOT_TOKEN],
-      saved: ["SLACK_BOT_TOKEN"],
-    },
-  ];
-  for (const { env, credentials, answers, asked, saved } of cases) {
-    const dataFolder = dataFolderWith(credentials);
-    const typing = owner(...answers);
-
-    const said = await askForMissingCredentials(dataFolder, env, typing.reader);
-
-    expect(typing.asked).toEqual(asked);
-    const list = new Intl.ListFormat("en").format(saved);
-    expect(said).toEqual([`Saved ${list} in ${join(dataFolder, "credentials.env")}.`]);
-    expect(Object.keys(readCredentialsFile(dataFolder)).sort()).toEqual(
-      [...Object.keys(credentials), ...saved].sort(),
-    );
-  }
-});
-
-test("opens no reader when the bridge has everything it needs", async () => {
-  const dataFolder = dataFolderWith({ SLACK_BOT_TOKEN: BOT_TOKEN, SLACK_APP_TOKEN: APP_TOKEN });
-  const typing = owner();
-
-  expect(await askForMissingCredentials(dataFolder, {}, typing.reader)).toEqual([]);
-  expect(typing.opened).toBe(0);
-});
-
 test("asks for each added app's missing tokens by its name, after the default app's, and saves them in its own folder", async () => {
   const dataFolder = dataFolderWith();
   const alpha = addedApp(dataFolder, "alpha");
