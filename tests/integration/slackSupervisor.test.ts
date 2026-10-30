@@ -35,12 +35,13 @@ const connected: SlackState = { connection: "connected", problem: null };
 /**
  * A fake Slack and a fresh database with a link watching C-link, where supervisors start for the
  * fake's tokens. Only the test moves the clock, and `nextRead` tells it when the clock is read,
- * which is how a frame is stamped as it arrives.
+ * which is how a frame is stamped as it arrives. A test timing what Slack receives gives fake Slack
+ * a real clock with `slackNow`.
  */
-async function linkFakeSlack() {
+async function linkFakeSlack({ slackNow }: { slackNow?: () => number } = {}) {
   let time = NOW;
   let reading: PromiseWithResolvers<void> | undefined;
-  const fake = startFakeSlack({ now: () => time });
+  const fake = startFakeSlack({ now: slackNow ?? (() => time) });
   fake.addChannel({ id: "C-link" });
   const stops: (() => Promise<void>)[] = [];
   // A test expecting an error passes its own onError.
@@ -137,14 +138,9 @@ async function caughtUp({ fake, database }: Link, reads: number) {
   });
 }
 
-/** When the test saw each of the first `count` calls to `method`, which must come apart. */
-async function callTimes(fake: FakeSlack, method: string, count: number): Promise<number[]> {
-  const times: number[] = [];
-  for (let calls = 1; calls <= count; calls++) {
-    await waitFor(() => expect(called(fake, method)).toBe(calls));
-    times.push(performance.now());
-  }
-  return times;
+/** When fake Slack received each call to `method`, by its clock. */
+function callTimes(fake: FakeSlack, method: string) {
+  return fake.calls.filter((call) => call.method === method).map(({ at }) => at);
 }
 
 /** Stops `supervisor` while what it waits for is held, checking it waits until `release`. */
@@ -228,7 +224,7 @@ describe("connecting", () => {
 
   test("Slack that can't connect yet is asked again, less often each time, saying why once", async () => {
     const logged = captureLog();
-    const link = await linkFakeSlack();
+    const link = await linkFakeSlack({ slackNow: Date.now });
     link.fake.failNext("auth.test", { status: 503 });
     link.fake.failNext("auth.test", { status: 503 });
     link.fake.failNext("apps.connections.open", { error: "access_denied" });
@@ -237,13 +233,12 @@ describe("connecting", () => {
     const { supervisor } = link.supervise({
       timings: { ...defaultWakeTimings, retry: 50, retryLimit: 400 },
     });
-    const asked = await callTimes(link.fake, "auth.test", 3);
-    const opened = await callTimes(link.fake, "apps.connections.open", 3);
     await waitFor(() => expect(supervisor.state()).toEqual(connected));
 
-    for (const times of [asked, opened]) {
-      expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(45);
-      expect(times[2]! - times[1]!).toBeGreaterThanOrEqual(95);
+    for (const method of ["auth.test", "apps.connections.open"]) {
+      const [first, second, third] = callTimes(link.fake, method);
+      expect(second! - first!).toBeGreaterThanOrEqual(45);
+      expect(third! - second!).toBeGreaterThanOrEqual(95);
     }
     expect(methodsCalled(link.fake)).toEqual([
       ...["auth.test", "auth.test", "auth.test", "bots.info"],
