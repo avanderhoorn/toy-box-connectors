@@ -30,6 +30,23 @@ export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
     );
     -- A request has one reply, while its thread can hold any number of posts.
     CREATE UNIQUE INDEX outbox_replies ON outbox(request_id) WHERE kind = 'reply';
+
+    -- The files an item shows below its text, in order, while its payload holds what each shows.
+    -- They have no text, so they outlast the payload and retract can still delete them.
+    CREATE TABLE outbox_files (
+      item_id  TEXT NOT NULL REFERENCES outbox(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL CHECK (position >= 0),
+      file_id  TEXT NOT NULL UNIQUE,
+      PRIMARY KEY (item_id, position)
+    );
+    -- The files the bridge uploaded that it owes Slack a delete, until Slack confirms each gone.
+    -- They name no link, so unlinking can't drop one.
+    CREATE TABLE file_deletions (
+      file_id    TEXT PRIMARY KEY,
+      due_at     INTEGER NOT NULL,
+      attempts   INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+      created_at INTEGER NOT NULL
+    );
   `);
 }
 
@@ -71,5 +88,27 @@ export async function allowOutboxPosts(db: Bun.SQL): Promise<void> {
     DROP TABLE outbox;
     ALTER TABLE outbox_new RENAME TO outbox;
     CREATE UNIQUE INDEX outbox_replies ON outbox(request_id) WHERE kind = 'reply';
+  `);
+}
+
+/**
+ * Takes version 4's outbox, whose items showed only text, to version 5's, which keeps the files an
+ * item shows and the deletes the bridge owes Slack. It keeps its own copy of version 5's tables, so
+ * a later change to them can't change what it makes.
+ */
+export async function addOutboxImages(db: Bun.SQL): Promise<void> {
+  await db.unsafe(`
+    CREATE TABLE outbox_files (
+      item_id  TEXT NOT NULL REFERENCES outbox(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL CHECK (position >= 0),
+      file_id  TEXT NOT NULL UNIQUE,
+      PRIMARY KEY (item_id, position)
+    );
+    CREATE TABLE file_deletions (
+      file_id    TEXT PRIMARY KEY,
+      due_at     INTEGER NOT NULL,
+      attempts   INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+      created_at INTEGER NOT NULL
+    );
   `);
 }

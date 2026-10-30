@@ -1,3 +1,4 @@
+import { RETENTION_MS } from "@activity/model/ledger";
 import type { Installation } from "@slackapi/model/installation";
 import { isWithdrawn, slackMessageSchema } from "@slackapi/model/messages";
 import { compareTs, slackTsSchema, type SlackTs } from "@slackapi/model/ts";
@@ -121,6 +122,15 @@ export const reconciliationDelays = [60_000, 300_000] as const;
 export function nextReconciliation(attemptAt: number, completedPasses: number): number | null {
   const delay = reconciliationDelays[completedPasses];
   return delay === undefined ? null : attemptAt + delay;
+}
+
+/**
+ * When to ask Slack again to delete a file it kept: a minute after the first try, doubling to
+ * hourly, until 30 days after the bridge first owed the delete, as long as it keeps a post.
+ */
+export function nextDeletion(owedAt: number, attempts: number, at: number): number | null {
+  if (at - owedAt >= RETENTION_MS) return null;
+  return at + Math.min(3_600_000, 60_000 * 2 ** attempts);
 }
 
 function correctThread(message: DeliveryMessage, threadTs: SlackTs | null): boolean {

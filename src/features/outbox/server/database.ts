@@ -11,7 +11,10 @@ import { canonicalUserId } from "@slackapi/server/users";
 import type { SlackTs } from "@slackapi/model/ts";
 import { z } from "zod";
 import { nextReconciliation, reconciliationDelays, type OutboxSettlement } from "../model/delivery";
-import { renderMarkdown, type RenderedMessage } from "../model/rendering";
+import type { LeadPayload, PostImage } from "../model/payload";
+import { renderMarkdown } from "../model/rendering";
+import { outputProblem } from "../model/safety";
+import { oweItemFiles } from "./files";
 import { findThreadPlace, type PostThread } from "./threads";
 
 export class OutboxRefusedError extends Error {}
@@ -70,7 +73,7 @@ type OutboxRow = {
 
 export async function queueReply(
   tx: Bun.SQL,
-  input: { requestId: number; text: string },
+  input: { requestId: number; text: string; images?: readonly PostImage[] },
   now: number,
 ): Promise<OutboxItem> {
   const [existing] = await tx<OutboxRow[]>`
@@ -87,7 +90,7 @@ export async function queueReply(
     throw new OutboxRefusedError("This request's link isn't active.");
   if (!link.allowlist.has(await canonicalUserId(tx, request.requesterUserId)))
     throw new OutboxRefusedError("This requester is no longer allowed.");
-  const payload = rendered(input.text);
+  const payload = rendered(input.text, [], input.images);
   try {
     await saveRequest(tx, beginAnswer(request, now));
   } catch (error) {
@@ -114,7 +117,13 @@ export async function queueReply(
 
 export async function queuePublication(
   tx: Bun.SQL,
-  input: { linkId: string; series: string; scheduledAt: number; text: string },
+  input: {
+    linkId: string;
+    series: string;
+    scheduledAt: number;
+    text: string;
+    images?: readonly PostImage[];
+  },
   now: number,
 ): Promise<OutboxItem> {
   if (
@@ -138,13 +147,15 @@ export async function queuePublication(
     SELECT slack_channel_id, status FROM links WHERE id = ${input.linkId}
   `;
   if (!link || link.status !== "active") throw new OutboxRefusedError("This link isn't active.");
-  const payload = rendered(input.text);
+  const payload = rendered(input.text, [], input.images);
   return existing
     ? retryFailed(tx, existing.id, payload, now)
     : insertItem(
         tx,
         {
-          ...input,
+          linkId: input.linkId,
+          series: input.series,
+          scheduledAt: input.scheduledAt,
           requestId: null,
           kind: "publication",
           channelId: link.slack_channel_id,
@@ -167,7 +178,13 @@ export const repeatPostMs = 10 * 60_000;
  */
 export async function queuePost(
   tx: Bun.SQL,
-  input: { link: ChannelLink; thread?: PostThread; text: string; mentions?: readonly string[] },
+  input: {
+    link: ChannelLink;
+    thread?: PostThread;
+    text: string;
+    mentions?: readonly string[];
+    images?: readonly PostImage[];
+  },
   now: number,
 ): Promise<OutboxItem> {
   const { link, thread, mentions = [] } = input;
@@ -179,7 +196,7 @@ export async function queuePost(
       `${new Intl.ListFormat("en").format(strangers)} ${are} on the allowlist, so a post can't mention them.`,
     );
   }
-  const payload = rendered(input.text, mentions);
+  const payload = rendered(input.text, mentions, input.images);
   const place = thread
     ? await findThreadPlace(tx, link, thread)
     : { threadTs: null, requestId: null };
@@ -274,10 +291,12 @@ export async function settleOutboxAttempt(
   `;
   if (!row) return null;
   const settled = outboxItem(row);
+  if (settled.state === "failed") await oweItemFiles(tx, settled.id, now);
   await settleRequest(tx, settled, now);
   return settled;
 }
 
+/** Fails an item that can't go out, so the files it would have shown are deleted. */
 export async function failQueuedItem(
   tx: Bun.SQL,
   item: OutboxItem,
@@ -290,6 +309,7 @@ export async function failQueuedItem(
   `;
   if (!row) return null;
   const settled = outboxItem(row);
+  await oweItemFiles(tx, settled.id, now);
   await settleRequest(tx, settled, now);
   return settled;
 }
@@ -365,7 +385,12 @@ export async function forgetOldPosts(tx: Bun.SQL, now: number): Promise<void> {
   `;
 }
 
-function rendered(text: string, mentions: readonly string[] = []): RenderedMessage {
+/** What a post says, with what each image it shows below the text shows, when it shows any. */
+function rendered(
+  text: string,
+  mentions: readonly string[] = [],
+  images: readonly PostImage[] = [],
+): LeadPayload {
   const result = renderMarkdown(text, mentions);
   if (result.kind === "refused") {
     const problem =
@@ -376,7 +401,17 @@ function rendered(text: string, mentions: readonly string[] = []): RenderedMessa
           : `Remove credentials (${result.problem})`;
     throw new OutboxRefusedError(`Cannot post: ${problem}.`);
   }
-  return result.message;
+  for (const [index, { alt }] of images.entries()) {
+    const problem = outputProblem(alt);
+    if (problem)
+      throw new OutboxRefusedError(
+        `Cannot post: Remove credentials (${problem}) from image ${index + 1}'s alt text.`,
+      );
+  }
+  // A post without images keeps the payload, and so the hash, it had before posts showed any.
+  return images.length
+    ? { ...result.message, images: images.map(({ alt }) => ({ alt })) }
+    : result.message;
 }
 
 /** A reply's outcome answers its request or returns it to the lead. A post in its thread does neither. */
@@ -391,7 +426,7 @@ async function settleRequest(tx: Bun.SQL, item: OutboxItem, now: number): Promis
 async function retryFailed(
   tx: Bun.SQL,
   id: string,
-  payload: RenderedMessage,
+  payload: LeadPayload,
   now: number,
 ): Promise<OutboxItem> {
   const [row] = await tx<OutboxRow[]>`
@@ -407,7 +442,7 @@ async function insertItem(
     OutboxItem,
     "linkId" | "requestId" | "kind" | "channelId" | "threadTs" | "series" | "scheduledAt"
   >,
-  payload: RenderedMessage,
+  payload: LeadPayload,
   now: number,
 ): Promise<OutboxItem> {
   const [row] = await tx<OutboxRow[]>`
@@ -430,7 +465,7 @@ async function insertItem(
   return outboxItem(row!);
 }
 
-function hash(payload: RenderedMessage): string {
+function hash(payload: LeadPayload): string {
   return new Bun.CryptoHasher("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 

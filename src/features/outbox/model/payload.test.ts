@@ -65,3 +65,47 @@ test("a stored snapshot mentions people only on the line the bridge opens its bl
   const raw = "<@W0BOB> Shipped.";
   expect(checkLeadPayload({ ...message(raw, ["U0ALICE"]), text: raw }).kind).toBe("refused");
 });
+test("a stored post shows its images below its text, in order, each headed by its alt text", () => {
+  const original = message("The chart.", ["U0ALICE"]);
+  const image = (file: string, alt: string) =>
+    ({
+      type: "image",
+      slack_file: { id: file },
+      alt_text: alt,
+      title: { type: "plain_text", text: alt },
+    }) as const;
+  const images = [{ alt: "Build minutes per day" }, { alt: "Queue minutes per day" }];
+  const stored = JSON.parse(JSON.stringify({ ...original, images }));
+  expect(checkLeadPayload(stored, ["F1", "F2"])).toEqual({
+    kind: "valid",
+    message: {
+      ...original,
+      blocks: [
+        ...original.blocks,
+        image("F1", "Build minutes per day"),
+        image("F2", "Queue minutes per day"),
+      ],
+    },
+    mentions: ["U0ALICE"],
+  });
+});
+test("a stored post's images match its files, and their alt text passes the text's secret check", () => {
+  const original = message("The chart.");
+  const alt = (text: string) => ({ ...original, images: [{ alt: text }] });
+  for (const [payload, files] of [
+    [alt("A chart"), []],
+    [original, ["F1"]],
+    [alt("A chart"), ["F1", "F2"]],
+    [{ ...original, images: [] }, []],
+    [{ ...original, images: Array(4).fill({ alt: "A chart" }) }, ["F1", "F2", "F3", "F4"]],
+    [alt(""), ["F1"]],
+    [alt("a".repeat(1001)), ["F1"]],
+    [{ ...original, images: [{ alt: "A chart", file: "F2" }] }, ["F1"]],
+  ] as const)
+    expect(checkLeadPayload(payload, files).kind).toBe("refused");
+  expect(checkLeadPayload(alt("a".repeat(1000)), ["F1"]).kind).toBe("valid");
+  expect(checkLeadPayload(alt(`Token xoxb-${"a".repeat(32)}`), ["F1"])).toEqual({
+    kind: "refused",
+    problem: "slack_token",
+  });
+});

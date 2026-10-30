@@ -77,11 +77,15 @@ export function pauseCommand({ database }: SetupCommandOptions): CommandHandler<
   };
 }
 
-/** Deletes everything the bridge kept for the link. */
+/**
+ * Deletes everything the bridge kept for the link. A queued post fails first, so the bridge still
+ * deletes the images it uploaded for it.
+ */
 export function unlinkCommand({ database }: SetupCommandOptions): CommandHandler<"unlink"> {
-  return async (_input, { channelId }) => {
+  return async (_input, { channelId, at }) => {
     const link = await database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
+      await failQueuedItems(transaction, link.id, "unlinked", at);
       await deleteLinkActivity(transaction, link);
       await deleteLinkRequests(transaction, link.id);
       await deleteLink(transaction, link.id);

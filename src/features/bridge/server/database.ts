@@ -8,7 +8,7 @@
 
 import { addMessageFiles, initializeActivitySchema } from "@activity/server/schema";
 import { initializeLinkSchema } from "@links/server/schema";
-import { allowOutboxPosts, initializeOutboxSchema } from "@outbox/server/schema";
+import { addOutboxImages, allowOutboxPosts, initializeOutboxSchema } from "@outbox/server/schema";
 import { initializeRequestSchema } from "@requests/server/schema";
 import { initializeSlackApiSchema } from "@slackapi/server/schema";
 import { initializeWakeSchema } from "@wakes/server/schema";
@@ -72,12 +72,13 @@ async function configure(sql: Bun.SQL): Promise<void> {
 // changing a table raises the version, records its tables in `schemas/`, and migrates a `bridge.db`
 // that any recorded version made. The bridge refuses a `bridge.db` any other version made rather
 // than fail on it later, and one a newer version made needs that version, not a fresh start.
-const schemaVersion = 4;
+const schemaVersion = 5;
 
 /** Each step takes a `bridge.db` from the version it's keyed by to the next one. */
 const migrations: Record<number, (transaction: Bun.SQL) => Promise<void>> = {
   2: allowOutboxPosts,
   3: addMessageFiles,
+  4: addOutboxImages,
 };
 
 async function initializeSchema(sql: Bun.SQL, path: string): Promise<void> {

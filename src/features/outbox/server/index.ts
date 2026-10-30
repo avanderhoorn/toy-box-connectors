@@ -3,6 +3,8 @@ import type { StoredRequest } from "@requests/server/database";
 import type { BotClient } from "@slackapi/server/botClient";
 import { log as bridgeLog, type Log } from "@/shared/log";
 import { readDueReconciliations, readReadyOutbox } from "./database";
+import { createFileDeletion } from "./deletions";
+import { readDueDeletions } from "./files";
 import { createPostDelivery } from "./posts";
 import { createReconciliation } from "./reconcile";
 
@@ -33,6 +35,7 @@ export function startOutboxWorker(
 ): OutboxWorker {
   const posts = createPostDelivery(database, bot, { now });
   const checks = createReconciliation(database, bot, { now });
+  const deletions = createFileDeletion(database, bot, { now, log });
   const eyes: SeenRequest[] = [];
   let stopped = false;
   let pending = false;
@@ -72,6 +75,11 @@ export function startOutboxWorker(
       );
       // An unavailable method should not hold up posts for a best-effort batch.
       if (call.kind !== "ok" && call.kind !== "error") break;
+    }
+    for (const owed of await database.read((sql) => readDueDeletions(sql, now()))) {
+      if (stopped || !ready()) return;
+      // A Slack that keeps one file, or doesn't answer, costs a pass one call, not one per file.
+      if ((await deletions.settle(owed)).kind === "kept") break;
     }
   }
 

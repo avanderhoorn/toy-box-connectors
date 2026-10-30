@@ -1,8 +1,10 @@
 import { expect, onTestFinished, test } from "bun:test";
+import { RETENTION_MS } from "@activity/model/ledger";
 import { captureLog } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { startOutboxWorker, type OutboxWorker } from "@outbox/server";
 import { queuePublication, queueReply } from "@outbox/server/database";
+import { oweFileDeletes } from "@outbox/server/files";
 import { createOutboxWorld } from "@outbox/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import type { BotClient } from "@slackapi/server/botClient";
@@ -135,6 +137,66 @@ test("a storage failure stops the worker and reports why without sending", async
   expect(logged()).toEqual([`Stopped delivering Slack posts: ${Bun.inspect(error)}`]);
   expect(await world.read(item.id)).toMatchObject({ state: "queued" });
   expect(world.slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(0);
+});
+
+test("the worker deletes what the bridge owes once it's due, backs off while Slack keeps a file, and gives up after 30 days", async () => {
+  let worker: OutboxWorker | undefined;
+  const errors: unknown[] = [];
+  onTestFinished(async () => {
+    await worker?.stop();
+    expect(errors).toEqual([]);
+  });
+  const world = await createOutboxWorld();
+  // F-1 a failed post showed, F-2 Slack deleted already, F-3 Slack won't let the bot delete, first
+  // owed 30 days ago, and F-4 a command uploaded, which the post it queues may still show.
+  for (const id of ["F-1", "F-4"]) world.slack.addFile("chart", { user: "U-bot", id });
+  world.slack.addFile("chart", { user: "U-owner", id: "F-3" });
+  const at = world.now();
+  await world.database.write(async (tx) => {
+    await oweFileDeletes(tx, ["F-1", "F-2"], at, at);
+    await oweFileDeletes(tx, ["F-3"], at, at - RETENTION_MS);
+    await oweFileDeletes(tx, ["F-4"], at + 300_000, at);
+  });
+  const logged = captureLog();
+  const deletes = () =>
+    world.slack.calls.filter((call) => call.method === "files.delete").map(({ args }) => args.file);
+  const owed = async () => (await world.owed()).map(({ fileId }) => fileId);
+  world.slack.failNext("files.delete", { lostResponse: true });
+  worker = startOutboxWorker(world.database, world.bot, {
+    ready: () => true,
+    onChange: () => {},
+    onError: (error) => errors.push(error),
+    now: world.now,
+  });
+
+  // Slack loses its answer about F-1, which ends the pass, so the next pass tries the others.
+  await waitFor(async () => expect(await owed()).toEqual(["F-2", "F-3"]));
+  await Bun.sleep(20);
+  expect(deletes()).toEqual(["F-1"]);
+  worker.poke();
+  await waitFor(() => expect(deletes()).toEqual(["F-1", "F-2", "F-3"]));
+  expect(logged()).toEqual(["Gave up deleting Slack file F-3 after trying for 30 days."]);
+
+  // The bridge asks about F-1 again a minute later, and when Slack loses that answer too, two after.
+  world.slack.failNext("files.delete", { lostResponse: true });
+  world.advance(60_000);
+  worker.poke();
+  await waitFor(async () => expect(await owed()).toEqual([]));
+  expect(deletes()).toHaveLength(4);
+  world.advance(60_000);
+  worker.poke();
+  await Bun.sleep(20);
+  expect(deletes()).toHaveLength(4);
+  world.advance(60_000);
+  worker.poke();
+  await waitFor(() => expect(deletes()).toEqual(["F-1", "F-2", "F-3", "F-1", "F-1"]));
+
+  // F-4 comes due 5 minutes after its command recorded it, and then nothing is owed.
+  world.advance(120_000);
+  worker.poke();
+  await waitFor(() => expect(deletes()).toHaveLength(6));
+  expect(deletes().at(-1)).toBe("F-4");
+  expect(await owed()).toEqual([]);
 });
 
 test("a reply Slack refuses after removing the bot suspends the link and wakes its lead once", async () => {

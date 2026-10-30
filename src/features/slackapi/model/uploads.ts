@@ -7,7 +7,8 @@ import type { SlackCall } from "../server/botClient";
 // address it gives, and files.completeUploadExternal with no channel makes them a file only the
 // bot can see. Slack then processes the file, and refuses an image block naming it until it has.
 // files.info gives an image no size until then, and the test workspace gave a PNG an empty type
-// first, so an image is ready once Slack gives its width and height.
+// first, so an image is ready once Slack gives its width and height. files.delete removes a file,
+// and answers file_deleted or file_not_found for one that's already gone.
 // https://docs.slack.dev/messaging/working-with-files/#upload
 
 /** An upload Slack opened. A reason follows "couldn't be uploaded since". */
@@ -16,6 +17,8 @@ export type UploadTicket = { kind: "ticket"; fileId: string; url: string } | Ref
 export type Completion = { kind: "completed" } | Refused;
 /** Whether Slack has processed an uploaded image, so a message can show it. */
 export type Processing = { kind: "ready" } | { kind: "processing" } | Refused;
+/** Whether Slack deleted a file. A reason follows "couldn't be deleted since". */
+export type Deletion = { kind: "deleted" } | { kind: "kept"; reason: string };
 type Refused = { kind: "refused"; reason: string };
 
 const ticketSchema = z.object({
@@ -51,6 +54,14 @@ export function judgeProcessing(call: SlackCall<unknown>): Processing {
   if (!parsed.success) return refused("Slack's description of it couldn't be read");
   const { original_w, original_h } = parsed.data.file;
   return original_w && original_h ? { kind: "ready" } : { kind: "processing" };
+}
+
+/** Whether files.delete's answer says the file is gone, as it is when Slack already deleted it. */
+export function judgeDeletion(call: SlackCall<unknown>): Deletion {
+  const gone = call.kind === "error" && ["file_not_found", "file_deleted"].includes(call.error);
+  return call.kind === "ok" || gone
+    ? { kind: "deleted" }
+    : { kind: "kept", reason: failureReason(call, "files:write") };
 }
 
 function failureReason(call: Exclude<SlackCall<unknown>, { kind: "ok" }>, scope: string): string {

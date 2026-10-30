@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { readRequest } from "@requests/server/database";
+import { serveRequest } from "@requests/model/lifecycle";
+import { readRequest, saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { tsAt } from "@slackapi/model/ts";
 import { queuePublication, type OutboxItem } from "./database";
@@ -197,4 +198,36 @@ test("a post in a request's thread neither answers the request nor hands it back
   expect(await request()).toMatchObject({ state: "answering" });
   await world.post(reply.id);
   expect(await request()).toMatchObject({ state: "answered" });
+});
+
+test("a reply Slack refuses owes its image's delete, and goes out again showing only its new one", async () => {
+  const world = await createOutboxWorld();
+  world.slack.failNext("chat.postMessage", { error: "invalid_blocks" });
+  const refused = await world.queue("Build minutes.", ["F-1"]);
+  expect(await world.post(refused.id)).toMatchObject({ item: { state: "failed" } });
+  expect(await world.owed()).toEqual([{ fileId: "F-1", attempts: 0, createdAt: world.now() }]);
+
+  // The inbox gives the request back to the lead, which replies again with a new chart.
+  await world.database.write(async (tx) => {
+    const request = await readRequest(tx, world.request.id);
+    await saveRequest(tx, serveRequest(request!, world.now()));
+  });
+  const retried = await world.queue("Build minutes.", ["F-2"]);
+  expect(await world.post(retried.id)).toMatchObject({ item: { id: refused.id, state: "sent" } });
+  const image = { type: "image", slack_file: { id: "F-2" }, alt_text: "Chart F-2" };
+  expect(world.slack.calls.at(-1)!.args.blocks).toBe(
+    JSON.stringify([
+      { type: "markdown", text: "Build minutes." },
+      { ...image, title: { type: "plain_text", text: "Chart F-2" } },
+    ]),
+  );
+  expect(await world.owed()).toEqual([{ fileId: "F-1", attempts: 0, createdAt: world.now() }]);
+});
+
+test("a reply whose answer Slack lost keeps its image, since it may have gone out", async () => {
+  const world = await createOutboxWorld();
+  world.slack.failNext("chat.postMessage", { lostResponse: true });
+  const item = await world.queue("Build minutes.", ["F-1"]);
+  expect(await world.post(item.id)).toMatchObject({ item: { state: "delivery_unknown" } });
+  expect(await world.owed()).toEqual([]);
 });

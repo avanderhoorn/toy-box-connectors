@@ -9,8 +9,7 @@ import { fetchChannelFacts } from "@slackapi/server/channels";
 import { readInstallation } from "@slackapi/server/installation";
 import { ZodError } from "zod";
 import { outboxMetadata, postSettlement } from "../model/delivery";
-import { checkLeadPayload } from "../model/payload";
-import type { RenderedMessage } from "../model/rendering";
+import { checkLeadPayload, type LeadMessage } from "../model/payload";
 import {
   failQueuedItem,
   readOutboxItem,
@@ -18,6 +17,7 @@ import {
   startOutboxAttempt,
   type OutboxItem,
 } from "./database";
+import { readItemFiles } from "./files";
 import { threadProblem } from "./threads";
 
 export type PostStep =
@@ -30,7 +30,7 @@ type Prepared =
       kind: "started";
       item: OutboxItem;
       identity: Pick<Installation, "appId" | "botId">;
-      message: RenderedMessage;
+      message: LeadMessage;
     };
 
 export function createPostDelivery(
@@ -105,7 +105,7 @@ export function createPostDelivery(
     if (link.status !== "active") return { kind: "waiting", reason: "link_inactive" };
     const problem = await threadProblem(tx, link, item);
     if (problem) return refuse(tx, item, problem, at);
-    const payload = checkLeadPayload(item.payload);
+    const payload = checkLeadPayload(item.payload, await readItemFiles(tx, item.id));
     if (payload.kind !== "valid") return refuse(tx, item, payload.problem, at);
     if (payload.mentions.some((userId) => !link.allowlist.has(userId)))
       return refuse(tx, item, "mention_not_allowed", at);

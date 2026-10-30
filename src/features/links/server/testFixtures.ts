@@ -58,6 +58,8 @@ export async function fillEveryTable(database: BridgeDatabase): Promise<void> {
     await transaction`INSERT INTO cursors (link_id) VALUES ('link')`;
     await transaction`INSERT INTO wakes (link_id, at, outcome) VALUES ('link', 0, 'ran')`;
     await transaction`INSERT INTO gaps (starts_at, ends_at) VALUES (0, 0)`;
+    await transaction`INSERT INTO outbox_files (item_id, position, file_id) VALUES ('item-1', 0, 'F-shown')`;
+    await transaction`INSERT INTO file_deletions (file_id, due_at, created_at) VALUES ('F-owed', 0, 0)`;
     await transaction`
       INSERT INTO request_messages (request_id, channel_id, ts)
       VALUES (1, 'C-link', '1700000100.000200')

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { SlackCall } from "../server/botClient";
-import { judgeProcessing, type Processing } from "./uploads";
+import { judgeDeletion, judgeProcessing, type Deletion, type Processing } from "./uploads";
 
 const processed = {
   id: "F1",
@@ -30,4 +30,20 @@ test.each<[string, SlackCall<unknown>, Processing]>([
   ],
 ])("%s", (_, call, processing) => {
   expect(judgeProcessing(call)).toEqual(processing);
+});
+
+test.each<[string, SlackCall<unknown>, Deletion]>([
+  ["a file Slack deletes is gone", { kind: "ok", result: { ok: true } }, { kind: "deleted" }],
+  [
+    "and so is one Slack already deleted",
+    { kind: "error", error: "file_deleted", data: { ok: false } },
+    { kind: "deleted" },
+  ],
+  [
+    "but Slack keeps one it refuses to delete",
+    { kind: "error", error: "cant_delete_file", data: { ok: false } },
+    { kind: "kept", reason: "Slack refused with cant_delete_file" },
+  ],
+])("%s", (_, call, deletion) => {
+  expect(judgeDeletion(call)).toEqual(deletion);
 });

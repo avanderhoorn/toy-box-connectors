@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
+import { RETENTION_MS } from "@activity/model/ledger";
 import type { SlackCall } from "@slackapi/server/botClient";
 import {
   deleteReceipt,
+  nextDeletion,
   nextReconciliation,
   outboxMetadata,
   postSettlement,
@@ -80,4 +82,12 @@ test("there are exactly two scheduled checks, and deletion names one exact targe
   expect(
     deleteReceipt({ ok: true, channel: "C1", ts: "102.1" }, { channelId: "C1", ts: "101.1" }),
   ).toBe(false);
+});
+
+test("a file Slack keeps is asked about again a minute later, doubling to hourly, for 30 days", () => {
+  expect([0, 1, 5, 6, 30].map((attempts) => nextDeletion(0, attempts, 1000))).toEqual([
+    61_000, 121_000, 1_921_000, 3_601_000, 3_601_000,
+  ]);
+  expect(nextDeletion(1000, 9, RETENTION_MS + 999)).toBe(RETENTION_MS + 3_600_999);
+  expect(nextDeletion(1000, 9, RETENTION_MS + 1000)).toBeNull();
 });

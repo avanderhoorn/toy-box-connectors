@@ -1,6 +1,7 @@
 import { onTestFinished } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
+import { blankPng } from "@files/model/testFixtures";
 import { readChannelLink } from "@links/server/database";
 import { createStoredLink } from "@links/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
@@ -9,6 +10,7 @@ import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../../../../tests/fakes/slack";
 import { renderMarkdown } from "../model/rendering";
 import { queuePost, queueReply, readOutboxItem } from "./database";
+import { attachFiles, readDueDeletions } from "./files";
 import { createPostDelivery } from "./posts";
 import type { PostThread } from "./threads";
 
@@ -87,8 +89,21 @@ export async function createOutboxWorld() {
     advance(ms: number) {
       at += ms;
     },
-    queue: (text = "A **safe answer**.") =>
-      database.write((tx) => queueReply(tx, { requestId: request.id, text }, now())),
+    /** Queues a reply, showing an image the bot uploaded as each of `fileIds`, as reply does. */
+    queue: (text = "A **safe answer**.", fileIds: readonly string[] = []) =>
+      database.write(async (tx) => {
+        for (const id of fileIds)
+          slack.addFile(blankPng(1, 1), {
+            user: "U-bot",
+            id,
+            name: "image-1.png",
+            mimetype: "image/png",
+          });
+        const images = fileIds.map((id) => ({ alt: `Chart ${id}` }));
+        const item = await queueReply(tx, { requestId: request.id, text, images }, now());
+        await attachFiles(tx, item.id, fileIds);
+        return item;
+      }),
     /** Queues a post the owner asked for, at the top of the channel or in `thread`. */
     queuePost: (thread?: PostThread, text = "Shipped **1.2**.", mentions?: readonly string[]) =>
       database.write(async (tx) => {
@@ -96,6 +111,8 @@ export async function createOutboxWorld() {
         return queuePost(tx, { link: link!, thread, text, mentions }, now());
       }),
     read: (id: string) => database.read((sql) => readOutboxItem(sql, id)),
+    /** The deletes the bridge owes Slack by now. */
+    owed: () => database.read((sql) => readDueDeletions(sql, now())),
     post: createPostDelivery(database, bot, { now }).post,
   };
 }

@@ -116,6 +116,15 @@ test("unlink deletes what the bridge kept for its link, and nothing of another l
   expect(await countRows(database)).toEqual(before);
 });
 
+test("unlink still deletes the images its link's queued replies would have shown", async () => {
+  const world = await createOutboxWorld();
+  await world.queue("Build minutes.", ["F-1"]);
+
+  await unlinkCommand(offline(world.database))({}, OWNER);
+
+  expect(await world.owed()).toEqual([{ fileId: "F-1", attempts: 0, createdAt: OWNER.at }]);
+});
+
 test("names the app it runs in, once the bridge hosts several, when that app isn't connected to Slack", async () => {
   const database = await openTestDatabase();
   await createStoredLink(database);
