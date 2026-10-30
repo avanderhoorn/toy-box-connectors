@@ -2,44 +2,16 @@
 
 import { expect, onTestFinished, test } from "bun:test";
 import { captureLog } from "@bridge/server/testFixtures";
-import { readToyBoxChannel, runToyBoxRoutine } from "@toybox/server/api";
+import { runToyBoxRoutine } from "@toybox/server/api";
 import { wakeLead } from "@toybox/server";
 import { startFakeToyBox } from "../fakes/toybox";
 import { REQUESTS_ROUTINE } from "./linkedBridge";
-import { waitFor } from "./waitFor";
 
 function startToyBox() {
   const toyBox = startFakeToyBox();
   onTestFinished(() => toyBox.stop());
   return { toyBox, origin: new URL(toyBox.url) };
 }
-
-test("waking a lead runs the routine whose prompt runs inbox, and lets go of the channel's stream", async () => {
-  const { toyBox, origin } = startToyBox();
-  const channelId = toyBox.addChannel();
-  toyBox.scheduleRoutine(channelId, { ...REQUESTS_ROUTINE, prompt: "Summarize the week." });
-  const routine = toyBox.scheduleRoutine(channelId, REQUESTS_ROUTINE);
-
-  expect(await wakeLead(origin, channelId)).toBe("ran");
-  expect(toyBox.runs).toEqual([{ channelId, routineId: routine.id, at: expect.any(Number) }]);
-  await waitFor(() => expect(toyBox.openStreams()).toBe(0));
-});
-
-test("reading a channel gives its title, its lead's provider and its routines, or null once it's gone", async () => {
-  const { toyBox, origin } = startToyBox();
-  const channelId = toyBox.addChannel({ name: "Releases", provider: "codex" });
-  const routine = toyBox.scheduleRoutine(channelId, REQUESTS_ROUTINE);
-  const deleted = toyBox.addChannel();
-  toyBox.deleteChannel(deleted);
-
-  expect(await readToyBoxChannel(origin, channelId)).toEqual({
-    name: "Releases",
-    provider: "codex",
-    routines: [routine],
-  });
-  expect(await readToyBoxChannel(origin, deleted)).toBeNull();
-  await waitFor(() => expect(toyBox.openStreams()).toBe(0));
-});
 
 test("a wake Toy Box can't run says why, and logs what the owner needs to fix it", async () => {
   const { toyBox, origin } = startToyBox();

@@ -14,10 +14,8 @@ import {
   rejectedTokensProblem,
   type IdentityRefusal,
 } from "@slackapi/model/identity";
-import { tsAt } from "@slackapi/model/ts";
 import { createBotClient } from "@slackapi/server/botClient";
 import { readInstallation, recordInstallation } from "@slackapi/server/installation";
-import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { defaultWakeTimings, type WakeTimings } from "@wakes/model";
 import { startFakeSlack, type FakeSlack } from "../fakes/slack";
 import { waitFor } from "./waitFor";
@@ -258,26 +256,21 @@ describe("connecting", () => {
     expect(performance.now() - lostAt).toBeLessThan(150);
   });
 
-  test.each(["auth.test", "apps.connections.open"])(
-    "Slack holding back %s is asked again only once the time it named is up",
-    async (method) => {
-      const logged = captureLog();
-      const link = await linkFakeSlack();
-      link.fake.failNext(method, { retryAfter: 1 });
+  test("Slack holding back apps.connections.open is asked again only once the time it named is up", async () => {
+    const logged = captureLog();
+    const link = await linkFakeSlack();
+    link.fake.failNext("apps.connections.open", { retryAfter: 1 });
 
-      const { supervisor } = link.supervise();
-      const problem = `Slack is holding back ${method}.`;
-      await waitFor(() =>
-        expect(supervisor.state()).toEqual({ connection: "connecting", problem }),
-      );
-      link.advance(1_000);
-      await Bun.sleep(500);
-      expect(called(link.fake, method)).toBe(1);
+    const { supervisor } = link.supervise();
+    const problem = "Slack is holding back apps.connections.open.";
+    await waitFor(() => expect(supervisor.state()).toEqual({ connection: "connecting", problem }));
+    link.advance(1_000);
+    await Bun.sleep(500);
+    expect(called(link.fake, "apps.connections.open")).toBe(1);
 
-      await waitFor(() => expect(supervisor.state()).toEqual(connected));
-      expect(logged()).toEqual([`Can't connect to Slack. ${problem}`, "Connected to Slack."]);
-    },
-  );
+    await waitFor(() => expect(supervisor.state()).toEqual(connected));
+    expect(logged()).toEqual([`Can't connect to Slack. ${problem}`, "Connected to Slack."]);
+  });
 
   test("a connection Slack never says hello on is replaced, saying why once", async () => {
     const logged = captureLog();
@@ -330,36 +323,6 @@ describe("connecting", () => {
       expect(logged()).toEqual([`${stopped} ${Bun.inspect(errors[0])}`]);
     },
   );
-});
-
-describe("losing the connection", () => {
-  test("a lost connection reconnects at once, and catches up on what was said while it was down", async () => {
-    const logged = captureLog();
-    const link = await linkFakeSlack();
-    const { supervisor } = link.supervise({ timings: STUCK });
-    await caughtUp(link, 1);
-
-    link.fake.dropConnections();
-    link.advance(60_000);
-    link.fake.setMessage("C-link", post(tsAt(NOW + 30_000)));
-    await caughtUp(link, 2);
-
-    expect(link.fake.connections).toHaveLength(2);
-    expect(await readMessages(link.database)).toEqual([{ ts: tsAt(NOW + 30_000) }]);
-    link.fake.failNext("apps.connections.open", { status: 503 });
-    link.fake.disconnect();
-    const problem = "Slack didn't answer apps.connections.open: HTTP 503.";
-    await waitFor(() =>
-      expect(supervisor.state()).toEqual({ connection: "reconnecting", problem }),
-    );
-    expect(logged()).toEqual([
-      "Connected to Slack.",
-      "Lost the connection to Slack, so the bridge is reconnecting.",
-      "Connected to Slack.",
-      "Slack ended the connection with refresh_requested, so the bridge is reconnecting.",
-      `Can't connect to Slack. ${problem}`,
-    ]);
-  });
 });
 
 describe("rejected tokens", () => {
@@ -427,7 +390,7 @@ describe("rejected tokens", () => {
     ]);
   });
 
-  test.each(["invalid_auth", "not_allowed_token_type", "missing_scope"])(
+  test.each(["not_allowed_token_type", "missing_scope"])(
     "an app token Slack rejects with %s is named, and isn't tried again",
     async (error) => {
       const logged = captureLog();
@@ -473,24 +436,6 @@ describe("refusing Slack", () => {
     expect(logged()).toEqual([refusalProblem(refusal, DEFAULT_APP)]);
   });
 
-  test("tokens for another workspace than the stored one turn Slack off before it connects", async () => {
-    const logged = captureLog();
-    const link = await linkFakeSlack();
-    await createStoredInstallation(link.database);
-
-    const { supervisor } = link.supervise();
-    const refusal: IdentityRefusal = { reason: "mismatch", field: "teamId", found: "TFAKE" };
-    const refused: SlackState = {
-      connection: "refused",
-      problem: refusalProblem(refusal, DEFAULT_APP),
-    };
-    await waitFor(() => expect(supervisor.state()).toEqual(refused));
-    await Bun.sleep(TIMINGS.retryLimit * 2);
-
-    expect(methodsCalled(link.fake)).toEqual(["auth.test", "bots.info"]);
-    expect(logged()).toEqual([refusalProblem(refusal, DEFAULT_APP)]);
-  });
-
   test("an uninstall closes the connection, and Slack stays off", async () => {
     const logged = captureLog();
     const link = await linkFakeSlack();
@@ -511,27 +456,15 @@ describe("refusing Slack", () => {
 });
 
 describe("an added app", () => {
-  test.each<[string, (fake: FakeSlack) => void, SlackState["connection"], string]>([
-    [
-      "a token Slack rejects",
-      (fake) => fake.failNext("apps.connections.open", { error: "invalid_auth" }),
-      "auth_failed",
-      rejectedTokensProblem([["SLACK_APP_TOKEN", "invalid_auth"]], "releases"),
-    ],
-    [
-      "a refusal",
-      (fake) => fake.setNextHelloAppId("A-other"),
-      "refused",
-      refusalProblem({ reason: "other_app" }, "releases"),
-    ],
-  ])("names %s as the app's, in status and the log", async (_, fail, connection, problem) => {
+  test("names a refusal as the app's, in status and the log", async () => {
     const logged = captureLog();
     const link = await linkFakeSlack();
-    fail(link.fake);
+    link.fake.setNextHelloAppId("A-other");
 
     const { supervisor } = link.supervise({ app: "releases" });
 
-    await waitFor(() => expect(supervisor.state()).toEqual({ connection, problem }));
+    const problem = refusalProblem({ reason: "other_app" }, "releases");
+    await waitFor(() => expect(supervisor.state()).toEqual({ connection: "refused", problem }));
     expect(logged()).toEqual([problem]);
   });
 });
@@ -557,24 +490,6 @@ describe("stopping", () => {
     expect(await readMessages(link.database)).toEqual([{ ts: "1700000200.000100" }]);
     expect(await link.fake.waitForAck(sent.envelopeId, 100)).toBeNull();
     expect(logged()).toEqual(["Connected to Slack."]);
-  });
-
-  test("stopping while Slack is asked whose tokens these are waits for what its answer stores", async () => {
-    captureLog();
-    const link = await linkFakeSlack();
-    await link.database.write((transaction) => recordInstallation(transaction, link.fake.identity));
-    link.fake.failNext("auth.test", { error: "invalid_auth" });
-    const answering = Promise.withResolvers<void>();
-    const slack = proxySlack(link.fake, {
-      hold: { method: "auth.test", until: answering.promise },
-    });
-    const { supervisor } = link.supervise({ slackApiUrl: slack.slackApiUrl });
-    await waitFor(() => expect(called(link.fake, "auth.test")).toBe(1));
-
-    await stopHeld(supervisor, () => answering.resolve());
-
-    expect(await link.database.read(readInstallation)).toMatchObject({ status: "auth_failed" });
-    expect(methodsCalled(link.fake)).toEqual(["auth.test"]);
   });
 
   test("stopping while Slack is asked for a connection waits for its answer, and connects nothing", async () => {

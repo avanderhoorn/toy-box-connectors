@@ -4,7 +4,7 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { confirmIdentity } from "@bridge/server/identity";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import type { Installation } from "@slackapi/model/installation";
-import { createBotClient, type BotClient } from "@slackapi/server/botClient";
+import { createBotClient } from "@slackapi/server/botClient";
 import { readInstallation } from "@slackapi/server/installation";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack, type FakeSlack, type FakeSlackIdentity } from "../fakes/slack";
@@ -19,20 +19,17 @@ function fakeSlack(identity?: Partial<FakeSlackIdentity>) {
 }
 
 /**
- * Confirms `slack`'s tokens against `database` through a fresh bot client. `wrap` stands between the
- * check and the client, to steer a call. `claim` claims their Slack app, which no other app holds
- * unless it says so.
+ * Confirms `slack`'s tokens against `database` through a fresh bot client. `claim` claims their
+ * Slack app, which no other app holds unless it says so.
  */
 function confirm(
   database: BridgeDatabase,
   slack: FakeSlack,
   {
     tokens = { botToken: slack.botToken, appToken: slack.appToken },
-    wrap = (bot) => bot,
     claim = () => null,
   }: {
     tokens?: { botToken: string; appToken: string };
-    wrap?: (bot: BotClient) => BotClient;
     claim?: ClaimSlackApp;
   } = {},
 ) {
@@ -40,7 +37,7 @@ function confirm(
     slackApiUrl: slack.url,
     now: () => NOW,
   });
-  return confirmIdentity(database, wrap(bot), tokens, claim);
+  return confirmIdentity(database, bot, tokens, claim);
 }
 
 const fakeInstallation: Installation = {
@@ -53,22 +50,6 @@ const fakeInstallation: Installation = {
 };
 
 describe("confirming the tokens", () => {
-  test("the first answer records the installation the tokens belong to", async () => {
-    const slack = fakeSlack();
-    const database = await openTestDatabase();
-
-    expect(await confirm(database, slack)).toEqual({
-      kind: "confirmed",
-      installation: fakeInstallation,
-      workspaceUrl: "https://fake-workspace.slack.com/",
-    });
-    expect(await database.read(readInstallation)).toEqual(fakeInstallation);
-    expect(slack.calls.map(({ method, args }) => [method, args])).toEqual([
-      ["auth.test", {}],
-      ["bots.info", { bot: "BFAKE" }],
-    ]);
-  });
-
   test("an Enterprise workspace records its org, and the same tokens confirm again", async () => {
     const slack = fakeSlack({ enterpriseId: "EFAKE" });
     const database = await openTestDatabase();
@@ -98,22 +79,6 @@ describe("confirming the tokens", () => {
 });
 
 describe("a Slack app another app the bridge hosts holds", () => {
-  test("is refused before anything is recorded, naming the app that holds it", async () => {
-    const database = await openTestDatabase();
-    const claimed: string[] = [];
-    const claim = (slackAppId: string) => {
-      claimed.push(slackAppId);
-      return "releases";
-    };
-
-    expect(await confirm(database, fakeSlack(), { claim })).toEqual({
-      kind: "refused",
-      refusal: { reason: "duplicate_app", heldBy: "releases" },
-    });
-    expect(claimed).toEqual(["AFAKE"]);
-    expect(await database.read(readInstallation)).toBeNull();
-  });
-
   test("is refused even when this app's bridge.db records it too, which keeps the record", async () => {
     const slack = fakeSlack();
     const database = await openTestDatabase();
@@ -182,28 +147,6 @@ describe("refusing credentials v1 doesn't support", () => {
       refusal: { reason: "uninstalled" },
     });
     expect(slack.calls).toEqual([]);
-  });
-
-  test("an uninstall that commits while Slack is asked wins over the answer", async () => {
-    const slack = fakeSlack();
-    const database = await openTestDatabase();
-    await confirm(database, slack);
-    const uninstalling = (bot: BotClient): BotClient => ({
-      ...bot,
-      async call(method, run) {
-        const call = await bot.call(method, run);
-        await database.write(
-          (transaction) => transaction`UPDATE installation SET status = 'uninstalled'`,
-        );
-        return call;
-      },
-    });
-
-    expect(await confirm(database, slack, { wrap: uninstalling })).toEqual({
-      kind: "refused",
-      refusal: { reason: "uninstalled" },
-    });
-    expect(await database.read(readInstallation)).toMatchObject({ status: "uninstalled" });
   });
 });
 

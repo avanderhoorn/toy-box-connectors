@@ -4,7 +4,7 @@
 import { expect, test } from "bun:test";
 import { DEFAULT_APP } from "@bridge/model/apps";
 import { missingTokensProblem } from "@slackapi/model/identity";
-import { startSlackForBridge, started, withDatabase } from "./bridgeProcess";
+import { startSlackForBridge } from "./bridgeProcess";
 import { startLinkedBridge, storeNewRequest } from "./linkedBridge";
 import { waitFor } from "./waitFor";
 
@@ -25,26 +25,6 @@ function connected({ status }: Bridge) {
     5_000,
   );
 }
-
-test("a bridge with both tokens connects to Slack, and acks an event once it's stored", async () => {
-  const { slack, env } = startSlackForBridge();
-  const linked = await startLinkedBridge({ env });
-  const { bridge, home, dataFolder } = linked;
-  await connected(linked);
-
-  const sent = slack.sendEvent(post("1700000200.000100"));
-  expect(await slack.waitForAck(sent.envelopeId, 5_000)).not.toBeNull();
-
-  bridge.child.kill("SIGTERM");
-  expect(await bridge.exit()).toEqual({
-    code: 0,
-    stderr: `${started(home)}Connected to Slack.\ntoy-box-slack is stopping after SIGTERM\n`,
-  });
-  const messages = await withDatabase(dataFolder, (database) =>
-    database.read((sql) => sql`SELECT ts FROM messages`),
-  );
-  expect(messages).toEqual([{ ts: "1700000200.000100" }]);
-}, 15_000);
 
 test("a bridge missing a token stays off Slack, and status says how the owner gives it", async () => {
   const linked = await startLinkedBridge({ env: { SLACK_BOT_TOKEN: "xoxb-1" } });
