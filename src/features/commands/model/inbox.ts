@@ -130,7 +130,7 @@ function progress({ state, attention, replyError, touchedAt }: InboxRequest, at:
   if (attention === "updated") return "changed since you read it";
   if (attention === "reply_failed")
     return replyError === "audience_widened"
-      ? "your reply didn't post because more people can read the channel now, so answer again"
+      ? "your reply didn't post because more people can read the channel than when you wrote it, so answer again for them"
       : "your reply didn't post, so answer again";
   if (state === "open" || touchedAt === null) return "new";
   return `you read it ${ago(at - touchedAt)}`;

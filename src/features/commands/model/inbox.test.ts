@@ -129,7 +129,7 @@ test("says a reply didn't post, and why when more people can read the channel th
 
   expect(text).toBe(`2 requests in #deploys wait on you.
 
-### r4 · {Ana} asked 5 minutes ago · your reply didn't post because more people can read the channel now, so answer again
+### r4 · {Ana} asked 5 minutes ago · your reply didn't post because more people can read the channel than when you wrote it, so answer again for them
 
 ### r5 · {Ana} asked 5 minutes ago · your reply didn't post, so answer again
 
