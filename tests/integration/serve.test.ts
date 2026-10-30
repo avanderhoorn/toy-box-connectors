@@ -23,16 +23,10 @@ import {
   started,
 } from "./bridgeProcess";
 
-const PASSPHRASE = "correct horse battery staple";
 /** What the terminal shows as the owner presses Ctrl-C while the bridge runs. */
 const STOPPED_AT_TERMINAL = "^Ctoy-box-slack is stopping after SIGINT\n";
 
-/** The owner's passphrase, hashed cheaply for a test that never checks it. */
-function passphraseHash() {
-  return Bun.password.hash(PASSPHRASE, { algorithm: "argon2id", memoryCost: 8, timeCost: 1 });
-}
-
-test("asks the owner at a terminal for both tokens and a passphrase the first time, then starts", async () => {
+test("asks the owner at a terminal for both tokens the first time, then starts", async () => {
   const home = createTestFolder();
   const { slack } = startSlackForBridge();
   const terminal = runAtTerminal(home, ["serve"], { SLACK_API_URL: slack.url });
@@ -40,8 +34,6 @@ test("asks the owner at a terminal for both tokens and a passphrase the first ti
   for (const [prompt, answer] of [
     ["(xoxb-...): ", slack.botToken],
     ["(xapp-...): ", slack.appToken],
-    ["ask for: ", PASSPHRASE],
-    ["again: ", PASSPHRASE],
   ]) {
     await terminal.shows(prompt);
     await terminal.type(answer);
@@ -56,17 +48,16 @@ test("asks the owner at a terminal for both tokens and a passphrase the first ti
     transcript: [
       "Paste the Slack bot token (xoxb-...): ",
       "Paste the Slack app-level token (xapp-...): ",
-      "Choose the owner's passphrase, which link, allow and resume ask for: ",
-      "The new passphrase again: ",
-      `Saved SLACK_BOT_TOKEN, SLACK_APP_TOKEN, and OWNER_PASSPHRASE_HASH in ${credentials}.`,
+      `Saved SLACK_BOT_TOKEN and SLACK_APP_TOKEN in ${credentials}.`,
       `${started(home)}Connected to Slack.`,
       STOPPED_AT_TERMINAL,
     ].join("\n"),
   });
   expect(statSync(credentials).mode & 0o777).toBe(0o600);
-  const { OWNER_PASSPHRASE_HASH, ...tokens } = readCredentialsFile(dataFolder);
-  expect(tokens).toEqual({ SLACK_BOT_TOKEN: slack.botToken, SLACK_APP_TOKEN: slack.appToken });
-  expect(await Bun.password.verify(PASSPHRASE, OWNER_PASSPHRASE_HASH ?? "")).toBe(true);
+  expect(readCredentialsFile(dataFolder)).toEqual({
+    SLACK_BOT_TOKEN: slack.botToken,
+    SLACK_APP_TOKEN: slack.appToken,
+  });
 }, 15_000);
 
 test("replaces a token Slack rejects the way the bridge says, asking for it while the bridge runs, which connects once restarted", async () => {
@@ -78,7 +69,6 @@ test("replaces a token Slack rejects the way the bridge says, asking for it whil
   prepareDataFolder(dataFolder);
   writeCredential(dataFolder, "SLACK_BOT_TOKEN", "xoxb-revoked");
   writeCredential(dataFolder, "SLACK_APP_TOKEN", slack.appToken);
-  writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", await passphraseHash());
   const running = runAtTerminal(home, ["serve"], env);
   await running.shows(rejectedTokensProblem([["SLACK_BOT_TOKEN", "invalid_auth"]], DEFAULT_APP));
 
@@ -119,7 +109,6 @@ test("asks at a terminal for each app's missing tokens by the app's name, and sa
   const dataFolder = join(home, ".toy-box-slack");
   prepareDataFolder(dataFolder);
   writeCredential(dataFolder, "SLACK_BOT_TOKEN", slack.botToken);
-  writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", await passphraseHash());
   // A bridge already runs, as under launchd, so serve stops once it has saved what it asked for.
   const running = spawnBridge(home, env);
   await running.running();
@@ -183,7 +172,7 @@ test("never asks in a lead's shell, which can be a terminal too", async () => {
 test("never asks without a terminal, even when stdin holds the answers", async () => {
   const home = createTestFolder();
   const { slack } = startSlackForBridge();
-  const answers = [slack.botToken, slack.appToken, PASSPHRASE, PASSPHRASE, ""].join("\n");
+  const answers = [slack.botToken, slack.appToken, ""].join("\n");
 
   const bridge = spawnBridge(home, { SLACK_API_URL: slack.url }, new Blob([answers]));
   await bridge.running();

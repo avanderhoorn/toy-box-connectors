@@ -17,7 +17,7 @@ import { BridgeRefusedError } from "@bridge/server/refusal";
 import { resolveSessionId } from "@commands/model/callers";
 import { log } from "@/shared/log";
 import { askForToken, TOKENS, type Token } from "./firstRun";
-import { secretReader, type SecretReader } from "./passphrase";
+import { secretReader, type SecretReader } from "./secrets";
 
 /** Adds the `name` app at the owner's terminal, says how to start it, and returns the exit code. */
 export async function addApp(dataFolder: string, name: string): Promise<number> {

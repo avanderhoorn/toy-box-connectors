@@ -4,7 +4,6 @@ import { describe, expect, onTestFinished, test } from "bun:test";
 import { join } from "node:path";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { prepareDataFolder } from "@bridge/server/dataFolder";
-import { writeCredential } from "@bridge/server/environment";
 import { createAddedApp, createTestFolder } from "@bridge/server/testFixtures";
 import { callBridge, type CallOptions } from "@commands/client/cli";
 import { createStoredLink } from "@links/server/testFixtures";
@@ -25,14 +24,6 @@ const STOPPING = "toy-box-slack is stopping after SIGTERM\n";
 
 /** The releases app's bot, which shares C-link with the default app's. */
 const RELEASES_BOT = "U0RELBOT";
-
-const PASSPHRASE = "correct horse battery staple";
-// Hashed cheaply, so each check takes milliseconds.
-const HASH = await Bun.password.hash(PASSPHRASE, {
-  algorithm: "argon2id",
-  memoryCost: 8,
-  timeCost: 1,
-});
 
 /** A home folder with a data folder the bridge hasn't started in yet. */
 function prepareHome() {
@@ -184,27 +175,25 @@ test("a restart starts an app added while the bridge ran, through its own Slack 
   });
 }, 15_000);
 
-test("a bridge that hosts only the default app names no app in what link shows and says", async () => {
+test("a bridge that hosts only the default app names no app in what link says", async () => {
   const { slack, env } = startSlackForBridge(RECORDED);
   slack.addChannel({ id: "C0RELEASES", name: "releases" });
   const toyBox = startFakeToyBox();
   onTestFinished(() => toyBox.stop());
   const docs = toyBox.addChannel({ name: "Docs" });
-  const { home, dataFolder } = prepareHome();
-  writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", HASH);
+  const { home } = prepareHome();
   const bridge = spawnBridge(home, { ...env, TOY_BOX_URL: toyBox.url });
   await bridge.says("Connected to Slack.");
-  const link = (owner?: CallOptions["owner"]) =>
-    callBridge("link", { slackChannel: "C0RELEASES" }, { channelId: docs, env: {}, home, owner });
 
-  const shown = await link();
-  expect(shown.text).toStartWith(
-    'Linking "Docs" to #releases would let the people you allow ask its lead to act, and it would answer them there.\n',
+  const linked = await callBridge(
+    "link",
+    { slackChannel: "C0RELEASES" },
+    { channelId: docs, env: {}, home },
   );
-  expect(await link({ passphrase: PASSPHRASE, confirms: shown.confirm! })).toMatchObject({
-    exitCode: 0,
-    text: 'The lead of "Docs" answers in #releases now, for the people `toy-box-slack allow` names.',
-  });
+  expect(linked).toMatchObject({ exitCode: 0 });
+  expect(linked.text).toStartWith(
+    'The lead of "Docs" answers in #releases now, for the people `toy-box-slack allow` names.\n',
+  );
 
   bridge.child.kill("SIGTERM");
   const { code, stderr } = await bridge.exit();
@@ -216,7 +205,7 @@ test("a bridge that hosts only the default app names no app in what link shows a
  * A bridge hosting the default app and releases, each through its own Slack app in one workspace,
  * whose bots are both in C-link, a private channel Alice is in. Toy Box has a channel for each
  * lead, Docs and Releases, each with the requests routine. `prepare` changes each app's bridge.db
- * before the bridge opens it, and the owner's passphrase is set.
+ * before the bridge opens it.
  */
 async function startSharedChannel(
   prepare: (apps: {
@@ -240,7 +229,6 @@ async function startSharedChannel(
   };
   for (const lead of Object.values(leads)) toyBox.scheduleRoutine(lead, REQUESTS_ROUTINE);
   const { home, dataFolder } = prepareHome();
-  writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", HASH);
   const releases = createAddedApp(dataFolder, "releases", tokensOf(releasesSlack));
   await withDatabase(dataFolder, (homeDatabase) =>
     withDatabase(releases.folder, (releasesDatabase) =>
@@ -334,14 +322,7 @@ describe("two leads that share a Slack channel, each through its own app", () =>
       [leads.releases, "releases"],
     ] as const) {
       const input = { slackChannel: channel, app };
-      const shown = await as(null, "link", input, { channelId: lead });
-      expect(shown.confirm).toBeString();
-      expect(
-        await as(null, "link", input, {
-          channelId: lead,
-          owner: { passphrase: PASSPHRASE, confirms: shown.confirm! },
-        }),
-      ).toMatchObject({ exitCode: 0 });
+      expect(await as(null, "link", input, { channelId: lead })).toMatchObject({ exitCode: 0 });
     }
     await shared.stop();
     for (const [folder, lead] of [
@@ -682,27 +663,17 @@ describe("two leads that share a Slack channel, each through its own app", () =>
     const shared = await startSharedChannel();
     const { leads, as } = shared;
     shared.share({ id: "C0RELEASES", name: "releases" });
-    const owner = { channelId: leads.docs };
-    const link = (app: string, confirms?: string) =>
-      as(
-        null,
-        "link",
-        { slackChannel: "C0RELEASES", app },
-        { ...owner, owner: confirms ? { passphrase: PASSPHRASE, confirms } : undefined },
-      );
-    const shown = { default: await link("default"), releases: await link("releases") };
-    expect(shown.releases.text).toContain(
-      "would let the people you allow ask its lead to act, and it would answer them there as the releases app's bot.",
-    );
+    const link = (app: string) =>
+      as(null, "link", { slackChannel: "C0RELEASES", app }, { channelId: leads.docs });
 
-    const [home, releases] = await Promise.all([
-      link("default", shown.default.confirm),
-      link("releases", shown.releases.confirm),
-    ]);
+    const [home, releases] = await Promise.all([link("default"), link("releases")]);
 
     const [linked, refused] = home.exitCode === 0 ? [home, releases] : [releases, home];
     const [winner, loser] = home.exitCode === 0 ? ["default", "releases"] : ["releases", "default"];
-    expect(linked).toMatchObject({ exitCode: 0 });
+    expect(linked).toMatchObject({
+      exitCode: 0,
+      text: expect.stringContaining(`answers in #releases now as the ${winner} app's bot,`),
+    });
     expect(refused).toMatchObject({
       exitCode: 1,
       text: `This Toy Box channel links through the ${winner} app. Run \`toy-box-slack unlink\` before you link it through the ${loser} app.`,

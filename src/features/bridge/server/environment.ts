@@ -4,10 +4,9 @@
 // in the data folder, and a variable set in the environment wins over that file. Each added app
 // keeps only its own two tokens, in a `credentials.env` in its folder, which no variable overrides.
 // Every setting is checked before the bridge takes any lock, so a bad one stops it before it
-// starts. No message repeats a token. The owner's passphrase hash is read from the file alone,
-// each time the bridge checks a passphrase. Only tests set SLACK_API_URL and the wake timings: one
-// points the Slack clients at a fake, and the other shortens timings so a scenario doesn't wait
-// minutes for a reminder.
+// starts. No message repeats a token. Only tests set SLACK_API_URL and the wake timings: one points
+// the Slack clients at a fake, and the other shortens timings so a scenario doesn't wait minutes
+// for a reminder.
 
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -29,11 +28,6 @@ const credentialsSchema = z
   .object({
     ...tokenSettings,
     TOY_BOX_URL: z.string().optional().describe("The Toy Box whose leads the bridge wakes."),
-    OWNER_PASSPHRASE_HASH: z
-      .string()
-      .startsWith("$argon2id$")
-      .optional()
-      .describe("The owner's passphrase as `toy-box-slack passphrase` hashed it."),
   })
   .strict()
   .describe("What the data folder's credentials.env may set, one NAME=value a line.");

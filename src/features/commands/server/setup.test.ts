@@ -45,7 +45,7 @@ test("link and resume refuse a link Slack gave a new channel ID, by either ID, b
   expect(await refusal(link({ slackChannel: "C-moved" }, OWNER))).toBe(MOVED);
 });
 
-test("a link Slack gives a new channel ID while link asks Slack is refused, though the owner confirmed", async () => {
+test("a link Slack gives a new channel ID while link asks Slack is refused as it writes", async () => {
   const { database, bot } = await createOutboxWorld();
   const toyBox = startFakeToyBox();
   onTestFinished(() => toyBox.stop());
@@ -63,12 +63,9 @@ test("a link Slack gives a new channel ID while link asks Slack is refused, thou
       return call;
     },
   };
-  const options = { database, toyBoxOrigin: new URL(toyBox.url) };
-  const owner = { channelId, at: 1_000 };
-  const input = { slackChannel: "C-link" };
-  const { confirm } = await linkCommand({ ...options, bot })(input, owner);
+  const options = { database, bot: moving, toyBoxOrigin: new URL(toyBox.url) };
 
-  const answer = linkCommand({ ...options, bot: moving })(input, { ...owner, confirmed: confirm });
+  const answer = linkCommand(options)({ slackChannel: "C-link" }, { channelId, at: 1_000 });
 
   expect(await refusal(answer)).toBe(MOVED);
   expect(await database.read((sql) => sql`SELECT status, status_reason FROM links`)).toEqual([
@@ -143,32 +140,19 @@ async function linking() {
   return { database, channelId, options };
 }
 
-test("a link through a named app says whose bot answers, in what the owner confirms and in its answer", async () => {
+test("a link through a named app says whose bot answers", async () => {
   const { database, channelId, options } = await linking();
   await database.write(
     (transaction) => transaction`UPDATE links SET toybox_channel_id = ${channelId}`,
   );
-  const owner = { channelId, at: 1_000 };
-  const link = (app: string | null) => linkCommand({ ...options, app });
+  const link = (app: string | null) =>
+    linkCommand({ ...options, app })({ slackChannel: "C-link" }, { channelId, at: 1_000 });
 
-  const asked = await link("releases")({ slackChannel: "C-link" }, owner);
-  const linked = await link("releases")(
-    { slackChannel: "C-link" },
-    {
-      ...owner,
-      confirmed: asked.confirm,
-    },
-  );
-  const before = await link(null)({ slackChannel: "C-link" }, owner);
-
-  expect(asked.text.split("\n")[0]).toBe(
-    'Linking "Linked" to #fake-channel would let the people you allow ask its lead to act, and it would answer them there as the releases app\'s bot.',
-  );
-  expect(linked.text).toBe(
+  expect((await link("releases")).text.split("\n")[0]).toBe(
     'The lead of "Linked" answers in #fake-channel now as the releases app\'s bot, for the people `toy-box-slack allow` names.',
   );
-  expect(before.text.split("\n")[0]).toBe(
-    'Linking "Linked" to #fake-channel would let the people you allow ask its lead to act, and it would answer them there.',
+  expect((await link(null)).text.split("\n")[0]).toBe(
+    'The lead of "Linked" answers in #fake-channel now, for the people `toy-box-slack allow` names.',
   );
 });
 

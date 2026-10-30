@@ -16,16 +16,14 @@ import {
   commandErrorSchema,
   type CommandCall,
 } from "@commands/model/protocol";
-import { secretReader } from "./passphrase";
 
 /** How a call went: its exit code, the Markdown to print, and what --json prints instead. */
-export type CallOutcome = { exitCode: 0 | 1 | 2; text: string; json: unknown; confirm?: string };
+export type CallOutcome = { exitCode: 0 | 1 | 2; text: string; json: unknown };
 
 export type CallOptions = {
   channelId?: string | null;
   env?: Record<string, string | undefined>;
   home?: string;
-  owner?: CommandCall["owner"];
 };
 
 const sharedArgs = {
@@ -49,11 +47,11 @@ export function socketCommands(): Record<string, CommandDef> {
 export async function callBridge(
   name: string,
   input: Record<string, unknown>,
-  { channelId = null, env = process.env, home = homedir(), owner }: CallOptions = {},
+  { channelId = null, env = process.env, home = homedir() }: CallOptions = {},
 ): Promise<CallOutcome> {
   const dataFolder = resolveDataFolder(env, home);
   const sessionId = resolveSessionId(env);
-  const call: CommandCall = { caller: { sessionId, channelId }, input, owner };
+  const call: CommandCall = { caller: { sessionId, channelId }, input };
   let response: Response;
   try {
     response = await fetch(`http://localhost${COMMANDS_PATH}${name}`, {
@@ -76,8 +74,8 @@ export async function callBridge(
   const body: unknown = await response.json().catch(() => undefined);
   const answer = commandAnswerSchema.safeParse(body);
   if (response.ok && answer.success) {
-    const { result, text, confirm } = answer.data;
-    return { exitCode: 0, text, json: result, confirm };
+    const { result, text } = answer.data;
+    return { exitCode: 0, text, json: result };
   }
   const error = commandErrorSchema.safeParse(body);
   return failed(1, error.success ? error.data.error : unanswered(name));
@@ -109,18 +107,7 @@ function socketCommand(name: string, spec: CommandSpec): CommandDef {
         input.text = await Bun.stdin.text();
       }
       const channelId = typeof read.channel === "string" ? read.channel : null;
-      let outcome = await callBridge(name, input, { channelId });
-      if (outcome.confirm !== undefined) {
-        process.stderr.write(`${outcome.text}\n\n`);
-        const reader = secretReader();
-        const passphrase = await reader.read("Type the owner's passphrase, or press Ctrl-C: ");
-        reader.close();
-        const owner = passphrase === null ? null : { passphrase, confirms: outcome.confirm };
-        outcome = owner
-          ? await callBridge(name, input, { channelId, owner })
-          : failed(1, `\`${name}\` didn't get the owner's passphrase, so nothing changed.`);
-      }
-      const { exitCode, text, json } = outcome;
+      const { exitCode, text, json } = await callBridge(name, input, { channelId });
       if (read.json === true) process.stdout.write(`${JSON.stringify(json, null, 2)}\n`);
       else process[exitCode === 0 ? "stdout" : "stderr"].write(`${text}\n`);
       process.exitCode = exitCode;

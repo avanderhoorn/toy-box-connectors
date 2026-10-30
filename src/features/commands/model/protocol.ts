@@ -15,22 +15,12 @@ export const commandCallSchema = z
   .object({
     caller: callerFactsSchema,
     input: z.record(z.string(), z.unknown()).describe("The values the CLI read, by field"),
-    owner: z
-      .object({ passphrase: z.string().min(1), confirms: z.string() })
-      .strict()
-      .optional()
-      .describe("The owner's passphrase, and the name of the change they were shown"),
   })
   .strict();
 export type CommandCall = z.output<typeof commandCallSchema>;
 
-/**
- * What a command that ran answers: its result for --json, and the Markdown the CLI prints. One that
- * would widen access answers first with what it would change, and `confirm` names that change.
- */
-export const commandAnswerSchema = z
-  .object({ result: z.unknown(), text: z.string(), confirm: z.string().optional() })
-  .strict();
+/** What a command that ran answers: its result for --json, and the Markdown the CLI prints. */
+export const commandAnswerSchema = z.object({ result: z.unknown(), text: z.string() }).strict();
 export type CommandAnswer = z.output<typeof commandAnswerSchema>;
 
 export const commandErrorSchema = z.object({ error: z.string() }).strict();

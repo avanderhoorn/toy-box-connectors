@@ -51,16 +51,15 @@ toy-box-slack deny --channel TOYBOX_ID USER_ID
 toy-box-slack resume --channel TOYBOX_ID
 ```
 
-Pause and deny apply immediately without a passphrase. Resume shows its
-preview and asks for the passphrase.
+Each applies immediately. Only the owner resumes, at a terminal, and resume
+answers as `link` does, with what the link reaches now.
 
 The bridge suspends a link itself when Slack reports a change the owner must
 review, such as an archive, a widened audience, bot removal or a new channel
 ID. Like a paused link, it holds posts and opens no new requests, and status
-says why and what ends it. The owner must fix the cause before resuming with
-the passphrase. A new Slack channel ID instead requires unlinking the old link
-and linking the new ID. Do not edit the database to bypass an audience or
-policy refusal.
+says why and what ends it. The owner must fix the cause before resuming. A
+new Slack channel ID instead requires unlinking the old link and linking the
+new ID. Do not edit the database to bypass an audience or policy refusal.
 
 Channel audience is checked at link, at resume and before every post, not
 at startup or before catch-up. If a share or privacy-change event was missed
@@ -156,7 +155,7 @@ To add an app for a lead:
    `serve` runs and run it again, or restart the job the
    [last section](#start-the-bridge-at-login) sets up.
 4. Set up the lead as the README describes, naming the app with `--app` in
-   its `link` command. The preview names the app whose bot will answer.
+   its `link` command. Its answer names the app whose bot answers.
 
 ```sh
 toy-box-slack link --channel TOYBOX_ID --slack-channel SLACK_ID --app releases

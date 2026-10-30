@@ -1,23 +1,15 @@
-// Only the owner widens access. `allow`, `resume` and `link` answer first with what they'd widen,
-// and apply it only when a call brings the owner's passphrase and names the change they were shown.
-// Any process can pass for a terminal, so the passphrase, not the caller's role, is what stops a
-// lead. `deny`, `pause` and `unlink` only narrow, so they apply at once for the lead or a terminal.
+// Only the owner widens access, so `allow`, `resume` and `link` run only at a terminal, and each
+// answers with what it changed, in names from Slack. Any process can pass for a terminal, so this
+// stops a lead's mistake, not a process set on widening access. `deny`, `pause` and `unlink` only
+// narrow, so they apply for the lead or a terminal.
 
 import { expect, test } from "bun:test";
-import { writeCredential } from "@bridge/server/environment";
 import { callBridge, type CallOptions } from "@commands/client/cli";
 import type { LinkStatus } from "@commands/model/status";
 import { countRows } from "@links/server/testFixtures";
 import { withDatabase } from "./bridgeProcess";
 import { ALICE, BOT, MALLORY, connectedBridge, said, timestamps } from "./connectedBridge";
 
-const PASSPHRASE = "correct horse battery staple";
-// Hashed cheaply, so each check takes milliseconds.
-const HASH = await Bun.password.hash(PASSPHRASE, {
-  algorithm: "argon2id",
-  memoryCost: 8,
-  timeCost: 1,
-});
 /** Mallory as users.info describes her: a full member, whom the Enterprise org names W0MALLORY. */
 const MALLORY_USER = {
   id: MALLORY,
@@ -33,14 +25,13 @@ type Caller = "the lead" | "a member's session" | "a terminal";
 
 /**
  * A connected bridge whose link watches C0LINK, a private channel the bot, Alice and Mallory are in,
- * and allows Alice, who has asked the lead something. The owner's passphrase is set. `as` calls a
- * command as `caller`, and `link` reads the link as the owner at a terminal sees it.
+ * and allows Alice, who has asked the lead something. `as` calls a command as `caller`, and `link`
+ * reads the link as the owner at a terminal sees it.
  */
 async function ownedBridge() {
   const bridge = await connectedBridge({ link: { slack_channel_id: "C0LINK" } });
-  const { slack, channelId, home, dataFolder, post } = bridge;
+  const { slack, channelId, home, post } = bridge;
   slack.setUser(MALLORY_USER);
-  writeCredential(dataFolder, "OWNER_PASSPHRASE_HASH", HASH);
   const [askedTs] = timestamps(1);
   const asked = said(ALICE, askedTs!, `<@${BOT}> can you check the deploy?`);
   await post(asked);
@@ -50,18 +41,14 @@ async function ownedBridge() {
     "a member's session": { env: { COPILOT_AGENT_SESSION_ID: "member-session" } },
     "a terminal": { channelId, env: {} },
   };
-  const as = (
-    caller: Caller,
-    name: string,
-    input: Record<string, unknown> = {},
-    owner?: CallOptions["owner"],
-  ) => callBridge(name, input, { ...callers[caller], home, owner });
+  const as = (caller: Caller, name: string, input: Record<string, unknown> = {}) =>
+    callBridge(name, input, { ...callers[caller], home });
   const link = async () =>
     ((await as("a terminal", "status")).json as { links: LinkStatus[] }).links[0];
   return { ...bridge, as, link };
 }
 
-/** Each widening command, a phrase from what it shows the owner, and what it changes. */
+/** Each widening command, a phrase from what it answers the owner, and what it changes. */
 const WIDENING = [
   {
     name: "allow",
@@ -83,44 +70,28 @@ const WIDENING = [
   },
 ];
 
-test.each(
-  (
-    [
-      { caller: "the lead", refusal: "Only the owner at a terminal runs" },
-      { caller: "a member's session", refusal: "This session isn't the lead of a Toy Box channel" },
-      { caller: "a terminal", refusal: null },
-    ] as const
-  ).flatMap(({ caller, refusal }) => [
-    { caller, given: "no", passphrase: null, refusal },
-    {
-      caller,
-      given: "a wrong",
-      passphrase: "Tr0ub4dor&3",
-      refusal: refusal ?? "That isn't the owner's passphrase",
-    },
-    { caller, given: "the right", passphrase: PASSPHRASE, refusal },
-  ]),
-)(
-  "$caller with $given passphrase widens access only if it's a terminal with the right one",
-  async ({ caller, passphrase, refusal }) => {
+test.each([
+  { caller: "the lead", refusal: "Only the owner at a terminal runs" },
+  { caller: "a member's session", refusal: "This session isn't the lead of a Toy Box channel" },
+  { caller: "a terminal", refusal: null },
+] as const)(
+  "$caller widens access only if it's a terminal, which says what it changed",
+  async ({ caller, refusal }) => {
     const { as, link } = await ownedBridge();
     // Paused, so resume has something to widen.
     expect(await as("the lead", "pause")).toMatchObject({
       exitCode: 0,
       json: { status: "paused" },
     });
-    const widens = caller === "a terminal" && passphrase === PASSPHRASE;
 
     let expected = { status: "paused", requestMode: "mention", allowlist: [ALICE] };
     for (const { name, input, shows, widened } of WIDENING) {
-      const { exitCode, text, confirm } = await as("a terminal", name, input);
-      expect({ exitCode, confirm: typeof confirm }).toEqual({ exitCode: 0, confirm: "string" });
-      expect(text).toContain(shows);
-      const owner = passphrase === null ? undefined : { passphrase, confirms: confirm! };
-      expect(await as(caller, name, input, owner)).toMatchObject(
-        refusal ? { exitCode: 1, text: expect.stringContaining(refusal) } : { exitCode: 0 },
+      expect(await as(caller, name, input)).toMatchObject(
+        refusal
+          ? { exitCode: 1, text: expect.stringContaining(refusal) }
+          : { exitCode: 0, text: expect.stringContaining(shows) },
       );
-      if (widens) expected = { ...expected, ...widened };
+      if (!refusal) expected = { ...expected, ...widened };
       expect(await link()).toMatchObject(expected);
     }
   },
@@ -160,11 +131,9 @@ test.each([
   },
 );
 
-test("a change that's no longer what the owner was shown is refused", async () => {
+test("link says the channel's audience as Slack describes it as it links", async () => {
   const { slack, as, link } = await ownedBridge();
-  const input = { slackChannel: "C0LINK", requests: "all" };
-  const shown = await as("a terminal", "link", input);
-  // Someone makes the channel public before the owner types the passphrase.
+  // Someone made the channel public since it was linked.
   slack.addChannel({
     id: "C0LINK",
     name: "release-eng",
@@ -172,15 +141,13 @@ test("a change that's no longer what the owner was shown is refused", async () =
     members: [BOT, ALICE, MALLORY],
   });
 
-  const owner = { passphrase: PASSPHRASE, confirms: shown.confirm! };
-  expect(await as("a terminal", "link", input, owner)).toMatchObject({
-    exitCode: 1,
-    text: "What this would change isn't what you were shown anymore, so nothing changed. Run it again to see what it would change now.",
-  });
-  expect(await link()).toMatchObject({ requestMode: "mention" });
-  expect((await as("a terminal", "link", input)).text).toContain(
-    "#release-eng is public, so anyone in the bot's workspace can",
+  expect(await as("a terminal", "link", { slackChannel: "C0LINK", requests: "all" })).toMatchObject(
+    {
+      exitCode: 0,
+      text: expect.stringContaining("#release-eng is public, so anyone in the bot's workspace can"),
+    },
   );
+  expect(await link()).toMatchObject({ status: "active", requestMode: "all" });
 });
 
 test("link won't move a link to another Slack channel until the owner unlinks it", async () => {
@@ -192,25 +159,21 @@ test("link won't move a link to another Slack channel until the owner unlinks it
   });
 });
 
-test("allow refuses a guest when shown or confirmed, and deny takes either of someone's IDs", async () => {
+test("allow refuses a guest, and deny takes either of someone's IDs", async () => {
   const { slack, as, link } = await ownedBridge();
-  const guest = { ...MALLORY_USER, is_restricted: true };
-  const allow = (owner?: CallOptions["owner"]) =>
-    as("a terminal", "allow", { users: ["W0MALLORY"] }, owner);
-  const refused = {
+  const allow = () => as("a terminal", "allow", { users: ["W0MALLORY"] });
+
+  slack.setUser({ ...MALLORY_USER, is_restricted: true });
+  expect(await allow()).toMatchObject({
     exitCode: 1,
     text: "Nobody was allowed, since only full members of the bot's workspace or its Enterprise org can be, and Mallory (W0MALLORY) isn't: they're a guest.",
-  };
-
-  slack.setUser(guest);
-  expect(await allow()).toMatchObject(refused);
+  });
+  expect(await link()).toMatchObject({ allowlist: [ALICE] });
   slack.setUser(MALLORY_USER);
-  const owner = { passphrase: PASSPHRASE, confirms: (await allow()).confirm! };
-  // She's made a guest after the owner was shown her, so their passphrase doesn't admit her.
-  slack.setUser(guest);
-  expect(await allow(owner)).toMatchObject(refused);
-  slack.setUser(MALLORY_USER);
-  expect((await allow(owner)).exitCode).toBe(0);
+  expect(await allow()).toMatchObject({
+    exitCode: 0,
+    text: "They can all ask the lead to act from #C0LINK now:\n\n- Mallory (U0MALLORY)",
+  });
   expect(await link()).toMatchObject({ allowlist: [ALICE, "Mallory"] });
 
   // The link allows her member ID, and deny finds it from the Enterprise one she was allowed by.

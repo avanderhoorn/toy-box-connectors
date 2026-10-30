@@ -82,7 +82,7 @@ async function serving(apps: App[] = [{ name: DEFAULT_APP, links: ["link"] }]) {
       onChange: mock(() => {}),
     });
   }
-  const serve = serveCommands({ apps: served, status, ownerHash: () => null, now: () => 1_000 });
+  const serve = serveCommands({ apps: served, status, now: () => 1_000 });
   const call = async (name: string, body: unknown) => {
     const request = new Request(`http://bridge${COMMANDS_PATH}${name}`, {
       method: "POST",

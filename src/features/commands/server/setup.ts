@@ -1,11 +1,11 @@
-// Link, resume and allow widen who can make the lead act or who reads its answers, so each applies
-// only the change the owner confirmed (see ./owner), worked out again as it writes. Deny, pause and
-// unlink only narrow, so they apply at once and the lead may run them.
+// Link, resume and allow widen who can make the lead act or who reads its answers, so only the
+// owner runs them, at a terminal, and each answers with what it changed, in names from Slack the
+// owner can check. Deny, pause and unlink only narrow, so the lead may run them too.
 
 import { deleteLinkActivity } from "@activity/server/ledger";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { CommandRefusedError, type CommandAnswer } from "@commands/model/protocol";
-import { admissionRefusal, approvalRefusal, linkPreview } from "@commands/model/setup";
+import { admissionRefusal, approvalRefusal, presentLink } from "@commands/model/setup";
 import { channelName, oneLine, personName } from "@commands/model/slackText";
 import { presentLinkState } from "@commands/model/status";
 import { count } from "@commands/model/wording";
@@ -30,7 +30,6 @@ import { readInstallation } from "@slackapi/server/installation";
 import { fetchSlackPerson, readPersonIds, writeSlackPerson } from "@slackapi/server/users";
 import { readToyBoxChannel } from "@toybox/server/api";
 import { callerChannel, readCallerLink, type CallerLink } from "./link";
-import { confirmWidening } from "./owner";
 import type { CommandContext, CommandHandler } from "./serve";
 
 export type SetupCommandOptions = {
@@ -90,7 +89,7 @@ export function unlinkCommand({ database }: SetupCommandOptions): CommandHandler
 /** Admits only full members, as Slack describes them now. */
 export function allowCommand(options: SetupCommandOptions): CommandHandler<"allow"> {
   const { database } = options;
-  return async ({ users }, { channelId, at, confirmed }) => {
+  return async ({ users }, { channelId, at }) => {
     const { slack, home } = await readSlackHome(options);
     // An Enterprise member can be named by either of their IDs, and is allowed once.
     const people = new Map<string, SlackPerson>();
@@ -105,17 +104,14 @@ export function allowCommand(options: SetupCommandOptions): CommandHandler<"allo
     return database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
       const added = [...people.values()].filter((person) => !link.allowlist.has(person.id));
-      const names = added.map((person) => `\n- ${shown(person, person.id)}`).join("");
-      const preview = `Allowing them would let them ask the lead to act, from ${link.channel}:\n${names}`;
-      const ask = added.length ? confirmWidening(preview, confirmed) : null;
-      if (ask) return ask;
       for (const person of added) {
         await writeSlackPerson(transaction, person);
         await allowPerson(transaction, link.id, person.id, at);
       }
+      const names = [...people.values()].map((person) => `\n- ${shown(person, person.id)}`);
       return {
         result: { added: added.map((person) => person.id) },
-        text: `They can all ask the lead to act, from ${link.channel}.`,
+        text: `They can all ask the lead to act from ${link.channel} now:\n${names.join("")}`,
       };
     });
   };
@@ -154,7 +150,7 @@ export function denyCommand({ database }: SetupCommandOptions): CommandHandler<"
  */
 async function linkChannel(
   options: SetupCommandOptions,
-  { channelId, at, confirmed }: CommandContext,
+  { channelId, at }: CommandContext,
   slackChannelId: string,
   wanted: Partial<Pick<CallerLink, "requestMode" | "observe">>,
 ): Promise<CommandAnswer> {
@@ -188,15 +184,11 @@ async function linkChannel(
     }
     const requestMode = wanted.requestMode ?? link?.requestMode ?? "mention";
     const observe = wanted.observe ?? link?.observe ?? "requesters";
-    const preview = linkPreview(toyBox, channel, approved, { requestMode, observe }, app);
-    const ask = confirmWidening(preview, confirmed);
-    if (ask) return ask;
     const settings = { requestMode, observe };
     await approveLink(transaction, { toyBoxChannelId, slackChannelId, ...settings, approved }, at);
-    const asBot = app ? ` as the ${app} app's bot` : "";
     return {
       result: { slackChannel: slackChannelId, status: "active", ...settings },
-      text: `The lead of ${toyBox} answers in ${channel} now${asBot}, for the people \`toy-box-slack allow\` names.`,
+      text: presentLink(toyBox, channel, approved, settings, app),
     };
   });
 }

@@ -82,19 +82,15 @@ not an hourly account monitor. A later guest conversion does not automatically
 remove someone, so the owner must review the allowlist. Scheduled digests and
 publications are opt-in routines, not arbitrary authors' requests.
 
-`link` and `resume`, and `allow` when adding people, show the proposed change
-before asking for the owner's passphrase. The bridge checks it against the
-argon2id hash in `credentials.env`, read afresh at every check, and recomputes
-the preview inside its write transaction. A changed preview is refused.
-Every `link` asks, including a narrowing change. There is no lockout.
-`serve` asks for the first passphrase at a terminal, never without one or in a
-lead's shell, and `passphrase` refuses to run in any Copilot session. Like
-every caller role, that stops a lead's mistakes, not a process that unsets the
-session variable. `passphrase` changes the hash locally, with the old
-passphrase, while the bridge may keep running. A forgotten one requires
-removing its hash line and setting it again. Never put the passphrase in Toy
-Box or Slack. Caller roles alone cannot authorize widening, and there are no
-Slack approval buttons.
+`link`, `allow` and `resume` run only for a caller with no Copilot session,
+taken to be the owner at a terminal, and every `link` does, including a
+narrowing change. A lead's or member's session is refused. Each applies at
+once and answers with what it changed, in names from Slack, and `deny`,
+`pause` or `unlink` reverses it. Like every caller role, this stops a lead's
+mistakes, not a lead that unsets its session variable, so a lead steered by
+Slack text could widen access that way. The skill tells leads never to run
+these commands, but that is a prompt rule, not an enforced boundary. There
+are no Slack approval buttons.
 
 Only a linked channel's lead can reply or publish. A terminal can inspect
 status but cannot answer as the lead. Member sessions are refused, including
@@ -120,8 +116,8 @@ One owner on one Mac is the trust model. The data folder must be 0700,
 `credentials.env` must not be group/world accessible (use 0600), and the socket
 is 0600. The database, WAL and lock need not individually be 0600 because
 the folder protects them. Token and URL environment variables override the
-credential file; the owner hash is read only from that file. The published CLI
-loads no `.env` or `bunfig.toml` from the folder it runs in.
+credential file. The published CLI loads no `.env` or `bunfig.toml` from the
+folder it runs in.
 
 `serve` reads a missing token only at the owner's terminal, without echo, and
 saves it only in `credentials.env`. Tokens then stay in the bridge's normal
@@ -131,8 +127,8 @@ The bridge opens no TCP listener and accepts only loopback HTTP for Toy Box.
 expose it publicly or through a tunnel.**
 
 A shell-capable lead running as the same OS user can read credentials, edit
-the database, forge caller identity or replace bridge code. The passphrase
-does not protect a compromised host or modified bridge. v1 does not isolate
+the database, forge caller identity or replace bridge code. Nothing in the
+bridge protects a compromised host or modified bridge. v1 does not isolate
 the bridge under another OS user. Enable and independently verify host disk
 encryption such as FileVault. SQLite has no application-level encryption, and
 there is no `doctor` command that checks it.
@@ -231,7 +227,7 @@ Verify these against landed code, not this document:
 
 - The manifest's eight scopes, startup token/app/workspace/org identity checks,
   Enterprise routing and refusal of unsupported installations.
-- Exact-ID request admission, caller refusal, passphrase checks for widening,
+- Exact-ID request admission, caller refusal, terminal-only widening,
   fresh channel checks, and suspension behavior under races and failed lookups.
 - Observation boundaries, stale-question refusal, send-time safety, no
   duplicate send after a crash, and explicit unknown-post status.

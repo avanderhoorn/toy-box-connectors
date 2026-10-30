@@ -109,7 +109,7 @@ test("reply reads its text from stdin, and says to write it there when there's n
   });
 }, 15_000);
 
-test("allow shows who it adds and takes the owner's passphrase on stdin, as set at the time", async () => {
+test("allow at a terminal names who it allowed, without asking anything", async () => {
   const { channelId, home, slack } = await connectedBridge();
   slack.setUser({
     id: MALLORY,
@@ -119,48 +119,13 @@ test("allow shows who it adds and takes the owner's passphrase on stdin, as set 
     is_restricted: false,
     is_ultra_restricted: false,
   });
-  const owner = { HOME: home };
-  const passphrase = (typed: string) => runToyBoxSlack(["passphrase"], owner, typed);
-  const allow = (typed: string) =>
-    runToyBoxSlack(["allow", MALLORY, "--channel", channelId], owner, typed);
-  const shown = `Allowing them would let them ask the lead to act, from #C-link:\n\n- Mallory (${MALLORY})\n\n`;
 
-  expect(await allow("first\n")).toEqual({
-    exitCode: 1,
-    stdout: "",
-    stderr: `${shown}No passphrase is set, so nothing can widen access. The owner sets one with \`toy-box-slack passphrase\` at their own terminal.\n`,
-  });
-  expect(await passphrase("first\nfirst\n")).toEqual({
+  expect(await runToyBoxSlack(["allow", MALLORY, "--channel", channelId], { HOME: home })).toEqual({
     exitCode: 0,
-    stdout: "Set the owner's passphrase.\n",
+    stdout: `They can all ask the lead to act from #C-link now:\n\n- Mallory (${MALLORY})\n`,
     stderr: "",
   });
-  // Changing it needs the old one, even at a terminal.
-  expect(await passphrase("guess\nmine\nmine\n")).toMatchObject({ exitCode: 1 });
-  expect(await passphrase("first\nsecond\nsecond\n")).toMatchObject({ exitCode: 0 });
-  expect(await allow("first\n")).toEqual({
-    exitCode: 1,
-    stdout: "",
-    stderr: `${shown}That isn't the owner's passphrase, so nothing changed.\n`,
-  });
-  expect(await allow("second\n")).toEqual({
-    exitCode: 0,
-    stdout: "They can all ask the lead to act, from #C-link.\n",
-    stderr: shown,
-  });
 }, 15_000);
-
-test("refuses passphrase in a Copilot session before it reads or saves anything", async () => {
-  const home = createTestFolder();
-  const lead = { HOME: home, COPILOT_AGENT_SESSION_ID: "toybox-link" };
-
-  expect(await runToyBoxSlack(["passphrase"], lead, "chosen\nchosen\n")).toEqual({
-    exitCode: 1,
-    stdout: "",
-    stderr: "Only the owner at a terminal runs `passphrase`.\n",
-  });
-  expect(existsSync(join(home, ".toy-box-slack"))).toBe(false);
-});
 
 test("refuses add-app without a terminal, even when stdin holds both tokens", async () => {
   const home = createTestFolder();

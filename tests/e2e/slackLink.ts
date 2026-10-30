@@ -4,9 +4,9 @@
 // so each lead's commands reach it, and it wakes each lead through that Toy Box. Slack is a fake
 // with the guarantee suites' people: the link watches C0LINK, a private channel the bot, Alice and
 // Mallory are in, and allows Alice. The owner sets it up at a terminal in the order the skill gives
-// them: they set a passphrase, start the bridge, link C0LINK and allow Alice, typing the passphrase
-// for each. A second lead shares C0LINK through a Slack app of its own, which the owner adds as the
-// operations guide says: they add the app at a terminal, restart the bridge, and link through it.
+// them: they start the bridge, link C0LINK and allow Alice. A second lead shares C0LINK through a
+// Slack app of its own, which the owner adds as the operations guide says: they add the app at a
+// terminal, restart the bridge, and link through it.
 
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { closeSync, openSync } from "node:fs";
@@ -49,8 +49,6 @@ const SLACK_TIMEOUT = 10_000;
 
 // The bridge stops at once on SIGTERM, since nothing it's waiting on is worth keeping it for.
 const STOP_TIMEOUT = 5_000;
-
-const PASSPHRASE = "correct horse battery staple";
 
 /** One of the bridge's apps, as Slack and its bridge.db see it. */
 export type LinkedApp = {
@@ -139,8 +137,15 @@ export async function linkSlack(toyBox: IsolatedToyBox, channel: TestChannel): P
       () => lead.routine(REQUESTS_ROUTINE.title),
       10_000,
     );
-    await runAsOwner(toyBox, "link", "--slack-channel", "C0LINK", "--channel", lead.id, ...options);
-    await runAsOwner(toyBox, "allow", ALICE, "--channel", lead.id);
+    await runCli(toyBox.home, [
+      "link",
+      "--slack-channel",
+      "C0LINK",
+      "--channel",
+      lead.id,
+      ...options,
+    ]);
+    await runCli(toyBox.home, ["allow", ALICE, "--channel", lead.id]);
   }
 
   const link: SlackLink = {
@@ -193,7 +198,6 @@ export async function linkSlack(toyBox: IsolatedToyBox, channel: TestChannel): P
   };
 
   try {
-    await runAsOwner(toyBox, "passphrase");
     await startBridge();
     await linkLead(channel);
     return link;
@@ -233,11 +237,6 @@ function linkedApp<App extends FakeSlackApp>(slack: App, database: string) {
       }
     },
   };
-}
-
-/** Runs `toy-box-slack <args>` as the owner at a terminal, typing their passphrase at each prompt. */
-function runAsOwner(toyBox: IsolatedToyBox, ...args: string[]) {
-  return runCli(toyBox.home, args, `${PASSPHRASE}\n`.repeat(2));
 }
 
 /** Adds the `name` app as its owner does, pasting `app`'s tokens at a terminal of their own. */

@@ -1,5 +1,5 @@
 import { BridgeRefusedError } from "@bridge/server/refusal";
-import type { SecretReader } from "./passphrase";
+import type { SecretReader } from "./secrets";
 
 /** What `serve` and `add-app` ask for an added app's two tokens. */
 export const asksBotTokenOf = (app: string) =>

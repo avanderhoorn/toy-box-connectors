@@ -6,11 +6,11 @@ Early research used no credentials. Later live probes are attributed explicitly.
 
 ## Reduced v1, approved October 28
 
-The current scope is terminal setup protected by a bridge-checked owner passphrase,
-one watched channel per Toy Box channel, allowlisted requests, threaded answers,
-publications in that same Slack channel and fire-and-forget eyes. There are no
-approval cards, interaction payloads, file ingestion, native status, progress edits
-or generalized cleanup operations. The later sections preserve research into those
+The current scope is setup by the owner at a terminal, one watched channel per
+Toy Box channel, allowlisted requests, threaded answers, publications in that same
+Slack channel and fire-and-forget eyes. There are no approval cards, interaction
+payloads, file ingestion, native status, progress edits or generalized cleanup
+operations. The later sections preserve research into those
 retired designs, not requirements to bring them back.
 
 Unknown posts get positive-only metadata checks around one and five minutes.

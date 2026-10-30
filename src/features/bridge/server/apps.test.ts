@@ -146,16 +146,13 @@ describe("an app's tokens", () => {
     const app = locateApp(dataFolder, "releases");
     addAppFolder(dataFolder, app.name);
 
-    for (const setting of [
-      "TOY_BOX_URL=http://127.0.0.1:3100",
-      "OWNER_PASSPHRASE_HASH=$argon2id$x",
-    ]) {
-      writeCredentials(app.folder, `SLACK_BOT_TOKEN=xoxb-secret\n${setting}\n`);
-      const name = setting.slice(0, setting.indexOf("="));
-      expect(refusalOf(() => readAppTokens(app, {}))).toBe(
-        `${app.credentials} may set only SLACK_BOT_TOKEN and SLACK_APP_TOKEN.\n✖ Unrecognized key: "${name}"`,
-      );
-    }
+    writeCredentials(
+      app.folder,
+      "SLACK_BOT_TOKEN=xoxb-secret\nTOY_BOX_URL=http://127.0.0.1:3100\n",
+    );
+    expect(refusalOf(() => readAppTokens(app, {}))).toBe(
+      `${app.credentials} may set only SLACK_BOT_TOKEN and SLACK_APP_TOKEN.\n✖ Unrecognized key: "TOY_BOX_URL"`,
+    );
   });
 
   test("are refused when others could read or write an added app's credentials.env", () => {

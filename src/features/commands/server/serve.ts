@@ -1,7 +1,6 @@
 // The bridge works out who's calling before anything else, so a caller it won't act for learns
 // nothing about any channel. Then it parses the input with the command's schema, finds the app the
-// command runs in (see ../model/routing), checks the owner's passphrase when the call brings one,
-// and runs it there.
+// command runs in (see ../model/routing), and runs it there.
 //
 // A Toy Box channel links through at most one app. Link and resume are the only commands that make
 // a link, so they run one at a time across every app, each finding the app it runs in once those
@@ -20,7 +19,6 @@ import {
 import { routeCommand } from "@commands/model/routing";
 import { log, type Log } from "@/shared/log";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
-import { checkOwner } from "./owner";
 import type { StatusCommand, StatusSource } from "./status";
 
 const ANOTHER_RELEASE =
@@ -34,8 +32,6 @@ export type CommandContext = {
   channelId: string | null;
   /** When the bridge took the call. Commands read the time from here. */
   at: number;
-  /** The change the owner confirmed with their passphrase, by the name the bridge gave it. */
-  confirmed?: string;
 };
 
 export type CommandHandler<Name extends CommandName> = (
@@ -61,8 +57,6 @@ export type ServeCommandsOptions = {
   /** The apps the bridge hosts, the default app first. */
   apps: readonly ServedApp[];
   status: StatusCommand;
-  /** The argon2id hash of the owner's passphrase, if they set one, which passphrases check against. */
-  ownerHash: () => string | null;
   now?: () => number;
 };
 
@@ -73,7 +67,6 @@ export type ServeCommandsOptions = {
 export function serveCommands({
   apps,
   status,
-  ownerHash,
   now = Date.now,
 }: ServeCommandsOptions): (request: Request) => Promise<Response> {
   const linking = new SerialTaskQueue();
@@ -121,9 +114,7 @@ export function serveCommands({
         hosted,
       });
       if (route.kind === "refused") return answerError(409, route.message);
-      const { owner } = call;
-      if (owner) await checkOwner(owner.passphrase, ownerHash());
-      const context = { channelId, at: now(), confirmed: owner?.confirms };
+      const context = { channelId, at: now() };
       ran = route.kind === "every" ? apps : apps.filter((app) => app.name === route.app);
       try {
         if (name === "status") return Response.json(await status(ran, context));

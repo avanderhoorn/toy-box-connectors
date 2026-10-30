@@ -10,7 +10,7 @@ import {
 } from "@bridge/server/environment";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { createAppFolder } from "./addApp";
-import type { SecretReader } from "./passphrase";
+import type { SecretReader } from "./secrets";
 import { asksAppTokenOf, asksBotTokenOf, owner, refusalOf } from "./testFixtures";
 
 const BOT_TOKEN = "xoxb-2222-3333-ReLeAsEs";

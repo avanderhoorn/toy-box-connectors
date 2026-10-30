@@ -1,12 +1,12 @@
 // Bridge startup and shutdown.
 //
-// At a terminal, `serve` first asks the owner for any Slack token or passphrase
-// it's missing. The bridge then prepares its data folder, reads its settings
-// and every app's folder and tokens, and takes each app's lock, the default
-// app's first, before it opens any app's `bridge.db`, so a second bridge stops
-// before it opens anything. It opens every app before it starts any, so each
-// `bridge.db` is open and recovered, and the bridge knows which Slack app each
-// one records, before anything talks to Slack.
+// At a terminal, `serve` first asks the owner for any Slack token it's missing.
+// The bridge then prepares its data folder, reads its settings and every app's
+// folder and tokens, and takes each app's lock, the default app's first, before
+// it opens any app's `bridge.db`, so a second bridge stops before it opens
+// anything. It opens every app before it starts any, so each `bridge.db` is
+// open and recovered, and the bridge knows which Slack app each one records,
+// before anything talks to Slack.
 // Then it starts each app's work, and answers commands on its socket.
 // It lets go of everything in the reverse order, so it stops taking commands
 // before anything they use stops, and lets go of the default app's lock last.
@@ -103,7 +103,6 @@ export async function startBridge(
       serveCommands({
         apps: served,
         status: statusCommand({ nameApps, timings: settings.wakeTimings }),
-        ownerHash: () => readCredentialsFile(dataFolder).OWNER_PASSPHRASE_HASH ?? null,
       }),
     );
     return { failed: failure.promise, stop };

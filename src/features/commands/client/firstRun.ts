@@ -1,9 +1,9 @@
-// When the owner runs `serve` at a terminal, it first asks for what the bridge is missing: each Slack
-// token an app doesn't have, and the owner's passphrase. The environment's tokens count for the
-// default app only. Each answer is saved in its app's credentials.env once it's checked, so running
-// `serve` again asks only for what's still missing, and deleting a token's line is how the owner
-// replaces one Slack rejected. Nothing the owner types is shown or repeated, and a token must be one
-// word, so it reads back from credentials.env as it was typed.
+// When the owner runs `serve` at a terminal, it first asks for each Slack token an app doesn't have.
+// The environment's tokens count for the default app only. Each answer is saved in its app's
+// credentials.env once it's checked, so running `serve` again asks only for what's still missing,
+// and deleting a token's line is how the owner replaces one Slack rejected. Nothing the owner types
+// is shown or repeated, and a token must be one word, so it reads back from credentials.env as it
+// was typed.
 
 import { DEFAULT_APP } from "@bridge/model/apps";
 import { listApps, readAppTokens } from "@bridge/server/apps";
@@ -14,7 +14,7 @@ import {
   writeCredential,
 } from "@bridge/server/environment";
 import { BridgeRefusedError } from "@bridge/server/refusal";
-import { choosePassphrase, secretReader, type SecretReader } from "./passphrase";
+import { secretReader, type SecretReader } from "./secrets";
 
 /** The tokens an app needs, with the setting each fills and what one starts with. */
 export const TOKENS = [
@@ -26,9 +26,9 @@ export type Token = (typeof TOKENS)[number];
 
 /**
  * Asks the owner for each Slack token an app in `dataFolder` is missing, the default app's first,
- * then for the passphrase when the bridge has none, and saves each answer. Says what it saved in
- * each file, the default app's first, or nothing when nothing was missing. Refuses an answer that
- * isn't there or isn't a token, so the bridge doesn't start without it.
+ * and saves each answer. Says what it saved in each file, the default app's first, or nothing when
+ * nothing was missing. Refuses an answer that isn't there or isn't a token, so the bridge doesn't
+ * start without it.
  */
 export async function askForMissingCredentials(
   dataFolder: string,
@@ -36,15 +36,15 @@ export async function askForMissingCredentials(
   openReader: () => SecretReader = secretReader,
 ): Promise<string[]> {
   prepareDataFolder(dataFolder);
-  const credentials = readCredentialsFile(dataFolder);
   // The same checks the bridge makes, so a setting it would refuse stops it before anyone types.
-  resolveBridgeSettings(env, credentials);
-  const apps = listApps(dataFolder).map((app) => {
-    const found = readAppTokens(app, env);
-    return { app, missing: TOKENS.filter(({ setting }) => !found[setting]) };
-  });
-  const passphrase = !credentials.OWNER_PASSPHRASE_HASH;
-  if (!passphrase && apps.every(({ missing }) => missing.length === 0)) return [];
+  resolveBridgeSettings(env, readCredentialsFile(dataFolder));
+  const apps = listApps(dataFolder)
+    .map((app) => {
+      const found = readAppTokens(app, env);
+      return { app, missing: TOKENS.filter(({ setting }) => !found[setting]) };
+    })
+    .filter(({ missing }) => missing.length > 0);
+  if (apps.length === 0) return [];
 
   const reader = openReader();
   try {
@@ -60,19 +60,13 @@ export async function askForMissingCredentials(
         writeCredential(app.folder, token.name, answer);
       }
     }
-    if (passphrase) {
-      const prompt = "Choose the owner's passphrase, which link, allow and resume ask for: ";
-      await choosePassphrase(reader, dataFolder, prompt);
-    }
   } finally {
     reader.close();
   }
   // It saved everything it asked for, since a refusal leaves before here.
-  return apps.flatMap(({ app, missing }) => {
-    const saved: string[] = missing.map(({ name }) => name);
-    if (passphrase && app.name === DEFAULT_APP) saved.push("OWNER_PASSPHRASE_HASH");
-    if (saved.length === 0) return [];
-    return [`Saved ${new Intl.ListFormat("en").format(saved)} in ${app.credentials}.`];
+  return apps.map(({ app, missing }) => {
+    const saved = new Intl.ListFormat("en").format(missing.map(({ name }) => name));
+    return `Saved ${saved} in ${app.credentials}.`;
   });
 }
 

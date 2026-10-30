@@ -8,9 +8,9 @@ import type { SlackPerson } from "@slackapi/model/users";
 // Slackbot, and in the installation's workspace or, in an Enterprise org, the installation's org.
 // The workspace a message names for its author is never the test, because an Enterprise coworker
 // can post from a sibling workspace. A response that leaves out whether they're a bot or a guest,
-// or their workspace or org, refuses rather than guesses. Allow asks when it shows the owner whom
-// it adds and again when they confirm. Nothing rechecks people once they're allowed, so the owner
-// denies someone Slack later makes a guest.
+// or their workspace or org, refuses rather than guesses. Allow asks Slack about each person as it
+// adds them. Nothing rechecks people once they're allowed, so the owner denies someone Slack later
+// makes a guest.
 
 /** Why the bridge won't admit someone. */
 export type AdmissionProblem =

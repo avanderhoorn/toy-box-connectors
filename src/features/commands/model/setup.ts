@@ -1,5 +1,5 @@
-// The owner approves what a setup command shows them, so it says what the link would do in words
-// they can check against Slack, and each refusal says what to do first.
+// A setup command answers with what it changed, in words the owner can check against Slack, and
+// each refusal says what to do first.
 
 import type { AdmissionProblem } from "@links/model/admission";
 import type { ApprovalProblem, Audience } from "@links/model/audience";
@@ -36,8 +36,8 @@ export function admissionRefusal(who: string, problem: AdmissionProblem): string
   return `Nobody was allowed, since only full members of the bot's workspace or its Enterprise org can be, and ${who} isn't: ${admissionProblems[problem]}.`;
 }
 
-/** Everything the owner approves by linking `toyBox` to `channel`, through `app` if it's named. */
-export function linkPreview(
+/** What the lead of `toyBox` does in `channel` once it's linked there, through `app` if it's named. */
+export function presentLink(
   toyBox: string,
   channel: string,
   audience: Audience,
@@ -58,7 +58,7 @@ export function linkPreview(
       ? `everything said in ${channel}`
       : "what allowed people say, and everyone's replies in request threads";
   const asBot = app ? ` as the ${app} app's bot` : "";
-  return `Linking ${toyBox} to ${channel} would let the people you allow ask its lead to act, and it would answer them there${asBot}.
+  return `The lead of ${toyBox} answers in ${channel} now${asBot}, for the people \`toy-box-slack allow\` names.
 
 - Who reads the lead's answers: ${channel} is ${audience.kind}, so ${readers} can.
 - What asks the lead: an allowed person ${asks}.

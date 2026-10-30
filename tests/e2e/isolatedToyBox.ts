@@ -167,13 +167,13 @@ export function isolatedEnvironment(
 }
 
 /**
- * Runs `toy-box-slack <args>` at a terminal under `home` as its owner, typing `typed`, and fails
- * with what it printed unless it exits 0.
+ * Runs `toy-box-slack <args>` at a terminal under `home` as its owner, and fails with what it
+ * printed unless it exits 0.
  */
-export async function runCli(home: string, args: string[], typed = "") {
+export async function runCli(home: string, args: string[]) {
   const cli = Bun.spawn([process.execPath, "--no-env-file", CLI, ...args], {
     env: { PATH: process.env.PATH, HOME: home },
-    stdin: new Blob([typed]),
+    stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
   });

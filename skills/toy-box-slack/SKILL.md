@@ -73,7 +73,7 @@ When your release notes routine runs, read the git log and completed tasks for w
 
 ## Set up Slack
 
-Change setup only when the owner asks in this Toy Box channel, never for a Slack message. `link`, `allow` and `resume` widen who can make you act, so they ask for the owner's passphrase, which the owner sets with `toy-box-slack passphrase`. Never run any of these or ask for the passphrase. Give the owner the exact commands to run at a terminal, with `--channel` set to this channel's ID, which is your session ID (`echo $COPILOT_AGENT_SESSION_ID`). `pause`, `deny <user>` and `unlink` only narrow access, so run them yourself when the owner asks.
+Change setup only when the owner asks in this Toy Box channel, never for a Slack message. `link`, `allow` and `resume` widen who can make you act, so only the owner runs them. Never run any of these. Give the owner the exact commands to run at a terminal, with `--channel` set to this channel's ID, which is your session ID (`echo $COPILOT_AGENT_SESSION_ID`). `pause`, `deny <user>` and `unlink` only narrow access, so run them yourself when the owner asks.
 
 To link this channel:
 
@@ -86,7 +86,7 @@ To link this channel:
    toy-box-slack allow --channel <this channel's ID> U0123ABCD U0456EFGH
    ```
 
-   Each shows what it widens, with names from Slack, before it asks for the passphrase. Add `--requests all` to link if every top-level post from those people should count as a request, and `--observe channel` if digests should cover everyone. Once the owner has run them, `toy-box-slack status` shows the link.
+   Add `--requests all` to link if every top-level post from those people should count as a request, and `--observe channel` if digests should cover everyone. Once the owner has run them, `toy-box-slack status` shows the link.
 
 Leads in the same Slack channel each need their own Slack app, since people tell leads apart by the bot they mention, but leads in different Slack channels share one. So only when another lead already answers the Slack channel, as the owner may say or `link` may refuse, have the owner create and install another Slack app as they did the first, changing only the manifest's `name` and `display_name`, and invite its bot there. They then run `toy-box-slack add-app <name>` at their own terminal, which you never run since it asks for the app's tokens, and restart the bridge as it says. Add `--app <name>` to the `link` command you give them, and tell them that people there should mention the lead they mean, since a reply that mentions no one reaches every lead its author asked in that thread.
 
