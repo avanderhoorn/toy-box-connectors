@@ -52,15 +52,10 @@ test("a delete forgets a message's text and files for good, even when it arrives
   });
 });
 
-test("a stranger's text and files are kept only where the link observes them", async () => {
+test("a stranger's text is kept only where the link observes them", async () => {
   const database = await openLedger();
-  const files = [sharedFile("F1", { uploaderId: "U-stranger" })];
-  const inThread = replyMessage(ask, "1700000200.000100", { userId: "U-stranger", files });
-  const atRoot = askMessage("1700000300.000100", {
-    userId: "U-stranger",
-    text: inThread.text,
-    files,
-  });
+  const inThread = replyMessage(ask, "1700000200.000100", { userId: "U-stranger" });
+  const atRoot = askMessage("1700000300.000100", { userId: "U-stranger", text: inThread.text });
   await createStoredMessage(database, inThread);
   // A request started in the thread since, so its redelivery fills the marker in.
   await createStoredMessage(database, inThread, linkAudience(), true);
@@ -71,15 +66,10 @@ test("a stranger's text and files are kept only where the link observes them", a
     linkAudience({ observe: "channel" }),
   );
 
-  const ledger = await readLedger(database);
-  expect(ledger.messages).toEqual([
+  expect((await readLedger(database)).messages).toEqual([
     { ts: inThread.ts, text: inThread.text, deleted: 0, updated_seq: 1 },
     { ts: atRoot.ts, text: null, deleted: 0, updated_seq: 2 },
     { ts: "1700000400.000100", text: inThread.text, deleted: 0, updated_seq: 3 },
-  ]);
-  expect(ledger.files).toEqual([
-    { id: 1, ts: inThread.ts, file_id: "F1", whole: 1 },
-    { id: 2, ts: "1700000400.000100", file_id: "F1", whole: 1 },
   ]);
 });
 

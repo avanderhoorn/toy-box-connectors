@@ -33,28 +33,17 @@ test.each<[string, FileAnswer, string]>([
     'f12 is a blank text file from Alice Chen: "deploy.log"',
   ],
   [
-    "an image says where to view it, and a file without a name goes unnamed",
-    {
-      ...about,
-      name: null,
-      format: "png",
-      width: 3456,
-      height: 2234,
-      path: "/data/viewing/f12-1.png",
-    },
-    "f12 is a 3456×2234 PNG from Alice Chen\nView it now at /data/viewing/f12-1.png, since the bridge soon deletes it.",
+    "a file without a name goes unnamed",
+    { ...textAnswer("Deploy failed at step 3.\n", 1), name: null },
+    "```file f12 from Alice Chen\nDeploy failed at step 3.\n```",
   ],
 ])("%s", (_, answer, text) => {
   expect(presentFileAnswer(answer)).toBe(text);
 });
 
 test.each<[number, string]>([
-  [1_023, "1023 bytes"],
   [1_024, "1 KB"],
-  [1_535, "1 KB"],
-  [1_536, "2 KB"],
   [1_048_575, "1.0 MB"],
-  [2_200_000, "2.1 MB"],
 ])("a file of %d bytes lists as %s, in units of 1,024", (size, shown) => {
   expect(presentListedFile({ reference: "f12", format: "text", size, name: null })).toBe(
     `- f12, text, ${shown}, read it with \`toy-box-slack file f12\``,

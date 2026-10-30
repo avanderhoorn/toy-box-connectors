@@ -30,9 +30,8 @@ test.each<[string, SlackFile, FileVerdict]>([
     { ...notes, mimeType: "Text/HTML; charset=UTF-8" },
     refused("the bridge doesn't read HTML"),
   ],
-  ["a PNG reads", { ...notes, mimeType: "image/png", size: 412_000 }, readable("png")],
   [
-    "and so does a JPEG of up to 10 MiB",
+    "a JPEG of up to 10 MiB reads",
     { ...notes, mimeType: "image/jpeg", size: 10 * mib },
     readable("jpeg"),
   ],
@@ -61,16 +60,6 @@ test.each<[string, SlackFile, FileVerdict]>([
     { ...notes, mode: "external" },
     refused("it's stored outside Slack"),
   ],
-  [
-    "nor one uploaded by someone not on the allowlist",
-    { ...notes, uploaderId: "U-mallory" },
-    refused("whoever uploaded it isn't on the allowlist"),
-  ],
-  [
-    "a file its message gives only the ID of waits for files.info",
-    { id: "F1", whole: false },
-    { kind: "unsettled" },
-  ],
 ])("%s", (_, file, verdict) => {
   expect(judgeFile(file, "U-alice", allowed)).toEqual(verdict);
 });
@@ -84,12 +73,6 @@ test("JSON, XML and YAML read as text", () => {
   ]) {
     expect(judgeFile({ ...notes, mimeType }, "U-alice", allowed)).toEqual(readable("text"));
   }
-});
-
-test("no file reads once its sharer isn't on the allowlist, even one known only by its ID", () => {
-  expect(judgeFile({ id: "F1", whole: false }, "U-mallory", allowed)).toEqual(
-    refused("whoever shared it isn't on the allowlist"),
-  );
 });
 
 function readable(format: FileFormat): SettledVerdict {

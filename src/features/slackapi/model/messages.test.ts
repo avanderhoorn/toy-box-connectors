@@ -31,14 +31,13 @@ function normalize(event: unknown) {
   return normalizeMessageEvent(slackMessageEventSchema.parse(event), context);
 }
 
-test("roots, replies and edits retain exact identity, routing context and files", () => {
-  const root = { ...message, thread_ts: message.ts, files: [upload] };
-  expect(normalize({ ...root, channel: "C1" })).toMatchObject({
-    message: { rootTs: message.ts, isReply: false, mentionsBot: true, files: [shared] },
+test("roots, replies and edits retain exact identity and routing context", () => {
+  expect(normalize({ ...message, channel: "C1", thread_ts: message.ts })).toMatchObject({
+    message: { rootTs: message.ts, isReply: false, mentionsBot: true },
   });
-  const reply = { ...root, ts: "1700000000.000101" };
+  const reply = { ...message, ts: "1700000000.000101", thread_ts: message.ts };
   expect(normalize({ ...reply, channel: "C1" })).toMatchObject({
-    message: { rootTs: message.ts, isReply: true, files: [shared] },
+    message: { rootTs: message.ts, isReply: true },
   });
   const edited = { ...reply, edited: { ts: "1700000000.000102" } };
   expect(
@@ -49,9 +48,9 @@ test("roots, replies and edits retain exact identity, routing context and files"
       hidden: true,
       message: edited,
     }),
-  ).toMatchObject({ message: { version: edited.edited.ts, files: [shared] } });
+  ).toMatchObject({ message: { version: edited.edited.ts } });
   expect(normalizeHistoryMessage("C1", slackMessageSchema.parse(edited), context)).toMatchObject({
-    message: { channelId: "C1", version: edited.edited.ts, files: [shared] },
+    message: { channelId: "C1", version: edited.edited.ts },
   });
 });
 
@@ -94,7 +93,7 @@ test.each([
   });
 });
 
-test("malformed core fields refuse, while additive fields, odd files and deleted ones are ignored", () => {
+test("malformed core fields refuse, and additive fields are ignored", () => {
   expect(slackMessageEventSchema.safeParse({ ...message, channel: "C1", ts: 1.1 }).success).toBe(
     false,
   );
@@ -102,6 +101,12 @@ test("malformed core fields refuse, while additive fields, odd files and deleted
     slackMessageEventSchema.safeParse({ ...message, channel: "C1", subtype: "message_changed" })
       .success,
   ).toBe(false);
+  expect(slackMessageSchema.parse({ ...message, future_field: true })).not.toHaveProperty(
+    "future_field",
+  );
+});
+
+test("a message lists each file it shares once, by ID alone when Slack describes it oddly, and none that's deleted or has no ID", () => {
   const files = [
     { ...upload, id: "F2", file_access: "check_file_info" },
     { ...upload, id: "F3", size: "412 KB" },
@@ -113,9 +118,7 @@ test("malformed core fields refuse, while additive fields, odd files and deleted
     upload,
     { ...upload, name: "again.png" },
   ];
-  const parsed = normalize({ ...message, channel: "C1", files, future_field: true });
-  expect(parsed).toMatchObject({ message: { text: message.text } });
-  expect(parsed).toHaveProperty("message.files", [
+  expect(normalize({ ...message, channel: "C1", files })).toHaveProperty("message.files", [
     { id: "F2", whole: false },
     { id: "F3", whole: false },
     shared,
