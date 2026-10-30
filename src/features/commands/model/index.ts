@@ -22,12 +22,31 @@ export const requestReferenceSchema = z
   .transform((reference) => Number(reference.slice(1)))
   .describe("The request, such as r14");
 
-/** A post as reply or publish names it, such as o31, which the bridge reads as its number. */
+/** A post as reply, publish or post names it, such as o31, which the bridge reads as its number. */
 export const postReferenceSchema = z
   .string()
-  .regex(/^o[1-9][0-9]{0,14}$/, "Write it as reply or publish showed it, such as o31")
+  .regex(/^o[1-9][0-9]{0,14}$/, "Write it as reply, publish or post showed it, such as o31")
   .transform((reference) => Number(reference.slice(1)))
   .describe("The post, such as o31");
+
+/** A Slack thread named by its request, such as r14, or by the lead's post it's under, such as o31. */
+const threadReferenceSchema = z
+  .string()
+  .regex(/^[ro][1-9][0-9]{0,14}$/, "Name a request, such as r14, or one of your posts, such as o31")
+  .transform((reference) =>
+    reference.startsWith("r")
+      ? { request: Number(reference.slice(1)) }
+      : { post: Number(reference.slice(1)) },
+  )
+  .optional()
+  .describe(
+    "The thread to post in, by its request, such as r14, or your post it's under, such as o31",
+  );
+
+/** A thread as post's --thread takes it, such as r14 or o31. */
+export function threadReference(thread: { request: number } | { post: number }): string {
+  return "request" in thread ? `r${thread.request}` : `o${thread.post}`;
+}
 
 /** The CLI reads a post's text from stdin, so a lead can pass Markdown without quoting it. */
 const postTextSchema = z
@@ -111,8 +130,15 @@ export const commands = {
       })
       .strict(),
   },
+  post: {
+    description:
+      "Post in the Slack channel, or in a thread there, when the owner or a routine asks you to",
+    callers: ["lead"],
+    input: z.object({ thread: threadReferenceSchema, text: postTextSchema }).strict(),
+  },
   retract: {
-    description: "Delete one of your confirmed posts from Slack. Its request or run stays used",
+    description:
+      "Delete one of your confirmed posts from Slack. A reply's request or a publication's run stays used",
     callers: ["lead"],
     input: z.object({ post: postReferenceSchema }).strict(),
     positionals: ["post"],

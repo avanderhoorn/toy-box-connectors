@@ -2,13 +2,11 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { judgeChannelLink } from "@links/server/audience";
 import { readChannelLink } from "@links/server/database";
 import { suspendChannelLinks } from "@links/server/lifecycle";
-import { readRequest } from "@requests/server/database";
 import { channelFailureReason } from "@slackapi/model/errors";
 import type { Installation } from "@slackapi/model/installation";
 import type { BotClient, SlackCall } from "@slackapi/server/botClient";
 import { fetchChannelFacts } from "@slackapi/server/channels";
 import { readInstallation } from "@slackapi/server/installation";
-import { canonicalUserId } from "@slackapi/server/users";
 import { ZodError } from "zod";
 import { outboxMetadata, postSettlement } from "../model/delivery";
 import { checkLeadPayload } from "../model/payload";
@@ -20,6 +18,7 @@ import {
   startOutboxAttempt,
   type OutboxItem,
 } from "./database";
+import { threadProblem } from "./threads";
 
 export type PostStep =
   | { kind: "settled"; item: OutboxItem }
@@ -104,19 +103,8 @@ export function createPostDelivery(
     const link = await readChannelLink(tx, item.channelId);
     if (!link || link.id !== item.linkId) return refuse(tx, item, "destination_changed", at);
     if (link.status !== "active") return { kind: "waiting", reason: "link_inactive" };
-    if (item.kind === "reply") {
-      const request = await readRequest(tx, item.requestId!);
-      if (
-        !request ||
-        request.state !== "answering" ||
-        request.linkId !== item.linkId ||
-        request.channelId !== item.channelId ||
-        request.rootTs !== item.threadTs
-      )
-        return refuse(tx, item, "request_no_longer_valid", at);
-      if (!link.allowlist.has(await canonicalUserId(tx, request.requesterUserId)))
-        return refuse(tx, item, "requester_not_allowed", at);
-    }
+    const problem = await threadProblem(tx, link, item);
+    if (problem) return refuse(tx, item, problem, at);
     const payload = checkLeadPayload(item.payload);
     if (payload.kind !== "valid") return refuse(tx, item, payload.problem, at);
     const started = await startOutboxAttempt(tx, item, at);

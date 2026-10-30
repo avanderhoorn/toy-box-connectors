@@ -220,7 +220,9 @@ async function resuming() {
 }
 
 test("resume fails what its link held once more people can read the channel, and gives the lead back each request still waiting", async () => {
-  const { database, slack, request, now, read, held, resume } = await resuming();
+  const { database, slack, request, now, read, held, resume, queuePost } = await resuming();
+  // A post in r1's thread leaves r1 to its answer, so it doesn't give r1 back again.
+  const post = await queuePost({ request: request.id });
   // r2's requester was denied while its answer was held, so the lead doesn't get r2 back.
   const denied = await createStoredRequest(database, {
     state: "seen",
@@ -238,11 +240,11 @@ test("resume fails what its link held once more people can read the channel, and
 
   const answer = await resume();
 
-  expect(answer.result).toMatchObject({ status: "active", dropped: ["o1", "o2", "o3"] });
+  expect(answer.result).toMatchObject({ status: "active", dropped: ["o1", "o2", "o3", "o4"] });
   expect(answer.text).toEndWith(
-    "More people can read #fake-channel than when the lead wrote these, so they won't post:\n\n- o1, its answer to r1\n- o2, its release-notes publication\n- o3, its answer to r2\n\nThe lead gets r1 back to answer again.",
+    "More people can read #fake-channel than when the lead wrote these, so they won't post:\n\n- o1, its answer to r1\n- o2, its release-notes publication\n- o3, its post in r1's thread\n- o4, its answer to r2\n\nThe lead gets r1 back to answer again.",
   );
-  for (const item of [...held, late]) {
+  for (const item of [...held, post, late]) {
     expect(await read(item.id)).toMatchObject({ state: "failed", error: "audience_widened" });
   }
   expect(await database.read((sql) => readRequest(sql, request.id))).toMatchObject({

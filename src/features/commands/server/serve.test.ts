@@ -47,6 +47,7 @@ function handlersIn(app: string): AppCommandHandlers {
     activity: ran,
     "mark-read": ran,
     publish: ran,
+    post: ran,
     retract: ran,
     link: ran,
     allow: ran,

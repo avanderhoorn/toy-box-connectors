@@ -6,12 +6,14 @@ describe("naming the posts a wider audience stopped", () => {
     number,
     kind: "reply",
     requestId,
+    threadTs: `1700000000.00000${requestId}`,
     series: null,
   });
   const publication: QueuedPost = {
     number: 2,
     kind: "publication",
     requestId: null,
+    threadTs: null,
     series: "release-notes",
   };
 
@@ -27,6 +29,20 @@ describe("naming the posts a wider audience stopped", () => {
     );
     expect(presentDropped([reply(1, 1), publication], [], "#eng")).toBe(
       "More people can read #eng than when the lead wrote these, so they won't post:\n\n- o1, its answer to r1\n- o2, its release-notes publication",
+    );
+  });
+
+  test("a post is named by where it would have gone", () => {
+    const post = (number: number, requestId: number | null, threadTs: string | null) =>
+      ({ number, kind: "post", requestId, threadTs, series: null }) satisfies QueuedPost;
+    const posts = [
+      post(4, null, null),
+      post(5, 1, "1700000000.000001"),
+      post(6, null, "1700000000.000002"),
+    ];
+
+    expect(presentDropped(posts, [], "#eng")).toBe(
+      "More people can read #eng than when the lead wrote these, so they won't post:\n\n- o4, its post at the top of the channel\n- o5, its post in r1's thread\n- o6, its post in a thread it started",
     );
   });
 });

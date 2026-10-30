@@ -1,13 +1,21 @@
 // The commands that post to Slack or take a post back. Each goes through the outbox, which reserves
-// every post before sending it, so a second reply or publish for the same request or run is refused
-// and names the first, and a deleted post's reservation stays. The outbox's refusals reach the lead
-// as the command's, after what didn't happen.
+// every reply and publication before sending it, so a second reply or publish for the same request
+// or run is refused and names the first, and a deleted post's reservation stays. A post reserves
+// nothing, so the outbox refuses only the same text in the same place while that may still go out,
+// and for a while after it does. The outbox's refusals reach the lead as the command's, after what
+// didn't happen.
 
 import type { BridgeDatabase } from "@bridge/server/database";
+import { threadReference } from "@commands/model";
 import { CommandRefusedError } from "@commands/model/protocol";
 import { clockTime } from "@commands/model/wording";
 import type { OutboxWorker } from "@outbox/server";
-import { OutboxRefusedError, queuePublication, queueReply } from "@outbox/server/database";
+import {
+  OutboxRefusedError,
+  queuePost,
+  queuePublication,
+  queueReply,
+} from "@outbox/server/database";
 import { retractPost } from "@outbox/server/retract";
 import type { BotClient } from "@slackapi/server/botClient";
 import {
@@ -19,13 +27,13 @@ import {
 import { readCallerLink, readLinkRequest, SEE_INBOX } from "./link";
 import type { CommandHandler } from "./serve";
 
-export type ReplyCommandOptions = {
+export type QueueCommandOptions = {
   database: BridgeDatabase;
   outbox?: Pick<OutboxWorker, "poke">;
 };
 
 /** Queues the answer to a request in its thread. Only Slack's confirmation answers it. */
-export function replyCommand({ database, outbox }: ReplyCommandOptions): CommandHandler<"reply"> {
+export function replyCommand({ database, outbox }: QueueCommandOptions): CommandHandler<"reply"> {
   return async ({ request: id, text }, { channelId, at }) => {
     const post = await database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
@@ -79,6 +87,25 @@ export function publishCommand({
   };
 }
 
+/** Queues a post the owner or a routine asked for, in the watched channel or one of its threads. */
+export function postCommand({ database, outbox }: QueueCommandOptions): CommandHandler<"post"> {
+  return async ({ thread, text }, { channelId, at }) => {
+    const { link, post } = await database.write(async (transaction) => {
+      const link = await readCallerLink(transaction, channelId);
+      const post = await outboxRefusal("Nothing posted.", "", () =>
+        queuePost(transaction, { link, thread, text }, at),
+      );
+      return { link, post };
+    });
+    outbox?.poke();
+    const reference = thread ? threadReference(thread) : null;
+    return {
+      result: { post: `o${post.number}`, thread: reference, state: post.state },
+      text: `Queued o${post.number} in ${reference ? `${reference}'s thread` : link.channel}.`,
+    };
+  };
+}
+
 export type RetractCommandOptions = {
   database: BridgeDatabase;
   /** Slack's Web API, or null when the bridge has no Slack tokens. */
@@ -94,10 +121,14 @@ export function retractCommand({
     const link = await database.read((sql) => readCallerLink(sql, channelId));
     const didnt = `o${number} wasn't deleted.`;
     if (bot === null) throw new CommandRefusedError(`${didnt} Slack isn't active.`);
-    await outboxRefusal(didnt, "", () => retractPost(database, bot, link.id, number, at));
+    const post = await outboxRefusal(didnt, "", () =>
+      retractPost(database, bot, link.id, number, at),
+    );
+    const used =
+      post?.kind === "post" ? "" : " Its request or run stays used, so nothing posts in its place.";
     return {
       result: { post: `o${number}`, state: "retracted" },
-      text: `Deleted o${number} from Slack. Its request or run stays used, so nothing posts in its place.`,
+      text: `Deleted o${number} from Slack.${used}`,
     };
   };
 }

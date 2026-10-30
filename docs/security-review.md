@@ -1,8 +1,9 @@
 # Slack app review
 
 toy-box-slack is one local Bun bridge between one Slack workspace and Toy Box.
-A link watches one Slack channel, answers allowed people in its threads, and
-publishes opt-in scheduled updates in that same channel. A Copilot lead reads
+A link watches one Slack channel, answers allowed people in its threads, posts
+there when the owner asks, and publishes opt-in scheduled updates in that same
+channel. A Copilot lead reads
 the bridge's ledger and queues posts through a CLI.
 
 **Review status:** this is a reviewer guide, not a compliance attestation or
@@ -24,7 +25,7 @@ bot scopes:
 | [`groups:history`](https://docs.slack.dev/reference/scopes/groups.history/)               | The same message access in private channels the bot has joined.                |
 | [`groups:read`](https://docs.slack.dev/reference/scopes/groups.read/)                     | Check those private channels and their audience.                               |
 | [`users:read`](https://docs.slack.dev/reference/scopes/users.read/)                       | Resolve names, check admission and identify the installed bot. No email scope. |
-| [`chat:write`](https://docs.slack.dev/reference/scopes/chat.write/)                       | Post answers and publications, and retract the bot's own posts.                |
+| [`chat:write`](https://docs.slack.dev/reference/scopes/chat.write/)                       | Post answers, publications and posts the owner asks for, and retract its own.  |
 | [`metadata.message:read`](https://docs.slack.dev/reference/scopes/metadata.message.read/) | Confirm a possibly delivered post by its outbox metadata.                      |
 | [`reactions:write`](https://docs.slack.dev/reference/scopes/reactions.write/)             | Add eyes once the bridge wakes the lead for a request, or inbox serves it.     |
 
@@ -51,7 +52,7 @@ not whose words reach the model or who can read the Toy Box transcript.
 | `~/.toy-box-slack` by default         | `bridge.db` and its WAL hold retained message text and change records, requests, names and IDs, link settings, allowlists, wake runs and queued output. Credentials are separate. No attachments are stored. |
 | Local Toy Box                         | CLI output enters the lead's session transcript. The lead may post digests or create workspace files. The bridge never posts into Toy Box.                                                                   |
 | Copilot and the chosen model provider | Whatever Slack text and tool output the lead reads can enter model requests. Copilot-only does not specify processing region, retention or contractual training restrictions.                                |
-| Slack                                 | Thread answers, publications and eyes reactions. No progress notes or answer edits.                                                                                                                          |
+| Slack                                 | Thread answers, posts, publications and eyes reactions. No progress notes or answer edits.                                                                                                                   |
 | Host backups and diagnostics          | Snapshots, copied reports and support bundles can become additional copies. Approve access and retention before enabling them.                                                                               |
 
 Name the actual Copilot account and plan, permitted models and providers,
@@ -92,10 +93,13 @@ Slack text could widen access that way. The skill tells leads never to run
 these commands, but that is a prompt rule, not an enforced boundary. There
 are no Slack approval buttons.
 
-Only a linked channel's lead can reply or publish. A terminal can inspect
-status but cannot answer as the lead. Member sessions are refused, including
-reads. The skill's instruction to seek the owner's approval for consequential
-work is a prompt rule, not an execution sandbox.
+Only a linked channel's lead can reply, post or publish. A terminal can
+inspect status but cannot answer as the lead. Member sessions are refused,
+including reads. The skill's instruction to seek the owner's approval for
+consequential work is a prompt rule, not an execution sandbox. The bridge
+checks where a post goes and what it says, but not why the lead posts, so
+posting only when the owner asks in Toy Box or a routine's prompt says to is
+a prompt rule too.
 
 Channels shared within the pinned Enterprise org are eligible only with a
 known, approved workspace audience. Fresh channel checks at link, resume and
@@ -105,10 +109,10 @@ audience, private-to-public conversion,
 archive, a new channel ID, bot removal or an applicable policy refusal suspends
 the link. A failed fresh read does not authorize sending. These checks cannot
 make a send atomic with Slack's next channel change. When link or resume
-approves a wider audience than before, the replies and publications the link
-held queued fail in that transaction rather than post to readers the lead
-didn't write for, and their requests return to the lead. A post already
-sending, or whose delivery is unknown, stays, since it may have posted.
+approves a wider audience than before, the replies, posts and publications
+the link held queued fail in that transaction rather than post to readers the
+lead didn't write for, and each reply's request returns to the lead. One
+already sending, or whose delivery is unknown, stays, since it may have posted.
 
 There is no audience refresh at startup or before catch-up. A change missed
 while offline can let text from a changed channel enter the ledger and model
@@ -156,10 +160,12 @@ hashes that posting once and numbering need.
   author's role but not their user ID.
 - `changes` keeps only each remaining message's latest change, which holds
   identifiers, a timestamp and a kind.
-- A finished request goes, with its `request_messages` and its reply's
-  `outbox` row, once the ledger keeps none of its messages. The reason the lead
-  gave for dismissing it goes with it. A request whose reply's delivery is
-  unknown never finishes, so it stays, with no text.
+- A finished request goes, with its `request_messages` and the `outbox` rows
+  of its reply and the posts in its thread, once the ledger keeps none of its
+  messages. The reason the lead gave for dismissing it goes with it. A request
+  whose reply's delivery is unknown never finishes, so it stays, with no text,
+  and a finished one stays while a post in its thread may still go out or its
+  delivery is unknown.
 - An `outbox` row forgets its payload 30 days after it last changed, unless it
   is queued or sending, such as a reply queued while its link is paused. Its
   number, payload hash, state, destination and Slack `ts` remain, so an unknown

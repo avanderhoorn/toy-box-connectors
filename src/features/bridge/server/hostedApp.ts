@@ -16,7 +16,7 @@ import { unconfiguredSlack, type SlackState } from "@commands/model/status";
 import { activityCommand, markReadCommand } from "@commands/server/activity";
 import { dismissCommand } from "@commands/server/dismiss";
 import { inboxCommand } from "@commands/server/inbox";
-import { publishCommand, replyCommand, retractCommand } from "@commands/server/posts";
+import { postCommand, publishCommand, replyCommand, retractCommand } from "@commands/server/posts";
 import type { ServedApp } from "@commands/server/serve";
 import {
   allowCommand,
@@ -142,6 +142,7 @@ export async function openApp(
             (await readToyBoxChannel(origin, channelId))?.routines ?? null,
           outbox,
         }),
+        post: postCommand({ database, outbox }),
         retract: retractCommand({ database, bot }),
         link: linkCommand(setup),
         allow: allowCommand(setup),

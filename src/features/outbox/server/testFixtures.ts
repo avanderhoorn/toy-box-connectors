@@ -1,14 +1,16 @@
 import { onTestFinished } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
+import { readChannelLink } from "@links/server/database";
 import { createStoredLink } from "@links/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { createBotClient } from "@slackapi/server/botClient";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../../../../tests/fakes/slack";
 import { renderMarkdown } from "../model/rendering";
-import { queueReply, readOutboxItem } from "./database";
+import { queuePost, queueReply, readOutboxItem } from "./database";
 import { createPostDelivery } from "./posts";
+import type { PostThread } from "./threads";
 
 export function createStoredOutboxItem(
   database: BridgeDatabase,
@@ -87,6 +89,12 @@ export async function createOutboxWorld() {
     },
     queue: (text = "A **safe answer**.") =>
       database.write((tx) => queueReply(tx, { requestId: request.id, text }, now())),
+    /** Queues a post the owner asked for, at the top of the channel or in `thread`. */
+    queuePost: (thread?: PostThread, text = "Shipped **1.2**.") =>
+      database.write(async (tx) => {
+        const link = await readChannelLink(tx, "C-link");
+        return queuePost(tx, { link: link!, thread, text }, now());
+      }),
     read: (id: string) => database.read((sql) => readOutboxItem(sql, id)),
     post: createPostDelivery(database, bot, { now }).post,
   };

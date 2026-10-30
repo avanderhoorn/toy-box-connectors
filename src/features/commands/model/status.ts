@@ -55,13 +55,23 @@ export type LinkStatus = {
   lastWake: WakeRun | null;
 };
 
-/** A post Slack never confirmed: an answer to a request, or a series' post for a scheduled run. */
+/**
+ * A post Slack never confirmed: an answer to a request, a series' post for a scheduled run, or a
+ * post the owner or a routine asked for.
+ */
 export type UnconfirmedPost = {
   post: number;
+  kind: "reply" | "publication" | "post";
   /** When the bridge tried to post it. */
   since: number;
+  /** The request it answers, or whose thread it went in. */
   request: number | null;
-  /** The request's Slack link, or null when Slack hasn't said the workspace's URL. */
+  /** The lead's post whose thread a post went in, when no request names that thread. */
+  parent: number | null;
+  /**
+   * The Slack link to its request or thread, or null for a post at the top of the channel or when
+   * Slack hasn't said the workspace's URL.
+   */
   permalink: string | null;
   series: string | null;
   scheduledAt: number | null;
@@ -123,14 +133,25 @@ function presentUnconfirmed(posts: UnconfirmedPost[], at: number): string[] {
   if (posts.length === 0) return [];
   return [
     "- Posts: Slack never confirmed these landed, and the bridge won't send them again. Have the owner check each one. Anyone whose answer is missing can ask again in its thread.",
-    ...posts.map(({ post, since, request, permalink, series, scheduledAt }) => {
-      const what =
-        request === null
-          ? `the ${series} post for the run scheduled ${clockTime(scheduledAt!)}`
-          : `the answer to r${request}`;
+    ...posts.map(({ post, since, permalink, ...item }) => {
+      const what = describeUnconfirmed(item);
       return `  - o${post}, ${what}, tried ${ago(at - since)}${permalink ? `: ${permalink}` : "."}`;
     }),
   ];
+}
+
+function describeUnconfirmed({
+  kind,
+  request,
+  parent,
+  series,
+  scheduledAt,
+}: Omit<UnconfirmedPost, "post" | "since" | "permalink">): string {
+  if (kind === "publication")
+    return `the ${series} post for the run scheduled ${clockTime(scheduledAt!)}`;
+  if (kind === "reply") return `the answer to r${request}`;
+  if (request !== null) return `a post in r${request}'s thread`;
+  return parent === null ? "a post at the top of the channel" : `a post in o${parent}'s thread`;
 }
 
 /** A link's state as it reads after "is", and what ends it when it isn't active. */

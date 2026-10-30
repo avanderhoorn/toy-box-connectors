@@ -57,6 +57,19 @@ export async function readThreadRequests(
   return rows.map(requestFromRow);
 }
 
+/** Everyone's requests in a link's threads that start at `rootTs`, whatever became of them, newest first. */
+export async function readRequestsInThreads(
+  sql: Bun.SQL,
+  linkId: string,
+  rootTs: readonly SlackTs[],
+): Promise<StoredRequest[]> {
+  if (rootTs.length === 0) return [];
+  const rows = await sql<RequestRow[]>`
+    SELECT * FROM requests WHERE link_id = ${linkId} AND root_ts IN ${sql([...rootTs])} ORDER BY id DESC
+  `;
+  return rows.map(requestFromRow);
+}
+
 /** A link's open, seen and answering requests, oldest first. */
 export async function readActiveRequests(sql: Bun.SQL, linkId: string): Promise<StoredRequest[]> {
   const rows = await sql<RequestRow[]>`
@@ -170,13 +183,18 @@ export async function deleteLinkRequests(transaction: Bun.SQL, linkId: string): 
 
 /**
  * Forgets every finished request once the ledger has forgotten all its messages, along with which
- * messages it held and its reply. Until then an edit to one of them finds the request finished and
- * asks nothing, and after, a message's next version is too old to ask.
+ * messages it held, its reply and the posts in its thread. Until then an edit to one of them finds
+ * the request finished and asks nothing, and after, a message's next version is too old to ask. A
+ * post in its thread that may still go out, or that Slack never confirmed, keeps it, the way its
+ * reply would, so the outbox can still check or prove that post.
  */
 export async function forgetFinishedRequests(transaction: Bun.SQL): Promise<void> {
   await transaction`
     DELETE FROM requests WHERE state NOT IN ${transaction(activeStates)} AND id NOT IN (
       SELECT request_id FROM request_messages JOIN messages USING (channel_id, ts)
+    ) AND id NOT IN (
+      SELECT request_id FROM outbox
+      WHERE request_id IS NOT NULL AND state IN ('queued', 'sending', 'delivery_unknown')
     )
   `;
 }

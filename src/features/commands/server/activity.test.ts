@@ -3,6 +3,8 @@ import { forgetOldActivity } from "@activity/server/ledger";
 import { createStoredMessage } from "@activity/server/testFixtures";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
+import { createStoredOutboxItem } from "@outbox/server/testFixtures";
+import { createStoredRequest } from "@requests/server/testFixtures";
 import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
 import { activityCommand, markReadCommand } from "./activity";
 import { refusal } from "./testFixtures";
@@ -61,4 +63,68 @@ test("serves the messages that changed after the cursor a page at a time, and ma
   expect((await activity({ limit: 2 }, LEAD)).text).toBe(
     "Nothing new to read in #C-link since you last marked it read.",
   );
+});
+
+test("names each thread the lead could post in now as post's --thread takes it", async () => {
+  const database = await openTestDatabase();
+  await createStoredLink(database);
+  await database.write(
+    (tx) => tx`INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-owner', 0)`,
+  );
+  const roots = {
+    asked: "1700000100.000100",
+    published: "1700000200.000100",
+    cancelled: "1700000300.000100",
+    denied: "1700000400.000100",
+    waiting: "1700000500.000100",
+    quiet: "1700000600.000100",
+  };
+  const answered = (rootTs: string, sourceTs = rootTs) =>
+    createStoredRequest(database, { state: "answered", rootTs, sourceTs });
+  for (const ts of Object.values(roots)) await createStoredMessage(database, askMessage(ts));
+  await answered(roots.asked);
+  // The lead's notes started this thread, and someone asked in it.
+  await answered(roots.published, "1700000210.000100");
+  await createStoredOutboxItem(database, 1, {
+    kind: "publication",
+    request_id: null,
+    thread_ts: null,
+    series: "notes",
+    scheduled_at: 0,
+    state: "sent",
+    slack_ts: roots.published,
+  });
+  await createStoredRequest(database, {
+    rootTs: roots.cancelled,
+    sourceTs: roots.cancelled,
+    state: "cancelled",
+    closedReason: "source_deleted",
+  });
+  await createStoredRequest(database, {
+    rootTs: roots.denied,
+    sourceTs: roots.denied,
+    state: "answered",
+    requesterUserId: "U-carol",
+  });
+  await createStoredRequest(database, {
+    rootTs: roots.waiting,
+    sourceTs: roots.waiting,
+    state: "seen",
+  });
+  const activity = activityCommand({ database, workspaceUrl: () => null });
+
+  const { result, text } = await activity({ limit: 10 }, LEAD);
+
+  expect(result).toMatchObject({
+    threads: [
+      { reference: "r1" },
+      { reference: "o1" },
+      { reference: null },
+      { reference: null },
+      { reference: null },
+      { reference: null },
+    ],
+  });
+  expect(text).toContain("### r1's thread, started 2 hours ago\n\n```slack from U-owner");
+  expect(text).toContain("### Thread started 1 hour ago\n\n```slack from U-owner");
 });

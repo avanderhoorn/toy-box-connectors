@@ -1,21 +1,34 @@
 # Outbox
 
-The outbox owns threaded replies and periodic publications in the watched Slack channel.
-Each item has an opaque metadata ID, a never-reused number, an immutable attempted payload
-and its hash, and a delivery state. A unique request ID or `(link, series, scheduled slot)`
-reserves its purpose. Unknown delivery and retraction never release that reservation.
-A duplicate command refuses with the first item's number and state, rather than queueing again.
-An item that may still go out keeps its payload. Any other forgets it 30 days after it last
-changed and keeps its hash, so delivery can still be proven and the reservation still holds.
-A reply's item goes with its request, whose number is never handed out again.
+The outbox owns threaded replies, periodic publications and the posts the owner asks for in the
+watched Slack channel. Each item has an opaque metadata ID, a never-reused number, an immutable
+attempted payload and its hash, and a delivery state. A reply's request and a publication's
+`(link, series, scheduled slot)` are unique, so each reserves its purpose. Unknown delivery and
+retraction never release that reservation. A duplicate command refuses with the first item's
+number and state, rather than queueing again. A post reserves nothing, so it refuses as a repeat
+of any item saying the same in the same place while that item may still go out or its delivery
+is unknown, and for 10 minutes after it's sent. An item that may still go out keeps its payload.
+Any other forgets it 30 days after it last changed and keeps its hash, so delivery can still be
+proven and the reservation still holds. A reply's item goes with its request, whose number is
+never handed out again, and so does a post in that request's thread. A finished request stays
+while such a post may still go out or its delivery is unknown, so the post can still be proven.
+
+A post goes at the top of its link's channel, or in a thread there that it names by a request in
+it, such as r14, or by the link's own top-level item it's under, such as o31. `server/threads.ts`
+decides whether a thread takes a post. A request's thread does while the request isn't
+cancelled, its requester is still allowed and no request there waits on its reply, so a post
+never stands in for an answer. A top-level item's thread does while that item is in Slack.
+Activity names each thread a post can go in by that same check, so it never offers a thread
+`post` would refuse.
 
 ## Posting once
 
 Before posting, read fresh channel facts and recheck the installation, link, destination,
-request and requester's current permission, so a reply whose request was cancelled fails
-instead of posting. Commit `sending`, the attempt number and its start time before
-calling Slack. SDK retries are disabled. Share the client's method cooldowns and defer a 429
-until its Retry-After deadline. Restarting may encounter another 429, never retry an ambiguous post.
+the thread's request and its requester's current permission, and that the top-level item a post
+is under is still in Slack, so a reply or post whose request was cancelled fails instead of
+posting. Commit `sending`, the attempt number and its start time before calling Slack. SDK
+retries are disabled. Share the client's method cooldowns and defer a 429 until its Retry-After
+deadline. Restarting may encounter another 429, never retry an ambiguous post.
 
 A matching response confirms delivery. A lost, malformed or ambiguous response becomes
 `delivery_unknown`. Startup treats interrupted sends the same way. Read the intended thread
@@ -33,8 +46,9 @@ moves on when Slack refuses one, such as a second 👀 on a message.
 
 Queueing a reply calls the request model's `beginAnswer` in the same transaction. Proven
 delivery calls `confirmAnswer`. Only a definite refusal can return it to seen and replace
-the payload on that same failed row. When link or resume approves a wider audience, every
-item the link holds queued fails that way, while one sending or unknown stays.
+the payload on that same failed row. A post in the request's thread never begins, confirms or
+returns its answer. When link or resume approves a wider audience, every item the link holds
+queued fails that way, while one sending or unknown stays.
 Late results settle only their matching attempt.
 Retraction deletes one confirmed post and keeps the original reservation. Unlink deletes
 the link's local state rather than leaving an orphan-cleanup subsystem.

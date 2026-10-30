@@ -44,3 +44,30 @@ test("one pass forgets a month-old question with its request and reply, and who 
     { number: 2, payload: null },
   ]);
 });
+
+test.each(["queued", "sending", "delivery_unknown"])(
+  "a finished request stays while a post in its thread is %s",
+  async (state) => {
+    const database = await openTestDatabase();
+    await createStoredLink(database);
+    await createStoredRequest(database, { state: "answered" });
+    await createStoredRequest(database, {
+      state: "answered",
+      rootTs: "1700000150.000100",
+      sourceTs: "1700000150.000100",
+    });
+    await createStoredOutboxItem(database, 1, { kind: "post", state });
+    // A post at the top of the channel is in no request's thread, so r2 still goes.
+    const top = { kind: "post", request_id: null, thread_ts: null, state };
+    await createStoredOutboxItem(database, 2, top);
+
+    const now = 1_700_000_200_000 + RETENTION_MS;
+    await database.write((transaction) => applyRetention(transaction, now));
+
+    expect(await database.read((sql) => sql`SELECT id FROM requests`)).toEqual([{ id: 1 }]);
+    expect(await database.read((sql) => sql`SELECT number FROM outbox ORDER BY number`)).toEqual([
+      { number: 1 },
+      { number: 2 },
+    ]);
+  },
+);

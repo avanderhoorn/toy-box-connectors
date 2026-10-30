@@ -8,7 +8,7 @@
 
 import { initializeActivitySchema } from "@activity/server/schema";
 import { initializeLinkSchema } from "@links/server/schema";
-import { initializeOutboxSchema } from "@outbox/server/schema";
+import { allowOutboxPosts, initializeOutboxSchema } from "@outbox/server/schema";
 import { initializeRequestSchema } from "@requests/server/schema";
 import { initializeSlackApiSchema } from "@slackapi/server/schema";
 import { initializeWakeSchema } from "@wakes/server/schema";
@@ -72,7 +72,12 @@ async function configure(sql: Bun.SQL): Promise<void> {
 // changing a table raises the version, records its tables in `schemas/`, and migrates a `bridge.db`
 // that any recorded version made. The bridge refuses a `bridge.db` any other version made rather
 // than fail on it later.
-const schemaVersion = 2;
+const schemaVersion = 3;
+
+/** Each step takes a `bridge.db` from the version it's keyed by to the next one. */
+const migrations: Record<number, (transaction: Bun.SQL) => Promise<void>> = {
+  2: allowOutboxPosts,
+};
 
 async function initializeSchema(sql: Bun.SQL, path: string): Promise<void> {
   await sql.begin("IMMEDIATE", async (transaction) => {
@@ -80,17 +85,23 @@ async function initializeSchema(sql: Bun.SQL, path: string): Promise<void> {
       PRAGMA user_version
     `;
     if (version === schemaVersion) return;
-    if (version !== 0) {
+    if (version === 0) await createSchema(transaction);
+    else if (version in migrations) {
+      for (let step = version; step < schemaVersion; step++) await migrations[step]!(transaction);
+    } else {
       throw new BridgeRefusedError(
         `${path} was made by another version of toy-box-slack. The bridge has to start over, which forgets every link, so stop the bridge, remove bridge.db and its -wal/-shm files, and start it again. Then link each channel and allow its people again.`,
       );
     }
-    await initializeSlackApiSchema(transaction);
-    await initializeLinkSchema(transaction);
-    await initializeActivitySchema(transaction);
-    await initializeRequestSchema(transaction);
-    await initializeWakeSchema(transaction);
-    await initializeOutboxSchema(transaction);
     await transaction.unsafe(`PRAGMA user_version = ${schemaVersion}`);
   });
+}
+
+async function createSchema(transaction: Bun.SQL): Promise<void> {
+  await initializeSlackApiSchema(transaction);
+  await initializeLinkSchema(transaction);
+  await initializeActivitySchema(transaction);
+  await initializeRequestSchema(transaction);
+  await initializeWakeSchema(transaction);
+  await initializeOutboxSchema(transaction);
 }

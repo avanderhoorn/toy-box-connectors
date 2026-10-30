@@ -223,8 +223,8 @@ async function linkChannel(
 async function dropHeld(transaction: Bun.SQL, linkId: string, at: number) {
   const dropped = await failQueuedItems(transaction, linkId, "audience_widened", at);
   const waiting = new Set((await readActiveRequests(transaction, linkId)).map(({ id }) => id));
-  const returned = dropped.flatMap(({ requestId }) =>
-    requestId !== null && waiting.has(requestId) ? [requestId] : [],
+  const returned = dropped.flatMap(({ kind, requestId }) =>
+    kind === "reply" && requestId !== null && waiting.has(requestId) ? [requestId] : [],
   );
   return { dropped, returned };
 }

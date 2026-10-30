@@ -3,6 +3,7 @@
 
 import type { AdmissionProblem } from "@links/model/admission";
 import type { ApprovalProblem, Audience } from "@links/model/audience";
+import type { SlackTs } from "@slackapi/model/ts";
 import type { LinkStatus } from "./status";
 
 const approvalProblems: Record<ApprovalProblem, string> = {
@@ -78,8 +79,11 @@ export function presentLink(
 /** A post the lead queued, as an answer to the owner names it. */
 export type QueuedPost = {
   number: number;
-  kind: "reply" | "publication";
+  kind: "reply" | "publication" | "post";
+  /** The request it answers, or whose thread it goes in. */
   requestId: number | null;
+  /** The thread it goes in, or null at the top of the channel. */
+  threadTs: SlackTs | null;
   series: string | null;
 };
 
@@ -104,8 +108,9 @@ export function presentDropped(
   return [`${wrote} these, so they won't post:\n\n${list}`, back].filter(Boolean).join("\n\n");
 }
 
-function described({ number, kind, requestId, series }: QueuedPost): string {
-  return kind === "reply"
-    ? `o${number}, its answer to r${requestId}`
-    : `o${number}, its ${series} publication`;
+function described({ number, kind, requestId, threadTs, series }: QueuedPost): string {
+  if (kind === "reply") return `o${number}, its answer to r${requestId}`;
+  if (kind === "publication") return `o${number}, its ${series} publication`;
+  if (requestId !== null) return `o${number}, its post in r${requestId}'s thread`;
+  return `o${number}, its post ${threadTs === null ? "at the top of the channel" : "in a thread it started"}`;
 }

@@ -17,6 +17,7 @@ import {
   type UnconfirmedPost,
 } from "@commands/model/status";
 import { readRequest } from "@requests/server/database";
+import type { SlackTs } from "@slackapi/model/ts";
 import type { BotClient } from "@slackapi/server/botClient";
 import { fetchChannelFacts } from "@slackapi/server/channels";
 import { readSlackPersonName } from "@slackapi/server/users";
@@ -67,6 +68,12 @@ type StoredLink = Pick<
   LinkStatus,
   "toyBoxChannelId" | "slackChannelId" | "status" | "statusReason" | "requestMode" | "observe"
 > & { id: string };
+
+/** An unconfirmed post, with where it went so status can link to it. */
+type UnconfirmedRow = Omit<UnconfirmedPost, "permalink"> & {
+  channelId: string;
+  threadTs: SlackTs | null;
+};
 
 export function statusCommand({
   nameApps,
@@ -164,13 +171,18 @@ async function readLinkStatuses(
       allowlist.push(personName(await readSlackPersonName(sql, userId), userId));
     }
     const unconfirmed: UnconfirmedPost[] = [];
-    for (const post of await sql<Omit<UnconfirmedPost, "permalink">[]>`
-      SELECT number AS post, attempt_started_at AS since, request_id AS request, series,
-        scheduled_at AS scheduledAt
-      FROM outbox WHERE link_id = ${id} AND state = 'delivery_unknown' ORDER BY number
+    for (const { channelId, threadTs, ...post } of await sql<UnconfirmedRow[]>`
+      SELECT post.number AS post, post.kind, post.attempt_started_at AS since,
+        post.request_id AS request, parent.number AS parent, post.series,
+        post.scheduled_at AS scheduledAt, post.channel_id AS channelId, post.thread_ts AS threadTs
+      FROM outbox post LEFT JOIN outbox parent ON post.kind = 'post' AND post.request_id IS NULL
+        AND parent.link_id = post.link_id AND parent.thread_ts IS NULL
+        AND parent.slack_ts = post.thread_ts
+      WHERE post.link_id = ${id} AND post.state = 'delivery_unknown' ORDER BY post.number
     `) {
       const request = post.request === null ? null : await readRequest(sql, post.request);
-      unconfirmed.push({ ...post, permalink: request && permalink(workspaceUrl(), request) });
+      const thread = request ?? (threadTs && { channelId, sourceTs: threadTs, rootTs: threadTs });
+      unconfirmed.push({ ...post, permalink: thread ? permalink(workspaceUrl(), thread) : null });
     }
     shown.push({
       ...link,

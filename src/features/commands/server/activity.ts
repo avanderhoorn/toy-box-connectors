@@ -3,9 +3,11 @@
 // read what it never saw, and a digest that never finished is served again.
 
 import type { BridgeDatabase } from "@bridge/server/database";
+import { threadReference } from "@commands/model";
 import { presentActivity, type Activity, type ActivityThread } from "@commands/model/activity";
 import { CommandRefusedError } from "@commands/model/protocol";
 import { permalink } from "@commands/model/slackText";
+import { findPostThreads } from "@outbox/server/threads";
 import { compareTs } from "@slackapi/model/ts";
 import { messageFromRow, readPersonNames, type MessageRow } from "./inbox";
 import { readCallerLink } from "./link";
@@ -49,9 +51,14 @@ export function activityCommand({
       const names = await readPersonNames(transaction, page);
       const url = workspaceUrl();
       const threads = new Map<string, ActivityThread>();
+      const postable = await findPostThreads(transaction, link, [
+        ...new Set(page.map(({ rootTs }) => rootTs)),
+      ]);
       page.sort((a, b) => compareTs(a.rootTs, b.rootTs) || compareTs(a.ts, b.ts));
       for (const { rootTs, ...message } of page) {
+        const postThread = postable.get(rootTs);
         const thread = threads.get(rootTs) ?? {
+          reference: postThread ? threadReference(postThread) : null,
           startedAt: Number.parseInt(rootTs, 10) * 1000,
           permalink: permalink(url, { channelId: link.slackChannelId, sourceTs: rootTs, rootTs }),
           messages: [],

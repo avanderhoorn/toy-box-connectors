@@ -1,5 +1,5 @@
 import { RETENTION_MS } from "@activity/model/ledger";
-import { readChannelLink } from "@links/server/database";
+import { readChannelLink, type ChannelLink } from "@links/server/database";
 import {
   beginAnswer,
   confirmAnswer,
@@ -12,6 +12,7 @@ import type { SlackTs } from "@slackapi/model/ts";
 import { z } from "zod";
 import { nextReconciliation, reconciliationDelays, type OutboxSettlement } from "../model/delivery";
 import { renderMarkdown, type RenderedMessage } from "../model/rendering";
+import { findThreadPlace, type PostThread } from "./threads";
 
 export class OutboxRefusedError extends Error {}
 export type OutboxState =
@@ -26,7 +27,7 @@ export type OutboxItem = {
   number: number;
   linkId: string;
   requestId: number | null;
-  kind: "reply" | "publication";
+  kind: "reply" | "publication" | "post";
   channelId: string;
   threadTs: SlackTs | null;
   series: string | null;
@@ -72,9 +73,9 @@ export async function queueReply(
   input: { requestId: number; text: string },
   now: number,
 ): Promise<OutboxItem> {
-  const [existing] = await tx<
-    OutboxRow[]
-  >`SELECT * FROM outbox WHERE request_id = ${input.requestId}`;
+  const [existing] = await tx<OutboxRow[]>`
+    SELECT * FROM outbox WHERE request_id = ${input.requestId} AND kind = 'reply'
+  `;
   if (existing && existing.state !== "failed")
     throw new OutboxRefusedError(
       `Request r${input.requestId} is already reserved by o${existing.number} (${existing.state}).`,
@@ -152,6 +153,51 @@ export async function queuePublication(
         payload,
         now,
       );
+}
+
+/** How long after the same text went out in the same place a post reads as a repeat of it. */
+export const repeatPostMs = 10 * 60_000;
+
+/**
+ * Queues a post the owner or a routine asked the lead for, at the top of the link's channel or in
+ * the thread it names. Unlike a reply or publication it reserves nothing, so it's refused as a
+ * repeat, naming what it repeats, while anything that says the same in the same place may still go
+ * out or Slack never confirmed it, and for a while after it went out.
+ */
+export async function queuePost(
+  tx: Bun.SQL,
+  input: { link: ChannelLink; thread?: PostThread; text: string },
+  now: number,
+): Promise<OutboxItem> {
+  const { link, thread } = input;
+  if (link.status !== "active") throw new OutboxRefusedError("This link isn't active.");
+  const payload = rendered(input.text);
+  const place = thread
+    ? await findThreadPlace(tx, link, thread)
+    : { threadTs: null, requestId: null };
+  if ("refused" in place) throw new OutboxRefusedError(place.refused);
+  const [repeat] = await tx<OutboxRow[]>`
+    SELECT * FROM outbox WHERE link_id = ${link.id} AND thread_ts IS ${place.threadTs}
+      AND payload_hash = ${hash(payload)} AND (state IN ('queued', 'sending', 'delivery_unknown')
+        OR state = 'sent' AND updated_at > ${now - repeatPostMs})
+    ORDER BY number DESC LIMIT 1
+  `;
+  if (repeat)
+    throw new OutboxRefusedError(`o${repeat.number} already says this there (${repeat.state}).`);
+  return insertItem(
+    tx,
+    {
+      linkId: link.id,
+      requestId: place.requestId,
+      kind: "post",
+      channelId: link.slackChannelId,
+      threadTs: place.threadTs,
+      series: null,
+      scheduledAt: null,
+    },
+    payload,
+    now,
+  );
 }
 
 export async function readOutboxItem(
@@ -313,8 +359,9 @@ function rendered(text: string): RenderedMessage {
   return result.message;
 }
 
+/** A reply's outcome answers its request or returns it to the lead. A post in its thread does neither. */
 async function settleRequest(tx: Bun.SQL, item: OutboxItem, now: number): Promise<void> {
-  if (item.requestId === null) return;
+  if (item.kind !== "reply" || item.requestId === null) return;
   const request = await readRequest(tx, item.requestId);
   if (request?.state !== "answering") return;
   if (item.state === "sent") await saveRequest(tx, confirmAnswer(request));

@@ -9,6 +9,7 @@ import {
   queuePublication,
   readReadyOutbox,
   recoverOutboxAttempts,
+  repeatPostMs,
   settleOutboxAttempt,
   startOutboxAttempt,
   type OutboxItem,
@@ -141,6 +142,38 @@ test("failing what a link holds queued keeps what may have posted, and gives req
   expect(await world.read(unknown.id)).toMatchObject({ state: "delivery_unknown" });
   expect(await world.read(sending.id)).toMatchObject({ state: "sending" });
   expect(await world.read(elsewhere.id)).toMatchObject({ state: "queued" });
+});
+
+test("a post repeating anything in its place is refused while that may still go out, and for a while after it does", async () => {
+  const world = await createOutboxWorld();
+  const update = "Shipped **1.2**.";
+  const repeat = (number: number, state: string) =>
+    `o${number} already says this there (${state}).`;
+  const settle = (id: string, state: string) =>
+    world.database.write(
+      (tx) => tx`UPDATE outbox SET state = ${state}, updated_at = ${world.now()} WHERE id = ${id}`,
+    );
+
+  // A reply that says it in r1's thread counts, while a post at the top of the channel doesn't.
+  const reply = await world.queue(update);
+  await expect(world.queuePost({ request: 1 }, update)).rejects.toThrow(
+    repeat(reply.number, "queued"),
+  );
+  const first = await world.queuePost(undefined, update);
+  for (const state of ["queued", "sending", "delivery_unknown"]) {
+    await settle(first.id, state);
+    world.advance(30 * 86_400_000);
+    await expect(world.queuePost(undefined, update)).rejects.toThrow(repeat(first.number, state));
+  }
+  await settle(first.id, "sent");
+  world.advance(repeatPostMs - 1);
+  await expect(world.queuePost(undefined, update)).rejects.toThrow(repeat(first.number, "sent"));
+  world.advance(1);
+  const second = await world.queuePost(undefined, update);
+  await settle(second.id, "failed");
+  const third = await world.queuePost(undefined, update);
+  await settle(third.id, "retracted");
+  expect(await world.queuePost(undefined, update)).toMatchObject({ state: "queued" });
 });
 
 test("a post forgets what it said a month after it last changed, unless it may still go out", async () => {

@@ -61,7 +61,7 @@ test("shows only the caller's link, or every link to a terminal that names no ch
   expect(await shown(null)).toEqual(["toybox-link", "toybox-other"]);
 });
 
-test("lists the posts Slack never confirmed, linking each answer to its request", async () => {
+test("lists the posts Slack never confirmed, linking each to its request or thread", async () => {
   const database = await openTestDatabase();
   await createStoredLink(database);
   await createStoredRequest(database, { state: "answering" });
@@ -72,17 +72,30 @@ test("lists the posts Slack never confirmed, linking each answer to its request"
   const shown = async () => (await status([app], { channelId: "toybox-link", at })).text;
   const notes = { kind: "publication", request_id: null, thread_ts: null, series: "notes" };
   const unknown = { state: "delivery_unknown", attempt_started_at: at - 2 * HOUR };
-  await createStoredOutboxItem(database, 1, { ...notes, scheduled_at: 0, state: "sent" });
+  const notesTs = "1700000150.000100";
+  await createStoredOutboxItem(database, 1, {
+    ...notes,
+    scheduled_at: 0,
+    state: "sent",
+    slack_ts: notesTs,
+  });
   await createStoredOutboxItem(database, 2, { ...notes, scheduled_at: at });
   expect(await shown()).not.toContain("- Posts");
 
   await createStoredOutboxItem(database, 3, unknown);
   await createStoredOutboxItem(database, 4, { ...notes, ...unknown, scheduled_at: friday });
+  const post = { kind: "post", ...unknown };
+  await createStoredOutboxItem(database, 5, { ...post, request_id: null, thread_ts: null });
+  await createStoredOutboxItem(database, 6, post);
+  await createStoredOutboxItem(database, 7, { ...post, request_id: null, thread_ts: notesTs });
   expect(await shown()).toContain(
     [
       "- Posts: Slack never confirmed these landed, and the bridge won't send them again. Have the owner check each one. Anyone whose answer is missing can ask again in its thread.",
       "  - o3, the answer to r1, tried 2 hours ago: https://acme.slack.com/archives/C-link/p1700000100000100",
       `  - o4, the notes post for the run scheduled ${clockTime(friday)}, tried 2 hours ago.`,
+      "  - o5, a post at the top of the channel, tried 2 hours ago.",
+      "  - o6, a post in r1's thread, tried 2 hours ago: https://acme.slack.com/archives/C-link/p1700000100000100",
+      "  - o7, a post in o1's thread, tried 2 hours ago: https://acme.slack.com/archives/C-link/p1700000150000100",
       "- Wakes:",
     ].join("\n"),
   );

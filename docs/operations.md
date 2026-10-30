@@ -65,10 +65,10 @@ new ID. Do not edit the database to bypass an audience or policy refusal.
 
 When more people can read the channel than the owner approved before, as
 after it was made public, resume or link approves that audience and drops
-what the link held, paused or suspended. Replies and publications the lead
-wrote for fewer readers fail instead of posting, the answer names each, and
-the lead gets their requests back to answer again. A post already sending,
-or whose delivery is uncertain, may have posted, so it stays.
+what the link held, paused or suspended. Replies, posts and publications the
+lead wrote for fewer readers fail instead of posting, the answer names each,
+and the lead gets each reply's request back to answer again. One already
+sending, or whose delivery is uncertain, may have posted, so it stays.
 
 Channel audience is checked at link, at resume and before every post, not
 at startup or before catch-up. If a share or privacy-change event was missed
@@ -120,13 +120,14 @@ Check Slack before resuming publications after any state reset.
 Cleanup runs at startup and hourly. It removes messages whose latest posted
 or edited version is over 30 days old, including markers and tombstones, and
 every change record but each remaining message's latest. A finished request
-goes once none of its messages remain, with its reply's outbox item, so that
-reply can't be retracted after that, and a follow-up in its thread needs a
-new mention. A post forgets its text 30 days after it last changed, unless it
+goes once none of its messages remain, with the outbox items of its reply and
+the posts in its thread, so those can't be retracted after that, and a
+follow-up in its thread needs a new mention. A post forgets its text 30 days after it last changed, unless it
 may still go out, such as a reply queued while its link is paused. Its
 number, hash and state stay, so an unknown post can still be confirmed and a
 publication slot stays reserved. A request whose reply's delivery is unknown
-never finishes, so it stays too. A person's name and other IDs go within an
+never finishes, so it stays too, and a finished one stays while a post in its
+thread may still go out or its delivery is unknown. A person's name and other IDs go within an
 hour of the `deny` or `unlink` that leaves no link allowing them.
 
 Catch-up scans roots at most 30 days old and follows threads with replies
