@@ -122,6 +122,7 @@ test("waits up to its deadline for a name that takes a moment", async () => {
   const { app, toyBox, channelId } = await startNamedLink();
   const status = statusCommand({ nameApps: false, toyBoxOrigin: new URL(toyBox.url) });
   const unhurried: BotClient = {
+    ...app.bot,
     call: async (method, run) => {
       await Bun.sleep(100);
       return app.bot.call(method, run);
@@ -138,6 +139,7 @@ test("stops waiting for a name two seconds after asking, showing the channel by 
   const status = statusCommand({ nameApps: false, toyBoxOrigin: new URL(toyBox.url) });
   const asked = Promise.withResolvers<void>();
   const silent: BotClient = {
+    ...app.bot,
     call: () => {
       asked.resolve();
       return new Promise(() => {});
@@ -164,7 +166,10 @@ test.each<[string, BotClient["call"]]>([
     const status = statusCommand({ nameApps: false, toyBoxOrigin: origin, nameTimeoutMs: 100 });
     const started = performance.now();
 
-    const { text } = await status([{ ...app, bot: { call } }], { channelId, at: 1_000 });
+    const { text } = await status([{ ...app, bot: { ...app.bot, call } }], {
+      channelId,
+      at: 1_000,
+    });
 
     expect(performance.now() - started).toBeLessThan(500);
     expect(text).toContain('\n\n## #C-link and Toy Box channel "Toy Box Slack"\n');
@@ -211,6 +216,7 @@ test("lets the bridge write while it waits for a channel's name", async () => {
   const status = statusCommand({ nameApps: false, toyBoxOrigin: new URL(toyBox.url) });
   const written = Promise.withResolvers<void>();
   const held: BotClient = {
+    ...app.bot,
     call: async (method, run) => {
       await written.promise;
       return app.bot.call(method, run);

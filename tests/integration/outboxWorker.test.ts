@@ -80,6 +80,7 @@ test("stop drains an active send and starts no second link's job or pending poke
   const input = { linkId: "other", series: "notes", scheduledAt: world.now(), text: "Notes" };
   const second = await world.database.write((tx) => queuePublication(tx, input, world.now()));
   const bot: BotClient = {
+    ...world.bot,
     async call(method, run) {
       if (method === "chat.postMessage") {
         entered.resolve();
