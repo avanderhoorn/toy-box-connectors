@@ -5,7 +5,12 @@
 import { deleteLinkActivity } from "@activity/server/ledger";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { CommandRefusedError, type CommandAnswer } from "@commands/model/protocol";
-import { admissionRefusal, approvalRefusal, presentLink } from "@commands/model/setup";
+import {
+  admissionRefusal,
+  approvalRefusal,
+  presentAllowed,
+  presentLink,
+} from "@commands/model/setup";
 import { channelName, oneLine, personName } from "@commands/model/slackText";
 import { presentLinkState } from "@commands/model/status";
 import { count } from "@commands/model/wording";
@@ -86,11 +91,12 @@ export function unlinkCommand({ database }: SetupCommandOptions): CommandHandler
   };
 }
 
-/** Admits only full members, as Slack describes them now. */
+/** Admits only full members, as Slack describes them now, and names the channel as Slack does. */
 export function allowCommand(options: SetupCommandOptions): CommandHandler<"allow"> {
   const { database } = options;
   return async ({ users }, { channelId, at }) => {
     const { slack, home } = await readSlackHome(options);
+    const { slackChannelId } = await database.read((sql) => readCallerLink(sql, channelId));
     // An Enterprise member can be named by either of their IDs, and is allowed once.
     const people = new Map<string, SlackPerson>();
     for (const userId of users) {
@@ -101,6 +107,11 @@ export function allowCommand(options: SetupCommandOptions): CommandHandler<"allo
       if (problem) throw new CommandRefusedError(admissionRefusal(shown(person, userId), problem));
       if (person) people.set(person.id, person);
     }
+    // The channel's name only labels the answer, which goes by its ID when Slack doesn't say.
+    const facts = await slack.call("conversations.info", (client) =>
+      fetchChannelFacts(client, slackChannelId),
+    );
+    const name = facts.kind === "ok" ? facts.result?.name : null;
     return database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
       const added = [...people.values()].filter((person) => !link.allowlist.has(person.id));
@@ -108,10 +119,12 @@ export function allowCommand(options: SetupCommandOptions): CommandHandler<"allo
         await writeSlackPerson(transaction, person);
         await allowPerson(transaction, link.id, person.id, at);
       }
-      const names = [...people.values()].map((person) => `\n- ${shown(person, person.id)}`);
+      // Unless the link moved to another channel while Slack was asked.
+      const named = link.slackChannelId === slackChannelId ? name : null;
+      const allowed = [...people.values()].map((person) => shown(person, person.id));
       return {
         result: { added: added.map((person) => person.id) },
-        text: `They can all ask the lead to act from ${link.channel} now:\n${names.join("")}`,
+        text: presentAllowed(allowed, channelName(named, link.slackChannelId)),
       };
     });
   };
@@ -134,7 +147,7 @@ export function denyCommand({ database }: SetupCommandOptions): CommandHandler<"
       }
       return { link, cancelled: asked.length };
     });
-    const text = `None of them can ask the lead to act from ${link.channel} now.`;
+    const text = `They can't ask the lead to act from ${link.channel} now.`;
     return {
       result: { cancelled },
       text: cancelled ? `${text} Cancelled ${count(cancelled, "request")} of theirs.` : text,

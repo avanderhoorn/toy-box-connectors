@@ -53,7 +53,7 @@ const WIDENING = [
   {
     name: "allow",
     input: { users: [MALLORY] },
-    shows: "- Mallory (U0MALLORY)",
+    shows: "Mallory (U0MALLORY) can ask the lead to act from #release-eng now.",
     widened: { allowlist: [ALICE, "Mallory"] },
   },
   {
@@ -108,7 +108,13 @@ test.each([
 
     const denied = await as(caller, "deny", { users: [ALICE] });
     expect(denied).toMatchObject(
-      narrows ? { exitCode: 0, json: { cancelled: 1 } } : { exitCode: 1 },
+      narrows
+        ? {
+            exitCode: 0,
+            json: { cancelled: 1 },
+            text: "They can't ask the lead to act from #C0LINK now. Cancelled 1 request of theirs.",
+          }
+        : { exitCode: 1 },
     );
     expect((await as(caller, "pause")).exitCode).toBe(narrows ? 0 : 1);
     expect(await link()).toMatchObject(
@@ -172,7 +178,7 @@ test("allow refuses a guest, and deny takes either of someone's IDs", async () =
   slack.setUser(MALLORY_USER);
   expect(await allow()).toMatchObject({
     exitCode: 0,
-    text: "They can all ask the lead to act from #C0LINK now:\n\n- Mallory (U0MALLORY)",
+    text: "Mallory (U0MALLORY) can ask the lead to act from #release-eng now.",
   });
   expect(await link()).toMatchObject({ allowlist: [ALICE, "Mallory"] });
 

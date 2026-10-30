@@ -140,6 +140,49 @@ async function linking() {
   return { database, channelId, options };
 }
 
+/** Allow for the stored link, reaching a Slack where Ada and Bo are full members. */
+async function allowing() {
+  const { database, slack, bot } = await createOutboxWorld();
+  for (const [id, real_name] of [
+    ["U-ada", "Ada"],
+    ["U-bo", "Bo"],
+  ] as const) {
+    slack.setUser({
+      id,
+      team_id: "T-home",
+      real_name,
+      is_bot: false,
+      is_restricted: false,
+      is_ultra_restricted: false,
+    });
+  }
+  const allow = allowCommand({ ...offline(database), bot });
+  return { slack, allow: (...users: string[]) => allow({ users }, OWNER) };
+}
+
+test("allow names whom it allowed, and the channel as Slack names it", async () => {
+  const { allow } = await allowing();
+
+  expect(await allow("U-ada")).toEqual({
+    result: { added: ["U-ada"] },
+    text: "Ada (U-ada) can ask the lead to act from #fake-channel now.",
+  });
+  expect(await allow("U-ada", "U-bo")).toEqual({
+    result: { added: ["U-bo"] },
+    text: "They can all ask the lead to act from #fake-channel now:\n\n- Ada (U-ada)\n- Bo (U-bo)",
+  });
+});
+
+test("allow goes ahead when Slack doesn't say the channel's name, naming the channel by its ID", async () => {
+  const { slack, allow } = await allowing();
+  slack.failNext("conversations.info", { error: "internal_error" });
+
+  expect(await allow("U-ada")).toEqual({
+    result: { added: ["U-ada"] },
+    text: "Ada (U-ada) can ask the lead to act from #C-link now.",
+  });
+});
+
 test("a link through a named app says whose bot answers", async () => {
   const { database, channelId, options } = await linking();
   await database.write(

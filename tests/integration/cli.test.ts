@@ -122,7 +122,7 @@ test("allow at a terminal names who it allowed, without asking anything", async 
 
   expect(await runToyBoxSlack(["allow", MALLORY, "--channel", channelId], { HOME: home })).toEqual({
     exitCode: 0,
-    stdout: `They can all ask the lead to act from #C-link now:\n\n- Mallory (${MALLORY})\n`,
+    stdout: `Mallory (${MALLORY}) can ask the lead to act from #release-eng now.\n`,
     stderr: "",
   });
 }, 15_000);

@@ -36,6 +36,16 @@ export function admissionRefusal(who: string, problem: AdmissionProblem): string
   return `Nobody was allowed, since only full members of the bot's workspace or its Enterprise org can be, and ${who} isn't: ${admissionProblems[problem]}.`;
 }
 
+/** Who can ask the lead to act from `channel` now that `allow` named them. */
+export function presentAllowed(people: readonly string[], channel: string): string {
+  const [person, ...others] = people;
+  if (person !== undefined && others.length === 0) {
+    return `${person} can ask the lead to act from ${channel} now.`;
+  }
+  const list = people.map((shown) => `- ${shown}`).join("\n");
+  return `They can all ask the lead to act from ${channel} now:\n\n${list}`;
+}
+
 /** What the lead of `toyBox` does in `channel` once it's linked there, through `app` if it's named. */
 export function presentLink(
   toyBox: string,
