@@ -104,6 +104,7 @@ export async function openApp(
       });
     }
     scheduler = startWakeScheduler(database, (channelId) => wakeLead(origin, channelId, log), {
+      acknowledge: (requests) => outbox?.acknowledge(requests),
       onError,
       timings,
       log,

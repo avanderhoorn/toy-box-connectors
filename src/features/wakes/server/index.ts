@@ -2,13 +2,15 @@
 //
 // A pass expires the requests that waited their lifetime, so nobody is reminded of them, prunes the
 // run log, then reads every link and wakes each lead its decision says to, one at a time,
-// recording each run's outcome. A pass follows any change to what a decision reads, every run,
+// recording each run's outcome. Once Toy Box runs a wake, it hands the requests no lead has read
+// yet to be acknowledged with 👀. A pass follows any change to what a decision reads, every run,
 // the end of the earliest wait, and at least every minute, so a Mac that slept is noticed.
 
 import type { BridgeDatabase } from "@bridge/server/database";
+import type { OutboxWorker } from "@outbox/server";
 import { expireRequests } from "@requests/server/lifecycle";
 import { REQUESTS_COMMAND, type RoutineRunOutcome } from "@toybox/model";
-import { decideWake, defaultWakeTimings, type WakeTimings } from "@wakes/model";
+import { decideWake, defaultWakeTimings, unreadRequests, type WakeTimings } from "@wakes/model";
 import { log as bridgeLog, type Log } from "@/shared/log";
 import { pruneWakes, readLinkWakes, recordWake } from "./database";
 
@@ -20,6 +22,8 @@ export interface WakeScheduler {
 }
 
 export type WakeSchedulerOptions = {
+  /** Called with the requests no lead had read once Toy Box runs a wake for them. */
+  acknowledge?: OutboxWorker["acknowledge"];
   /** Called when the scheduler stops on an error that deciding again can't fix. */
   onError?: (error: unknown) => void;
   now?: () => number;
@@ -45,6 +49,7 @@ export function startWakeScheduler(
   database: BridgeDatabase,
   wakeLead: WakeLead,
   {
+    acknowledge = () => {},
     onError = () => {},
     now = Date.now,
     timings = defaultWakeTimings,
@@ -93,7 +98,9 @@ export function startWakeScheduler(
       const startedAt = now();
       const outcome = await wakeLead(link.channelId);
       await database.write((transaction) => recordWake(transaction, link.id, startedAt, outcome));
-      if (outcome !== "ran") {
+      if (outcome === "ran") {
+        acknowledge(unreadRequests(link));
+      } else {
         log(`Couldn't wake the lead of Toy Box channel ${link.channelId}: ${unwoken[outcome]}.`);
       }
       again = true;

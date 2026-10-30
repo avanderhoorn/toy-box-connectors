@@ -3,6 +3,7 @@ import {
   decideWake,
   retryDelay,
   STALL_AFTER,
+  unreadRequests,
   WAKES_PER_HOUR,
   type WakeDecision,
   type WakeRequest,
@@ -25,10 +26,12 @@ function decide(at: number, requests: WakeRequest[], runs: WakeRun[] = []): Wake
 }
 
 describe("deciding whether to wake a link's lead", () => {
-  test("waits for a burst to settle, at most 30 seconds after its first change", () => {
-    expect(decide(NOW, [open(NOW - 4 * SECOND)])).toEqual(waitUntil(NOW + 6 * SECOND));
-    expect(decide(NOW, [open(NOW - 10 * SECOND)])).toEqual({ kind: "wake" });
-    const burst = [0, 8, 16, 24].map((seconds) => open(NOW - 30 * SECOND + seconds * SECOND));
+  test("waits 3 seconds for a burst to settle, and at most 30 after its first change", () => {
+    expect(decide(NOW, [open(NOW - SECOND)])).toEqual(waitUntil(NOW + 2 * SECOND));
+    expect(decide(NOW, [open(NOW - 3 * SECOND)])).toEqual({ kind: "wake" });
+    // A change every 2 seconds never settles, so the lead is woken 30 seconds after the first.
+    const burst = Array.from({ length: 16 }, (_, index) => open(NOW - (30 - 2 * index) * SECOND));
+    expect(decide(NOW - SECOND, burst.slice(0, -1))).toEqual(waitUntil(NOW));
     expect(decide(NOW, burst)).toEqual({ kind: "wake" });
   });
 
@@ -36,11 +39,11 @@ describe("deciding whether to wake a link's lead", () => {
     const woken = [ran(NOW - 20 * MINUTE)];
     for (const attention of ["updated", "reply_failed"] as const) {
       const request = { ...read(NOW - 20 * MINUTE), attention, changedAt: NOW };
-      expect(decide(NOW, [request], woken)).toEqual(waitUntil(NOW + 10 * SECOND));
+      expect(decide(NOW, [request], woken)).toEqual(waitUntil(NOW + 3 * SECOND));
     }
     // An old unread request doesn't hurry the burst that arrived since.
     const requests = [open(NOW - 5 * MINUTE), open(NOW - 2 * SECOND)];
-    expect(decide(NOW, requests, [ran(NOW - 4 * MINUTE)])).toEqual(waitUntil(NOW + 8 * SECOND));
+    expect(decide(NOW, requests, [ran(NOW - 4 * MINUTE)])).toEqual(waitUntil(NOW + SECOND));
   });
 
   test("wakes again 3, 6 and 12 minutes after wakes that left requests unread, then stalls", () => {
@@ -90,5 +93,16 @@ describe("deciding whether to wake a link's lead", () => {
     expect(decideWake(NOW, suspended)).toEqual({ kind: "wake" });
     // The wake covers the suspension, and the requests wait for the link.
     expect(decideWake(NOW, { ...suspended, runs: [ran(NOW - SECOND)] })).toEqual({ kind: "idle" });
+  });
+});
+
+describe("choosing which requests a wake marks with 👀", () => {
+  test("marks only the requests no lead has read, and none while the link waits", () => {
+    const asked = open(NOW - MINUTE);
+    // A request the lead read already has 👀, even once it changes.
+    const changed = { ...read(NOW - HOUR), attention: "updated", changedAt: NOW } as const;
+    const requests = [asked, read(NOW - HOUR), changed];
+    expect(unreadRequests({ active: true, requests })).toEqual([asked]);
+    expect(unreadRequests({ active: false, requests })).toEqual([]);
   });
 });

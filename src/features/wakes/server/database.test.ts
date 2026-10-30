@@ -10,9 +10,10 @@ test("a link's wake state is its open and seen requests and its runs, newest fir
   const database = await openTestDatabase();
   await createStoredLink(database);
   await createStoredLink(database, "paused", { status: "paused" });
-  await createStoredRequest(database, { rootTs: "1.1", changedAt: 5 });
+  await createStoredRequest(database, { rootTs: "1.1", sourceTs: "1.1", changedAt: 5 });
   await createStoredRequest(database, {
     rootTs: "1.2",
+    sourceTs: "1.2",
     state: "seen",
     attention: "updated",
     changedAt: 7,
@@ -33,8 +34,22 @@ test("a link's wake state is its open and seen requests and its runs, newest fir
       active: true,
       suspendedAt: null,
       requests: [
-        { state: "open", attention: null, changedAt: 5, touchedAt: null },
-        { state: "seen", attention: "updated", changedAt: 7, touchedAt: 6 },
+        {
+          channelId: "C-link",
+          sourceTs: "1.1",
+          state: "open",
+          attention: null,
+          changedAt: 5,
+          touchedAt: null,
+        },
+        {
+          channelId: "C-link",
+          sourceTs: "1.2",
+          state: "seen",
+          attention: "updated",
+          changedAt: 7,
+          touchedAt: 6,
+        },
       ],
       runs: [
         { at: 20, outcome: "ran" },

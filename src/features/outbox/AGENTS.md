@@ -26,8 +26,10 @@ An unknown item can settle only on positive delivery proof, never a later appare
 
 The bridge recovers interrupted attempts before starting work. The worker shares its one bot
 client, waits for verified Slack readiness, and serializes coalesced command pokes and a
-one-second fallback timer. Stop drains the current pass before storage closes. Inbox hands it
-the requests just served after commit, and their best-effort eyes batch has no stored state.
+one-second fallback timer. Stop drains the current pass before storage closes. The wake
+scheduler hands it the requests no lead had read once Toy Box runs their wake, and inbox the
+requests it just served after commit. Their best-effort eyes batch has no stored state, and
+moves on when Slack refuses one, such as a second 👀 on a message.
 
 Queueing a reply calls the request model's `beginAnswer` in the same transaction. Proven
 delivery calls `confirmAnswer`. Only a definite refusal can return it to seen and replace

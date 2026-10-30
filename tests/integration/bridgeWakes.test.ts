@@ -1,8 +1,9 @@
 // The bridge as `serve` runs it without a terminal, waking the lead of its linked channel in a fake
-// Toy Box.
+// Toy Box, and showing whoever asked in a fake Slack that it did.
 
 import { expect, test } from "bun:test";
 import { started, withDatabase } from "./bridgeProcess";
+import { ALICE, BOT, connectedBridge, said, timestamps } from "./connectedBridge";
 import { startLinkedBridge, storeNewRequest } from "./linkedBridge";
 import { waitFor } from "./waitFor";
 
@@ -29,6 +30,26 @@ test("a running bridge wakes the lead once for a new request, and stops on SIGTE
     database.read((sql) => sql`SELECT link_id, outcome FROM wakes`),
   );
   expect(wakes).toEqual([{ link_id: "link", outcome: "ran" }]);
+}, 15_000);
+
+test("whoever asked sees 👀 once Toy Box runs the lead's wake, before the lead reads it", async () => {
+  const { slack, toyBox, inbox, post, stop, saying } = await connectedBridge();
+  const [askedTs] = timestamps(1);
+  const reactions = () => slack.calls.filter(({ method }) => method === "reactions.add");
+
+  await post(said(ALICE, askedTs, `<@${BOT}> can you check the deploy?`));
+
+  await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
+  await waitFor(() =>
+    expect(slack.getMessages("C-link")).toMatchObject([
+      { ts: askedTs, reactions: [{ name: "eyes", count: 1, users: [BOT] }] },
+    ]),
+  );
+  expect(await inbox()).toMatchObject({ requests: [{ id: 1, state: "open" }] });
+  // Inbox marks what it shows too, for a lead that reads without a wake, and Slack's refusal of a
+  // second 👀 goes unremarked.
+  await waitFor(() => expect(reactions()).toHaveLength(2));
+  expect(await stop()).toEqual({ code: 0, stderr: saying() });
 }, 15_000);
 
 test("a storage error stops the bridge with exit code 1 instead of retrying", async () => {

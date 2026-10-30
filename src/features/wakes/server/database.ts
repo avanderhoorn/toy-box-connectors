@@ -4,10 +4,18 @@
 // failures as well as landed runs, so a restart keeps a link's backoff and `status` can say why
 // the lead wasn't woken.
 
+import type { StoredRequest } from "@requests/server/database";
 import { STALL_AFTER, type LinkWakeState, type WakeRequest, type WakeRun } from "@wakes/model";
 
+/** A request as the scheduler reads it: what its wake decision reads, and where its 👀 goes. */
+export type LinkWakeRequest = WakeRequest & Pick<StoredRequest, "channelId" | "sourceTs">;
+
 /** A link, the Toy Box channel its lead leads, and what its wake decision reads. */
-export type LinkWakes = LinkWakeState & { id: string; channelId: string };
+export type LinkWakes = Omit<LinkWakeState, "requests"> & {
+  id: string;
+  channelId: string;
+  requests: readonly LinkWakeRequest[];
+};
 
 const HOUR = 60 * 60_000;
 
@@ -20,8 +28,9 @@ export async function readLinkWakes(sql: Bun.SQL): Promise<LinkWakes[]> {
       CASE WHEN status = 'suspended' THEN updated_at END AS suspendedAt
     FROM links ORDER BY id
   `;
-  const requests = await sql<(WakeRequest & { linkId: string })[]>`
-    SELECT link_id AS linkId, state, attention, changed_at AS changedAt, touched_at AS touchedAt
+  const requests = await sql<(LinkWakeRequest & { linkId: string })[]>`
+    SELECT link_id AS linkId, channel_id AS channelId, source_ts AS sourceTs, state, attention,
+      changed_at AS changedAt, touched_at AS touchedAt
     FROM requests WHERE state IN ('open', 'seen')
   `;
   const runs = await sql<(WakeRun & { linkId: string })[]>`

@@ -7,7 +7,8 @@
 // arrives. A request the lead read and left gets one reminder unless the lead is woken first. A
 // suspended link's requests wait, but its suspension wakes the lead once to tell the owner. A run
 // Toy Box couldn't take retries with backoff, one it refused waits for something new, and no lead
-// is woken more than 12 times an hour.
+// is woken more than 12 times an hour. Once Toy Box runs a wake, each request no lead has read yet
+// gets 👀 in Slack, so whoever asked sees within seconds that a lead has it.
 
 import { z } from "zod";
 import type { Request, RequestAttention } from "@requests/model/lifecycle";
@@ -65,7 +66,7 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
 export const defaultWakeTimings: WakeTimings = {
-  debounce: 10_000,
+  debounce: 3_000,
   debounceLimit: 30_000,
   backoff: [3 * MINUTE, 6 * MINUTE, 12 * MINUTE],
   remind: 30 * MINUTE,
@@ -99,7 +100,7 @@ export function decideWake(
 
   let due: number;
   if (fresh.length) {
-    // One wake covers a burst: 10 seconds after its latest change and at most 30 after its oldest.
+    // One wake covers a burst: 3 seconds after its latest change and at most 30 after its oldest.
     due = Math.min(
       Math.max(...fresh) + timings.debounce,
       Math.min(...fresh) + timings.debounceLimit,
@@ -118,6 +119,17 @@ export function decideWake(
 
   due = Math.max(due, retryAt(link.runs, timings), hourlySlot(woken, now));
   return due > now ? { kind: "wait", until: due } : { kind: "wake" };
+}
+
+/**
+ * The requests a wake asks the lead to read that no lead has read yet, which get 👀 in Slack once
+ * Toy Box runs the wake. A link that isn't active keeps its requests waiting, so it has none.
+ */
+export function unreadRequests<Unread extends WakeRequest>(link: {
+  active: boolean;
+  requests: readonly Unread[];
+}): Unread[] {
+  return link.active ? link.requests.filter(({ state }) => state === "open") : [];
 }
 
 /**

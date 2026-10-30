@@ -26,7 +26,7 @@ bot scopes:
 | [`users:read`](https://docs.slack.dev/reference/scopes/users.read/)                       | Resolve names, check admission and identify the installed bot. No email scope. |
 | [`chat:write`](https://docs.slack.dev/reference/scopes/chat.write/)                       | Post answers and publications, and retract the bot's own posts.                |
 | [`metadata.message:read`](https://docs.slack.dev/reference/scopes/metadata.message.read/) | Confirm a possibly delivered post by its outbox metadata.                      |
-| [`reactions:write`](https://docs.slack.dev/reference/scopes/reactions.write/)             | Add eyes when inbox serves a request.                                          |
+| [`reactions:write`](https://docs.slack.dev/reference/scopes/reactions.write/)             | Add eyes once the bridge wakes the lead for a request, or inbox serves it.     |
 
 [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/) also
 needs an app-level token with `connections:write`. Connections are outbound
