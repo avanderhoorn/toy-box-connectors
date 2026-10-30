@@ -92,11 +92,16 @@ async function readInboxRequest(
   `;
   const { messages, leftOut } = inboxThread(thread, new Set(own.map(({ ts }) => ts)));
   const names = await readPersonNames(sql, messages, request.requesterUserId);
+  // A request inbox shows is waiting on the lead, so a reply it has can only be one that failed.
+  const [reply] = await sql<{ error: string | null }[]>`
+    SELECT error FROM outbox WHERE request_id = ${request.id} AND kind = 'reply'
+  `;
   return {
     id: request.id,
     requester: namedPerson(names, request.requesterUserId),
     state: request.state,
     attention: request.attention,
+    replyError: reply?.error ?? null,
     createdAt: request.createdAt,
     touchedAt: request.touchedAt,
     permalink: permalink(workspaceUrl, request),

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
+import { failQueuedItem, queueReply } from "@outbox/server/database";
 import { dismissRequest, serveRequest } from "@requests/model/lifecycle";
 import { saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
@@ -55,4 +56,31 @@ test("shows changed requests first, up to its limit, and marks only those it sho
     { id: 5, state: "open", attention: null, touchedAt: null },
   ]);
   expect(acknowledged).toEqual([[askedAt(3).sourceTs], [askedAt(2).sourceTs]]);
+});
+
+test("says why each request's reply didn't post", async () => {
+  const database = await openTestDatabase();
+  await createStoredLink(database);
+  const widened = await createStoredRequest(database, { ...askedAt(1), state: "seen" });
+  const refused = await createStoredRequest(database, { ...askedAt(2), state: "seen" });
+  await database.write(async (transaction) => {
+    await transaction`INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-owner', 0)`;
+    for (const [request, error] of [
+      [widened, "audience_widened"],
+      [refused, "invalid_blocks"],
+    ] as const) {
+      const reply = await queueReply(transaction, { requestId: request.id, text: "Done." }, 10);
+      await failQueuedItem(transaction, reply, error, 20);
+    }
+  });
+  const inbox = inboxCommand({ database, workspaceUrl: () => null });
+
+  const { result } = await inbox({ limit: 10 }, { ...LEAD, at: 1_000 });
+
+  expect(result).toMatchObject({
+    requests: [
+      { id: 1, attention: "reply_failed", replyError: "audience_widened" },
+      { id: 2, attention: "reply_failed", replyError: "invalid_blocks" },
+    ],
+  });
 });

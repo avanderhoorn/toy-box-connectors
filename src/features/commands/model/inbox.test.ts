@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { presentInbox, type InboxMessage } from "./inbox";
+import { presentInbox, type InboxMessage, type InboxRequest } from "./inbox";
 
 const MINUTE = 60_000;
 const AT = 1_000 * MINUTE;
@@ -21,6 +21,7 @@ test("fences what each person wrote, labeled with who they are to the link", () 
           requester: { userId: "U-alice", name: "{Alice Chen}" },
           state: "open",
           attention: null,
+          replyError: null,
           createdAt: AT - 5 * MINUTE,
           touchedAt: null,
           permalink: "https://acme.slack.com/archives/C-link/p1700000100000100",
@@ -34,6 +35,7 @@ test("fences what each person wrote, labeled with who they are to the link", () 
           requester: ANA,
           state: "seen",
           attention: "updated",
+          replyError: null,
           createdAt: AT - 180 * MINUTE,
           touchedAt: AT - 60 * MINUTE,
           permalink: null,
@@ -50,6 +52,7 @@ test("fences what each person wrote, labeled with who they are to the link", () 
           requester: ANA,
           state: "seen",
           attention: null,
+          replyError: null,
           createdAt: AT - 2 * 24 * 60 * MINUTE,
           touchedAt: AT - 30 * MINUTE,
           permalink: null,
@@ -97,4 +100,38 @@ A message from someone has no text.
 1 more request waits after these.
 
 End a request that needs no answer with \`toy-box-slack dismiss r7 --reason "<why>"\`.`);
+});
+
+test("says a reply didn't post, and why when more people can read the channel than it was written for", () => {
+  const failed: Omit<InboxRequest, "id" | "replyError"> = {
+    requester: ANA,
+    state: "seen",
+    attention: "reply_failed",
+    createdAt: AT - 5 * MINUTE,
+    touchedAt: AT - 4 * MINUTE,
+    permalink: null,
+    messages: [],
+    leftOut: {},
+  };
+
+  const text = presentInbox(
+    {
+      channel: "#deploys",
+      linkStatus: "active",
+      more: 0,
+      requests: [
+        { ...failed, id: 4, replyError: "audience_widened" },
+        { ...failed, id: 5, replyError: "invalid_blocks" },
+      ],
+    },
+    AT,
+  );
+
+  expect(text).toBe(`2 requests in #deploys wait on you.
+
+### r4 · {Ana} asked 5 minutes ago · your reply didn't post because more people can read the channel now, so answer again
+
+### r5 · {Ana} asked 5 minutes ago · your reply didn't post, so answer again
+
+Answer each in its thread by piping your Markdown to \`toy-box-slack reply r4\`, or end one that needs no answer with \`toy-box-slack dismiss r4 --reason "<why>"\`.`);
 });

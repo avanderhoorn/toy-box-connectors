@@ -32,6 +32,8 @@ export type InboxRequest = {
   requester: SlackPerson;
   state: RequestState;
   attention: RequestAttention | null;
+  /** Why the lead's last reply to it didn't post, if it didn't. */
+  replyError: string | null;
   createdAt: number;
   touchedAt: number | null;
   permalink: string | null;
@@ -124,9 +126,12 @@ function presentRequest(request: InboxRequest, at: number): string {
   return [`${heading}${link}`, ...thread].join("\n\n");
 }
 
-function progress({ state, attention, touchedAt }: InboxRequest, at: number): string {
+function progress({ state, attention, replyError, touchedAt }: InboxRequest, at: number): string {
   if (attention === "updated") return "changed since you read it";
-  if (attention === "reply_failed") return "your reply didn't post, so answer again";
+  if (attention === "reply_failed")
+    return replyError === "audience_widened"
+      ? "your reply didn't post because more people can read the channel now, so answer again"
+      : "your reply didn't post, so answer again";
   if (state === "open" || touchedAt === null) return "new";
   return `you read it ${ago(at - touchedAt)}`;
 }
