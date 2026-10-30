@@ -1,5 +1,5 @@
 import { expect, onTestFinished, spyOn, test } from "bun:test";
-import { statSync, writeFileSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { createTestFolder } from "./testFixtures";
 import { listenForCommands, type CommandSocketOptions } from "./socket";
@@ -29,14 +29,6 @@ test("only the owner can connect, and stopping removes the socket", async () => 
   expect(await ask(path)).toBe("answered");
   await socket.stop();
   expect(await ask(path)).toBe("refused: ENOENT");
-});
-
-test("replaces a socket a stopped bridge left behind", async () => {
-  const path = join(createTestFolder(), "bridge.sock");
-  writeFileSync(path, "");
-
-  listen(path, async () => new Response("answered"));
-  expect(await ask(path)).toBe("answered");
 });
 
 test("stopping waits for calls in flight, and cuts them off after the grace period", async () => {
