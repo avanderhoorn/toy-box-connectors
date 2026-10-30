@@ -408,15 +408,16 @@ The installed versions remain `@slack/socket-mode` 3.1.0 and `@slack/web-api`
 8.2.0. Their current lifecycle and retry checks run from the repository root:
 
 ```sh
-bun test tests/integration/slackSocket.test.ts tests/integration/slackBotClient.test.ts
-bun test src/features/outbox/server/posts.test.ts
+bun test tests/integration/slackSupervisor.test.ts tests/integration/slackBotClient.test.ts
+bun test tests/integration/postOnce.test.ts src/features/slackapi/model/envelopes.test.ts
 ```
 
 These suites exercise localhost HTTP and WebSocket connections with fake tokens,
-including raw hello and rate-limit frames, explicit acknowledgements, close,
-surfaced `Retry-After`, cursor continuation and a lost post response with SDK
-retries disabled. The supervisor suite owns reconnection. These are not live
-Slack TLS, proxy or Mac-sleep tests, nor an upstream Bun support promise.
+including hello, explicit acknowledgements, close, surfaced `Retry-After`,
+cursor continuation and a lost post response with SDK retries disabled, and read
+bare and enveloped rate-limit frames. The supervisor suite owns reconnection.
+These are not live Slack TLS, proxy or Mac-sleep tests, nor an upstream Bun
+support promise.
 The selected SDK release comes from upstream commit
 `a98047a7f27149812664c78e2dccfe4155b0e145`.
 [Socket SDK package](https://www.npmjs.com/package/@slack/socket-mode/v/3.1.0),
@@ -431,9 +432,10 @@ which the retired spike recorded as a characterization test. Its async event-lis
 boundary does not turn that into a normal `slack_event` callback. We have not
 observed a real rate-limited Socket Mode delivery, so the precise production
 wrapping remains a live verification item. The bridge now reads raw frames before
-SDK dispatch, and `tests/integration/slackSocket.test.ts` pins the documented
-top-level control shape. This avoids the dispatcher bug without a global
-unhandled-rejection handler or a false "all events processed" health signal.
+SDK dispatch, and `src/features/slackapi/model/envelopes.test.ts` pins the
+documented top-level control shape. This avoids the dispatcher bug without a
+global unhandled-rejection handler or a false "all events processed" health
+signal.
 [Documented payload](https://docs.slack.dev/reference/events/app_rate_limited/),
 [dispatcher source](https://github.com/slackapi/node-slack-sdk/blob/a98047a7f27149812664c78e2dccfe4155b0e145/packages/socket-mode/src/SocketModeClient.ts).
 
