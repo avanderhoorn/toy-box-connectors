@@ -212,14 +212,20 @@ test.each<[string, (toyBox: ReturnType<typeof startFakeToyBox>) => Promise<URL>]
 
 test("lets the bridge write while it waits for a channel's name", async () => {
   const { app, toyBox, channelId } = await startNamedLink();
-  const origin = new URL(toyBox.url);
-  const status = statusCommand({ nameApps: false, toyBoxOrigin: origin, nameTimeoutMs: 1_000 });
-  const silent: BotClient = { call: () => new Promise(() => {}) };
+  const status = statusCommand({ nameApps: false, toyBoxOrigin: new URL(toyBox.url) });
+  const written = Promise.withResolvers<void>();
+  const held: BotClient = {
+    call: async (method, run) => {
+      await written.promise;
+      return app.bot.call(method, run);
+    },
+  };
 
-  const shown = status([{ ...app, bot: silent }], { channelId, at: 1_000 });
+  const shown = status([{ ...app, bot: held }], { channelId, at: 1_000 });
   const started = performance.now();
   await app.database.write((transaction) => transaction`SELECT 1`);
   const waited = performance.now() - started;
+  written.resolve();
   await shown;
 
   expect(waited).toBeLessThan(500);
