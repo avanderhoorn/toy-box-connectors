@@ -27,7 +27,6 @@ export function startFakeToyBox() {
   const channels = new Map<string, FakeChannel>();
   const runs: FakeRun[] = [];
   const failures: number[] = [];
-  let open = 0;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: route });
 
   function route(request: Request): Response {
@@ -58,15 +57,11 @@ export function startFakeToyBox() {
           controller.close();
           return;
         }
-        open += 1;
         controller.enqueue(
           encoder.encode(
             `id: 1\n${frame({ type: "snapshot", state: snapshot(channelId, channel) })}`,
           ),
         );
-      },
-      cancel() {
-        open -= 1;
       },
     });
     return new Response(body, {
@@ -108,7 +103,6 @@ export function startFakeToyBox() {
     failNextRun(status = 500) {
       failures.push(status);
     },
-    openStreams: () => open,
     stop: () => server.stop(true),
   };
 }

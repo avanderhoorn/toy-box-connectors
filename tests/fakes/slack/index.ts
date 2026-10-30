@@ -62,7 +62,6 @@ type AppConnection = {
   unacked: Set<string>;
   ackWaiters: Set<AckWaiter>;
   nextHelloAppId?: string;
-  responsive: boolean;
   nextSocket: number;
 };
 type SocketData = { id: number; app: AppConnection };
@@ -116,7 +115,6 @@ export function startFakeSlack(
           }),
         );
         app.nextHelloAppId = undefined;
-        if (!app.responsive) socket.pause();
       },
       message(socket, bytes) {
         const app = socket.data.app;
@@ -160,8 +158,7 @@ export function startFakeSlack(
   );
   const heartbeat = setInterval(() => {
     for (const { connection } of apps.values()) {
-      if (connection.responsive)
-        for (const socket of connection.sockets.values()) socket.ping("fake-slack");
+      for (const socket of connection.sockets.values()) socket.ping("fake-slack");
     }
   }, 1000);
 
@@ -274,7 +271,6 @@ export function startFakeSlack(
       acks: [],
       unacked: new Set(),
       ackWaiters: new Set(),
-      responsive: true,
       nextSocket: 0,
     };
     const api = createFakeSlackApi({
@@ -308,7 +304,6 @@ export function startFakeSlack(
       get activeConnections() {
         return connection.sockets.size;
       },
-      sendFrame: (frame: Record<string, unknown>) => sendFrame(connection, frame),
       envelope: (event: Record<string, unknown>, settings?: FakeEventOptions) =>
         envelope(identity, event, settings),
       sendEvent: (event: Record<string, unknown>, settings?: FakeEventOptions) =>
@@ -325,13 +320,6 @@ export function startFakeSlack(
       },
       setNextHelloAppId(appId: string) {
         connection.nextHelloAppId = appId;
-      },
-      setSocketResponsive(value: boolean) {
-        connection.responsive = value;
-        for (const socket of connection.sockets.values()) {
-          if (value) socket.resume();
-          else socket.pause();
-        }
       },
       waitForAck(envelopeId: string, timeoutMs = 1000): Promise<FakeSlackAck | null> {
         if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
