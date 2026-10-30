@@ -14,6 +14,7 @@ import { log as bridgeLog, type Log } from "@/shared/log";
 import { isAuthFailure, isErrorCode, isRateLimit, isRequestFault } from "../model/errors";
 import { downloadFile, slackFilesOrigin, type Download } from "./download";
 import { markAuthFailed } from "./installation";
+import { uploadFile, type Upload } from "./upload";
 
 export const slackCallTimeoutMs = 10_000;
 export type CallFailure =
@@ -32,6 +33,8 @@ export type BotClient = {
   ): Promise<SlackCall<Result>>;
   /** Reads the bytes of a file files.info described, sending the token only to Slack's file host. */
   download(file: { url: string; size: number }): Promise<Download>;
+  /** Sends a file's bytes where files.getUploadURLExternal said to, if that's Slack's file host. */
+  upload(file: { url: string; bytes: Uint8Array }): Promise<Upload>;
 };
 export type BotClientOptions = {
   slackApiUrl?: string;
@@ -44,7 +47,8 @@ export type BotClientOptions = {
 
 /**
  * One client shares method cooldowns. Only its caller may decide to retry a write. It alone holds
- * the token, so files download through it too.
+ * the token, so files download through it too, and it knows Slack's file host, so they upload
+ * through it.
  */
 export function createBotClient(
   database: BridgeDatabase,
@@ -55,7 +59,7 @@ export function createBotClient(
     ...oneAttemptOptions({ slackApiUrl, timeoutMs }),
     logger: silentLogger,
   });
-  // Fake Slack serves files beside its API.
+  // Fake Slack serves and takes files beside its API.
   const filesOrigin = slackApiUrl ? new URL(slackApiUrl).origin : slackFilesOrigin;
   const cooldowns = new Map<string, number>();
   return {
@@ -86,6 +90,7 @@ export function createBotClient(
       }
     },
     download: ({ url, size }) => downloadFile({ url, size, token }, { origin: filesOrigin }),
+    upload: ({ url, bytes }) => uploadFile({ url, bytes }, { origin: filesOrigin }),
   };
 }
 
