@@ -99,7 +99,9 @@ including reads. The skill's instruction to seek the owner's approval for
 consequential work is a prompt rule, not an execution sandbox. The bridge
 checks where a post goes and what it says, but not why the lead posts, so
 posting only when the owner asks in Toy Box or a routine's prompt says to is
-a prompt rule too.
+a prompt rule too. A post still queued when its link is paused or suspended
+never goes out, since resume fails it, so pausing stops what the lead was
+about to post rather than delaying it.
 
 Channels shared within the pinned Enterprise org are eligible only with a
 known, approved workspace audience. Fresh channel checks at link, resume and

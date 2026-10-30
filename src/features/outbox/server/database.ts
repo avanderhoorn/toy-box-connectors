@@ -287,17 +287,20 @@ export async function failQueuedItem(
 }
 
 /**
- * Fails every item the link holds queued, in the order they were queued, giving each reply's
- * request back to the lead. One sending, or whose delivery is unknown, may have posted, so it stays.
+ * Fails every item the link holds queued, or every one of `kind`, in the order they were queued,
+ * giving each reply's request back to the lead. One sending, or whose delivery is unknown, may have
+ * posted, so it stays.
  */
 export async function failQueuedItems(
   tx: Bun.SQL,
   linkId: string,
   error: string,
   now: number,
+  kind: OutboxItem["kind"] | null = null,
 ): Promise<OutboxItem[]> {
   const rows = await tx<OutboxRow[]>`
-    SELECT * FROM outbox WHERE link_id = ${linkId} AND state = 'queued' ORDER BY number
+    SELECT * FROM outbox WHERE link_id = ${linkId} AND state = 'queued'
+      AND (${kind} IS NULL OR kind = ${kind}) ORDER BY number
   `;
   const failed: OutboxItem[] = [];
   for (const row of rows) {

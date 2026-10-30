@@ -48,7 +48,8 @@ Queueing a reply calls the request model's `beginAnswer` in the same transaction
 delivery calls `confirmAnswer`. Only a definite refusal can return it to seen and replace
 the payload on that same failed row. A post in the request's thread never begins, confirms or
 returns its answer. When link or resume approves a wider audience, every item the link holds
-queued fails that way, while one sending or unknown stays.
+queued fails that way, while one sending or unknown stays. When they end a pause or suspension
+without one, only the link's queued posts fail, since the owner may have paused to stop them.
 Late results settle only their matching attempt.
 Retraction deletes one confirmed post and keeps the original reservation. Unlink deletes
 the link's local state rather than leaving an orphan-cleanup subsystem.

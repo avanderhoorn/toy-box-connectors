@@ -196,7 +196,10 @@ test("a Slack channel linked to another Toy Box channel is refused, saying anoth
   );
 });
 
-/** Resume for the stored link, reaching Slack and Toy Box, while it holds r1's answer and a publication. */
+/**
+ * Resume and link for the stored link, reaching Slack and Toy Box, while it holds r1's answer and a
+ * publication.
+ */
 async function resuming() {
   const world = await createOutboxWorld();
   const { database, bot, now } = world;
@@ -211,11 +214,16 @@ async function resuming() {
   const publication = await database.write((transaction) =>
     queuePublication(transaction, slot, now()),
   );
-  const resume = resumeCommand({ database, bot, toyBoxOrigin: new URL(toyBox.url) });
+  const options: SetupCommandOptions = { database, bot, toyBoxOrigin: new URL(toyBox.url) };
+  const resume = resumeCommand(options);
+  const link = linkCommand(options);
   return {
     ...world,
     held: [reply, publication],
     resume: () => resume({}, { channelId, at: now() }),
+    /** Links the stored link's channel again, taking requests in `requests` mode. */
+    link: (requests: "mention" | "all") =>
+      link({ slackChannel: "C-link", requests }, { channelId, at: now() }),
   };
 }
 
@@ -262,7 +270,21 @@ test("resume judges the channel against the audience the owner approved, so one 
   for (const item of held) expect(await read(item.id)).toMatchObject({ state: "failed" });
 });
 
-test("resume posts what a paused link held when no more people can read the channel", async () => {
+test("resume names no posts when its link held none as more people came to read the channel", async () => {
+  const { database, slack, now, held, post, resume } = await resuming();
+  for (const item of held) await post(item.id);
+  await database.write((transaction) =>
+    suspendLink(transaction, "link", "channel_made_public", now()),
+  );
+  slack.addChannel({ id: "C-link", is_private: false });
+
+  const answer = await resume();
+
+  expect(answer.result).toMatchObject({ status: "active", dropped: [] });
+  expect(answer.text).not.toContain("won't post");
+});
+
+test("resume posts the replies and publications a paused link held when no more people can read the channel", async () => {
   const { database, read, held, resume } = await resuming();
   await database.write((transaction) => pauseLink(transaction, "link", 0));
 
@@ -271,4 +293,45 @@ test("resume posts what a paused link held when no more people can read the chan
   expect(answer.result).toMatchObject({ status: "active", dropped: [] });
   expect(answer.text).not.toContain("won't post");
   for (const item of held) expect(await read(item.id)).toMatchObject({ state: "queued" });
+});
+
+test("resume fails the posts a paused link held, since the owner may have paused it to stop them", async () => {
+  const { database, request, read, resume, queuePost } = await resuming();
+  const posts = [await queuePost(), await queuePost({ request: request.id })];
+  await database.write((transaction) => pauseLink(transaction, "link", 0));
+
+  const answer = await resume();
+
+  expect(answer.result).toMatchObject({ status: "active", dropped: ["o3", "o4"] });
+  expect(answer.text).toEndWith(
+    "The link was paused after the lead wrote these, so they won't post:\n\n- o3, its post at the top of the channel\n- o4, its post in r1's thread\n\nAsk the lead again for any you still want.",
+  );
+  for (const post of posts) {
+    expect(await read(post.id)).toMatchObject({ state: "failed", error: "link_stopped" });
+  }
+});
+
+test("resume fails the post a suspended link held once Slack shows its channel as the owner approved it", async () => {
+  const { database, now, read, resume, queuePost } = await resuming();
+  const post = await queuePost();
+  await database.write((transaction) => suspendLink(transaction, "link", "bot_removed", now()));
+
+  const answer = await resume();
+
+  expect(answer.result).toMatchObject({ status: "active", dropped: ["o3"] });
+  expect(answer.text).toEndWith(
+    "The link was suspended after the lead wrote o3, its post at the top of the channel, so it won't post. Ask the lead again if you still want it.",
+  );
+  expect(await read(post.id)).toMatchObject({ state: "failed", error: "link_stopped" });
+});
+
+test("link leaves what an active link holds queued as it changes its settings, posts too", async () => {
+  const { read, held, link, queuePost } = await resuming();
+  const post = await queuePost();
+
+  const answer = await link("all");
+
+  expect(answer.result).toMatchObject({ status: "active", requestMode: "all", dropped: [] });
+  for (const item of [...held, post])
+    expect(await read(item.id)).toMatchObject({ state: "queued" });
 });

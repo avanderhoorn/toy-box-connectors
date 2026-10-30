@@ -43,7 +43,10 @@ so do not run it as the lead merely to inspect status.
 
 A paused link holds queued posts and opens no new requests. Existing requests
 still receive edits and deletes. Questions first asked while paused do not
-return automatically after resume.
+return automatically after resume. Resume sends the replies and publications
+the link held, but what the lead queued with `post` fails instead, since the
+lead wrote it for that moment and the owner may have paused to stop it. Resume
+names each, so the owner can ask the lead again.
 Pause, deny and unlink cannot recall a post already on its way to Slack,
 and unlink deletes its local post record.
 

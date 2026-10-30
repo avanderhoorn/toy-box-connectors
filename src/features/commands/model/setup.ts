@@ -96,16 +96,45 @@ export function presentDropped(
   returned: readonly number[],
   channel: string,
 ): string {
-  const wrote = `More people can read ${channel} than when the lead wrote`;
   const back = returned.length
     ? `The lead gets ${new Intl.ListFormat("en").format(returned.map((id) => `r${id}`))} back to answer again.`
     : null;
+  return wontPost(
+    dropped,
+    (these) => `More people can read ${channel} than when the lead wrote ${these}`,
+    back,
+  );
+}
+
+/**
+ * Which of the lead's posts won't go out, since the link was paused or suspended after it wrote
+ * them. Nothing gives them back, so the owner asks again for any they still want.
+ */
+export function presentStopped(
+  dropped: readonly QueuedPost[],
+  stopped: "paused" | "suspended",
+): string {
+  return wontPost(
+    dropped,
+    (these) => `The link was ${stopped} after the lead wrote ${these}`,
+    dropped.length === 1
+      ? "Ask the lead again if you still want it."
+      : "Ask the lead again for any you still want.",
+  );
+}
+
+/** Says `dropped` won't post, naming one in the sentence that says why and listing several. */
+function wontPost(
+  dropped: readonly QueuedPost[],
+  wrote: (these: string) => string,
+  after: string | null,
+): string {
   const [post, ...others] = dropped;
   if (post !== undefined && others.length === 0) {
-    return [`${wrote} ${described(post)}, so it won't post.`, back].filter(Boolean).join(" ");
+    return [`${wrote(described(post))}, so it won't post.`, after].filter(Boolean).join(" ");
   }
   const list = dropped.map((queued) => `- ${described(queued)}`).join("\n");
-  return [`${wrote} these, so they won't post:\n\n${list}`, back].filter(Boolean).join("\n\n");
+  return [`${wrote("these")}, so they won't post:\n\n${list}`, after].filter(Boolean).join("\n\n");
 }
 
 function described({ number, kind, requestId, threadTs, series }: QueuedPost): string {

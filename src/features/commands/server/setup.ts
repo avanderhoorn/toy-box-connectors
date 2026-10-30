@@ -11,12 +11,13 @@ import {
   presentAllowed,
   presentDropped,
   presentLink,
+  presentStopped,
 } from "@commands/model/setup";
 import { channelName, personName, toyBoxChannelName } from "@commands/model/slackText";
 import { presentLinkState } from "@commands/model/status";
 import { count } from "@commands/model/wording";
 import { admissionProblem } from "@links/model/admission";
-import { approvableAudience, widening } from "@links/model/audience";
+import { approvableAudience, widening, type Audience } from "@links/model/audience";
 import { suspensions } from "@links/model/status";
 import {
   allowPerson,
@@ -161,8 +162,9 @@ export function denyCommand({ database }: SetupCommandOptions): CommandHandler<"
  * Links the caller's Toy Box channel to `slackChannelId` and makes the link active, with the
  * settings `wanted` names, else the link's own, and the channel's audience as Slack says it is now.
  * When more people can read the channel than the owner approved before, what the link holds
- * queued fails, since the lead wrote it for fewer. A link Slack moved is refused before Toy Box or
- * Slack is asked, and again as it writes, since Slack can move it while they're asked.
+ * queued fails, since the lead wrote it for fewer, and when the link was paused or suspended, its
+ * posts do. A link Slack moved is refused before Toy Box or Slack is asked, and again as it
+ * writes, since Slack can move it while they're asked.
  */
 async function linkChannel(
   options: SetupCommandOptions,
@@ -201,8 +203,7 @@ async function linkChannel(
     const requestMode = wanted.requestMode ?? link?.requestMode ?? "mention";
     const observe = wanted.observe ?? link?.observe ?? "requesters";
     const settings = { requestMode, observe };
-    const held =
-      link && widening(link.approved, approved) ? await dropHeld(transaction, link.id, at) : null;
+    const held = link ? await dropHeld(transaction, link, approved, channel, at) : null;
     await approveLink(transaction, { toyBoxChannelId, slackChannelId, ...settings, approved }, at);
     const linked = presentLink(toyBox, channel, approved, settings, app);
     return {
@@ -212,21 +213,37 @@ async function linkChannel(
         ...settings,
         dropped: held?.dropped.map(({ number }) => `o${number}`) ?? [],
       },
-      text: held?.dropped.length
-        ? `${linked}\n\n${presentDropped(held.dropped, held.returned, channel)}`
-        : linked,
+      text: held ? `${linked}\n\n${held.text}` : linked,
     };
   });
 }
 
-/** Fails what the link holds queued, and finds the requests whose answers went back to the lead. */
-async function dropHeld(transaction: Bun.SQL, linkId: string, at: number) {
-  const dropped = await failQueuedItems(transaction, linkId, "audience_widened", at);
-  const waiting = new Set((await readActiveRequests(transaction, linkId)).map(({ id }) => id));
-  const returned = dropped.flatMap(({ kind, requestId }) =>
-    kind === "reply" && requestId !== null && waiting.has(requestId) ? [requestId] : [],
-  );
-  return { dropped, returned };
+/**
+ * Fails what the link held that the lead wrote for fewer readers or for a moment that passed, and
+ * says what won't post, or returns null when nothing it held changes. Once more people can read
+ * the channel than the owner approved before, that's everything it holds queued, and each reply's
+ * request still waiting goes back to the lead. Otherwise a link that was paused or suspended drops
+ * only its posts, since its replies still answer their requests and its publications their runs,
+ * while the owner may have stopped it to stop a post.
+ */
+async function dropHeld(
+  transaction: Bun.SQL,
+  link: ChannelLink,
+  approved: Audience,
+  channel: string,
+  at: number,
+) {
+  if (widening(link.approved, approved)) {
+    const dropped = await failQueuedItems(transaction, link.id, "audience_widened", at);
+    const waiting = new Set((await readActiveRequests(transaction, link.id)).map(({ id }) => id));
+    const returned = dropped.flatMap(({ kind, requestId }) =>
+      kind === "reply" && requestId !== null && waiting.has(requestId) ? [requestId] : [],
+    );
+    return dropped.length ? { dropped, text: presentDropped(dropped, returned, channel) } : null;
+  }
+  if (link.status === "active") return null;
+  const dropped = await failQueuedItems(transaction, link.id, "link_stopped", at, "post");
+  return dropped.length ? { dropped, text: presentStopped(dropped, link.status) } : null;
 }
 
 /** Refuses a link Slack gave a new channel ID, which only unlink and a new link end. */
