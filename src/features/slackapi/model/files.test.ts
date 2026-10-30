@@ -55,6 +55,20 @@ test.each<[string, SlackCall<unknown>, FileInfoVerdict]>([
     { kind: "refused", reason: "its message no longer shares it" },
   ],
   [
+    "though a list Slack cut short doesn't show that it stopped",
+    {
+      kind: "ok",
+      result: {
+        ok: true,
+        file: { ...info, shares: { public: { "C-other": [{ ts }] } }, has_more_shares: true },
+      },
+    },
+    {
+      kind: "refused",
+      reason: "it's shared in too many places for Slack to confirm its message still shares it",
+    },
+  ],
+  [
     "nor when Slack doesn't hold it",
     {
       kind: "ok",

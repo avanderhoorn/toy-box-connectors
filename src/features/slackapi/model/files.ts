@@ -66,6 +66,7 @@ const fileInfoSchema = z.object({
       .object({ public: sharesSchema.nullish(), private: sharesSchema.nullish() })
       .nullish()
       .describe("Where it's shared, among the channels the bot can read"),
+    has_more_shares: z.unknown().optional().describe("True when shares lists only some of them"),
   }),
 });
 
@@ -107,7 +108,11 @@ export function judgeFileInfo(
     file.shares?.private?.[share.channelId],
   ];
   if (!messages.some((listed) => listed?.some(({ ts }) => compareTs(ts, share.ts) === 0)))
-    return refused("its message no longer shares it");
+    return refused(
+      file.has_more_shares === true
+        ? "it's shared in too many places for Slack to confirm its message still shares it"
+        : "its message no longer shares it",
+    );
   const url = file.url_private_download ?? file.url_private;
   if (!url) return refused("Slack gave no address for it");
   return { kind: "file", file: { ...describe(file), url } };
