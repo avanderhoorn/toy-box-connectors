@@ -42,6 +42,7 @@ test.each<[string, FileAnswer, string]>([
 });
 
 test.each<[number, string]>([
+  [1_023, "1023 bytes"],
   [1_024, "1 KB"],
   [1_048_575, "1.0 MB"],
 ])("a file of %d bytes lists as %s, in units of 1,024", (size, shown) => {
