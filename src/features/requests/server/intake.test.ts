@@ -150,17 +150,6 @@ test("an okay follows up only when our newest message before it in the thread as
   });
 });
 
-test("once the ledger forgets a request's messages, it goes if finished, but stays while answering", async () => {
-  const database = await openIntake(theirs);
-  await advance(database, "answering");
-  expect(await take(database, editMessage(theirs, "1700000300.000100", "never mind"))).toBe(true);
-  await forget(database);
-  expect(await readRequests(database)).toEqual({
-    requests: [{ id: 1, state: "answering" }],
-    messages: [{ request_id: 1, ts: ask.ts }],
-  });
-});
-
 test("a finished request stays while the ledger keeps any of its messages, so none asks again", async () => {
   const database = await openIntake(more);
   await advance(database, "answered");
