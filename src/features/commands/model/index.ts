@@ -1,9 +1,12 @@
 // The commands the bridge serves. The CLI offers each input field as a kebab-case option, or an
 // argument when it's positional, and the bridge parses the text it read with the same schema, so a
-// command can't mean one thing to the lead and another to the bridge.
+// command can't mean one thing to the lead and another to the bridge. A list option can repeat. A
+// path field is the one exception, since the bridge can't read the lead's files: the CLI reads
+// each file it names and sends its bytes, as base64, in place of its path.
 
 import { z } from "zod";
 import { appNameSchema } from "@bridge/model/apps";
+import { MAX_ALT_LENGTH, MAX_POST_IMAGES } from "@outbox/model/payload";
 import type { CallerRole } from "./callers";
 
 export type CommandSpec = {
@@ -13,6 +16,8 @@ export type CommandSpec = {
   input: z.ZodObject;
   /** The fields the CLI takes as arguments instead, in order. A list takes every argument left. */
   positionals?: readonly string[];
+  /** The list fields the CLI takes as paths, with the most bytes it reads of each file. */
+  paths?: Readonly<Record<string, number>>;
 };
 
 /** A request as the lead writes it, such as r14, which the bridge reads as its number. */
@@ -61,6 +66,43 @@ const postTextSchema = z
   .refine((text) => text.trim() !== "", "Write the text on stdin, such as with a heredoc")
   .describe("The Markdown to post, read from stdin unless given here");
 
+/** The most bytes of an image the lead posts, which the bridge rebuilds pixel by pixel. */
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/** The images a post shows below its text, each with the alt text given in the same place. */
+const imageFields = {
+  image: z
+    .array(
+      z
+        .base64()
+        .transform((data): Uint8Array => Uint8Array.fromBase64(data))
+        .refine((bytes) => bytes.length <= MAX_IMAGE_BYTES, "Give an image of at most 5 MiB"),
+    )
+    .max(MAX_POST_IMAGES, `Give at most ${MAX_POST_IMAGES}`)
+    .optional()
+    .describe(
+      `A PNG you made to show below the text, by its path, up to ${MAX_POST_IMAGES}, each with an --alt`,
+    ),
+  alt: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1, "Say what the image shows")
+        .max(MAX_ALT_LENGTH, `Keep it to ${MAX_ALT_LENGTH} characters`),
+    )
+    .optional()
+    .describe(
+      "What the --image in the same place shows, in a sentence, which Slack shows above it",
+    ),
+};
+
+/** Whether a post gives as much alt text as images, which pair in order. */
+function pairsImages({ image = [], alt = [] }: { image?: unknown[]; alt?: unknown[] }): boolean {
+  return image.length === alt.length;
+}
+const unpairedImages = { path: ["alt"], message: "Give one for each --image" };
+
 /** At most how many of `items` a command shows, `fallback` unless set. */
 function limitSchema(most: number, fallback: number, items: string) {
   return z.coerce
@@ -86,7 +128,7 @@ const slackUsersSchema = z
   .min(1)
   .describe("Slack member IDs, such as U0123ABCD, which each one's profile shows");
 
-/** Whom a post notifies, as one option, since the CLI keeps only the last of a repeated one. */
+/** Whom a post notifies, as one option whose member IDs are separated by commas. */
 const mentionsSchema = z
   .string()
   .transform((ids) => ids.split(",").map((id) => id.trim()))
@@ -121,8 +163,12 @@ export const commands = {
   reply: {
     description: "Answer a request in its Slack thread, once",
     callers: ["lead"],
-    input: z.object({ request: requestReferenceSchema, text: postTextSchema }).strict(),
+    input: z
+      .object({ request: requestReferenceSchema, text: postTextSchema, ...imageFields })
+      .strict()
+      .refine(pairsImages, unpairedImages),
     positionals: ["request"],
+    paths: { image: MAX_IMAGE_BYTES },
   },
   activity: {
     description: "Read what changed in the Slack channel since you last marked it read",
@@ -165,16 +211,26 @@ export const commands = {
           .string()
           .describe("What the posts are, as the routine's prompt names it, such as release-notes"),
         text: postTextSchema,
+        ...imageFields,
       })
-      .strict(),
+      .strict()
+      .refine(pairsImages, unpairedImages),
+    paths: { image: MAX_IMAGE_BYTES },
   },
   post: {
     description:
       "Post in the Slack channel, or in a thread there, when the owner or a routine asks you to",
     callers: ["lead"],
     input: z
-      .object({ thread: threadReferenceSchema, mention: mentionsSchema, text: postTextSchema })
-      .strict(),
+      .object({
+        thread: threadReferenceSchema,
+        mention: mentionsSchema,
+        text: postTextSchema,
+        ...imageFields,
+      })
+      .strict()
+      .refine(pairsImages, unpairedImages),
+    paths: { image: MAX_IMAGE_BYTES },
   },
   retract: {
     description:
@@ -260,5 +316,10 @@ export function inputProblem(
       : `--${optionName(field)}`;
     return `${shown}: ${input[field] === undefined ? "Missing" : message}.`;
   });
-  return `\`${name}\` didn't run. ${[...new Set(problems)].join(" ")} Run \`toy-box-slack ${name} --help\` to see what it takes.`;
+  return didntRun(name, [...new Set(problems)]);
+}
+
+/** Says `name` didn't run because of `problems`, and how to see what it takes. */
+export function didntRun(name: string, problems: readonly string[]): string {
+  return `\`${name}\` didn't run. ${problems.join(" ")} Run \`toy-box-slack ${name} --help\` to see what it takes.`;
 }

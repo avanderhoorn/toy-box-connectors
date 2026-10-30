@@ -1,13 +1,16 @@
 // The CLI forwards the text it read and what its environment says about the caller to the bridge,
 // and prints the answer. It exits 0 when the command ran, 1 when it didn't or may not have, and 2
-// when no bridge is running. A command that posts reads its text from stdin unless --text gives it.
+// when no bridge is running. A command that posts reads its text from stdin unless --text gives it,
+// and sends the bytes of the files a path field names, refusing one it can't read or that's too big
+// without calling the bridge.
 
 import { homedir } from "node:os";
+import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { defineCommand, type ArgsDef, type CommandDef } from "citty";
 import { z } from "zod";
 import { resolveDataFolder } from "@bridge/server/dataFolder";
 import { commandSocketPath } from "@bridge/server/socket";
-import { commands, optionName, type CommandSpec } from "@commands/model";
+import { commands, didntRun, optionName, type CommandSpec } from "@commands/model";
 import { resolveSessionId } from "@commands/model/callers";
 import {
   COMMAND_TIMEOUT,
@@ -84,35 +87,101 @@ export async function callBridge(
 function socketCommand(name: string, spec: CommandSpec): CommandDef {
   const fields = Object.entries(spec.input.shape);
   const args: ArgsDef = { ...sharedArgs };
+  const options: ParseArgsOptionsConfig = {
+    channel: { type: "string" },
+    json: { type: "boolean" },
+  };
   for (const [field, schema] of fields) {
     const { description } = schema;
-    args[optionName(field)] = spec.positionals?.includes(field)
-      ? { type: "positional", description, required: !schema.safeParse(undefined).success }
-      : { type: "string", description };
+    const option = optionName(field);
+    if (spec.positionals?.includes(field)) {
+      args[option] = {
+        type: "positional",
+        description,
+        required: !schema.safeParse(undefined).success,
+      };
+    } else {
+      args[option] = { type: "string", description };
+      options[option] = { type: "string", multiple: takesList(schema) };
+    }
   }
   return defineCommand({
     meta: { name, description: spec.description },
     args,
-    async run({ args: read }) {
+    async run({ args: read, rawArgs }) {
+      // citty gives a positional only its first argument, and an option only its last, so a list
+      // takes the arguments left, or reads every time its option repeats.
+      const { values } = parseArgs({
+        args: rawArgs,
+        options,
+        strict: false,
+        allowPositionals: true,
+      });
       const input: Record<string, unknown> = Object.fromEntries(
         fields.map(([field, schema]) => {
+          const option = optionName(field);
           const position = spec.positionals?.indexOf(field) ?? -1;
-          // citty gives a positional only its first argument, so a list takes the rest itself.
-          const list = position >= 0 && schema instanceof z.ZodArray;
-          return [field, list ? read._.slice(position) : read[optionName(field)]];
+          if (!takesList(schema)) return [field, read[option]];
+          if (position >= 0) return [field, read._.slice(position)];
+          return [
+            field,
+            [values[option] ?? []].flat().map((value) => (value === true ? "" : value)),
+          ];
         }),
       );
+      const problems = await readPaths(spec, input);
       // A terminal isn't kept waiting for text, since only a lead may post.
       if (Object.hasOwn(input, "text") && input.text === undefined && !process.stdin.isTTY) {
         input.text = await Bun.stdin.text();
       }
       const channelId = typeof read.channel === "string" ? read.channel : null;
-      const { exitCode, text, json } = await callBridge(name, input, { channelId });
+      const { exitCode, text, json } = problems.length
+        ? failed(1, didntRun(name, problems))
+        : await callBridge(name, input, { channelId });
       if (read.json === true) process.stdout.write(`${JSON.stringify(json, null, 2)}\n`);
       else process[exitCode === 0 ? "stdout" : "stderr"].write(`${text}\n`);
       process.exitCode = exitCode;
     },
   });
+}
+
+/** Whether `schema` takes a list, of the arguments left or of an option's values. */
+function takesList(schema: z.ZodType): boolean {
+  return (schema instanceof z.ZodOptional ? schema.unwrap() : schema) instanceof z.ZodArray;
+}
+
+/**
+ * Puts the bytes of each file a path field names, as base64, in place of its path, and says what's
+ * wrong with each file it can't send.
+ */
+async function readPaths(spec: CommandSpec, input: Record<string, unknown>): Promise<string[]> {
+  const problems: string[] = [];
+  for (const [field, most] of Object.entries(spec.paths ?? {})) {
+    const contents: string[] = [];
+    for (const path of input[field] as string[]) {
+      const bytes = await readStart(path, most + 1);
+      const problem =
+        bytes === null
+          ? "can't be read"
+          : bytes.length > most
+            ? `is over ${most / 2 ** 20} MiB`
+            : null;
+      if (problem) problems.push(`--${optionName(field)}: \`${path}\` ${problem}.`);
+      else contents.push(bytes!.toBase64());
+    }
+    input[field] = contents;
+  }
+  return problems;
+}
+
+/** Up to `length` bytes from the start of the file at `path`, or null when it can't be read. */
+async function readStart(path: string, length: number): Promise<Uint8Array | null> {
+  try {
+    // A slice reads only what it needs, so a huge file costs no more than a small one.
+    return await Bun.file(path).slice(0, length).bytes();
+  } catch {
+    return null;
+  }
 }
 
 function failed(exitCode: 1 | 2, error: string): CallOutcome {

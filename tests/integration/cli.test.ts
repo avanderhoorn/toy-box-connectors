@@ -4,31 +4,11 @@ import { expect, onTestFinished, test } from "bun:test";
 import { existsSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTestFolder } from "@bridge/server/testFixtures";
-import { started } from "./bridgeProcess";
+import { MAX_IMAGE_BYTES } from "@commands/model";
+import { runToyBoxSlack, started } from "./bridgeProcess";
 import { startLinkedBridge, storeNewRequest } from "./linkedBridge";
 
 const CLI = join(import.meta.dir, "..", "..", "cli", "index.ts");
-
-/**
- * Runs `toy-box-slack <args>` with `env` and `PATH` as its whole environment, and a home folder
- * of its own unless `env` names one. It reads `stdin`, or nothing as in an agent's shell. Resolves
- * once it exits, with what it printed.
- */
-async function runToyBoxSlack(args: string[], env: Record<string, string> = {}, stdin?: string) {
-  const child = Bun.spawn([process.execPath, "--no-env-file", CLI, ...args], {
-    env: { PATH: process.env.PATH, HOME: createTestFolder(), ...env },
-    stdin: stdin === undefined ? "ignore" : new Blob([stdin]),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  onTestFinished(() => child.kill("SIGKILL"));
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  return { exitCode, stdout, stderr };
-}
 
 /** What the CLI prints when no bridge listens for `home`, as text or with --json. */
 function noBridge(home: string, asJson = false) {
@@ -88,6 +68,22 @@ test("reply reads its text from stdin, and says to write it there when there's n
     stderr: "",
   });
 }, 15_000);
+
+test("reply refuses an --image it can't read or that's over 5 MiB, without calling the bridge", async () => {
+  const folder = createTestFolder();
+  const missing = join(folder, "chart.png");
+  const huge = join(folder, "screenshot.png");
+  writeFileSync(huge, new Uint8Array(MAX_IMAGE_BYTES + 1));
+  const largest = join(folder, "photo.png");
+  writeFileSync(largest, new Uint8Array(MAX_IMAGE_BYTES));
+
+  const images = [missing, huge, largest].flatMap((path) => ["--image", path, "--alt", "A chart"]);
+  expect(await runToyBoxSlack(["reply", "r1", ...images], {}, "Here.\n")).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr: `\`reply\` didn't run. --image: \`${missing}\` can't be read. --image: \`${huge}\` is over 5 MiB. Run \`toy-box-slack reply --help\` to see what it takes.\n`,
+  });
+});
 
 test("post reads the thread it names, and whom to mention as one option, by member IDs separated by commas", async () => {
   const { channelId, home } = await startLinkedBridge({ allowed: ["U0ALICE", "U0BOB"] });

@@ -296,6 +296,10 @@ export function createFakeSlackApi(options: {
       files.set(id, { file: structuredClone(file), bytes: bytes.slice() });
       return structuredClone(file);
     },
+    /** The bytes Slack keeps for file `id`, or undefined when it has no such file. */
+    getFileBytes(id: string) {
+      return files.get(id)?.bytes.slice();
+    },
     getMessages(channelId: string) {
       requireChannel(channelId);
       return [...messages.get(channelId)!.values()]

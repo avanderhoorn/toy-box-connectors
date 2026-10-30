@@ -1,11 +1,16 @@
 import { expect, mock, test } from "bun:test";
+import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
+import { COMMAND_TIMEOUT } from "@commands/model/protocol";
 import { clockTime } from "@commands/model/wording";
+import { blankPng } from "@files/model/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
+import { readDueDeletions } from "@outbox/server/files";
 import { createOutboxWorld, createStoredOutboxItem } from "@outbox/server/testFixtures";
 import type { Request } from "@requests/model/lifecycle";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { postCommand, publishCommand, replyCommand, retractCommand } from "./posts";
+import type { FakeSlack } from "../../../../tests/fakes/slack";
 import { refusal } from "./testFixtures";
 
 const LEAD = { channelId: "toybox-link" };
@@ -15,7 +20,7 @@ test("reply queues one answer in a request's thread, and refuses a second or ano
   await createStoredLink(database, "other");
   await createStoredRequest(database, { linkId: "other", channelId: "C-other", state: "seen" });
   const outbox = { poke: mock(() => {}) };
-  const reply = replyCommand({ database, outbox });
+  const reply = replyCommand({ database, bot: null, outbox });
   const lead = { ...LEAD, at: now() };
 
   expect(await reply({ request: 1, text: "It's **fixed**." }, lead)).toEqual({
@@ -46,6 +51,7 @@ test("publish posts once for the latest scheduled run of the routine that runs i
   const outbox = { poke: mock(() => {}) };
   const publish = publishCommand({
     database,
+    bot: null,
     outbox,
     routines: async (channelId) => (channelId === "toybox-link" ? [routine] : null),
   });
@@ -72,7 +78,7 @@ test("post queues in the channel or the thread it names, and refuses another cha
   const { database, now } = await createOutboxWorld();
   await database.write((tx) => tx`UPDATE requests SET state = 'answered'`);
   const outbox = { poke: mock(() => {}) };
-  const post = postCommand({ database, outbox });
+  const post = postCommand({ database, bot: null, outbox });
   const lead = { ...LEAD, at: now() };
   const text = "Shipped **1.2**.";
 
@@ -125,7 +131,7 @@ test("post mentions only people on the allowlist, once each, and names whom it n
       VALUES ('link', 'U0ALICE', 0), ('link', 'U0BOB', 0)
     `;
   });
-  const post = postCommand({ database });
+  const post = postCommand({ database, bot: null });
   const lead = { ...LEAD, at: now() };
 
   expect(await post({ mention: ["U0ALICE", "U0BOB", "U0ALICE"], text: "Shipped." }, lead)).toEqual({
@@ -176,7 +182,7 @@ test.each([
   ] as const) {
     await createStoredOutboxItem(database, n, { ...top, state });
   }
-  const post = postCommand({ database });
+  const post = postCommand({ database, bot: null });
 
   expect(await refusal(post({ thread: { post: number }, text: "More." }, { ...LEAD, at: 0 }))).toBe(
     `Nothing posted. ${why}`,
@@ -214,11 +220,132 @@ test.each<{
   );
   await createStoredRequest(database, { state: "answered", ...r1 });
   if (r2) await createStoredRequest(database, { sourceTs: "1700000150.000100", ...r2 });
-  const post = postCommand({ database });
+  const post = postCommand({ database, bot: null });
 
   expect(await refusal(post({ thread: { request: 1 }, text: "More." }, { ...LEAD, at: 0 }))).toBe(
     `Nothing posted. ${why}`,
   );
+});
+
+/** What Slack's refusal says when the Slack app lacks `scope`. */
+const lacking = (scope: string) =>
+  `the Slack app doesn't have the ${scope} scope yet. Ask the owner to add it on the app's OAuth & Permissions page and reinstall the app to the workspace`;
+
+test.each<{
+  title: string;
+  image?: Uint8Array[];
+  alt?: string[];
+  offline?: true;
+  slack?: (slack: FakeSlack) => void;
+  meanwhile?: (database: BridgeDatabase) => Promise<unknown>;
+  why: string;
+  owed: number;
+}>([
+  {
+    title: "that isn't a PNG",
+    image: [blankPng(2, 2), new TextEncoder().encode("GIF89a")],
+    alt: ["Build times this week", "Build times last week"],
+    why: "Image 2 isn't a PNG.",
+    owed: 0,
+  },
+  {
+    title: "whose alt text holds a credential",
+    alt: ["The chart at https://ci:hunter2@ci.example.com/builds"],
+    why: "Cannot post: Remove credentials (url_credentials) from image 1's alt text.",
+    owed: 0,
+  },
+  {
+    title: "while Slack isn't active",
+    offline: true,
+    why: "Slack isn't active.",
+    owed: 0,
+  },
+  {
+    title: "while the Slack app can't upload files",
+    slack: (slack) => slack.failNext("files.getUploadURLExternal", { error: "missing_scope" }),
+    why: `Image 1 couldn't be uploaded since ${lacking("files:write")}.`,
+    owed: 0,
+  },
+  {
+    title: "when Slack gives an address off its file host",
+    slack: (slack) => slack.setUploadOrigin("http://127.0.0.1:9"),
+    why: "Image 1 couldn't be uploaded since Slack gave an address off its file host.",
+    owed: 1,
+  },
+  {
+    title: "when Slack's answer to its upload is lost",
+    slack: (slack) => slack.failNext("files.completeUploadExternal", { lostResponse: true }),
+    why: "Image 1 couldn't be uploaded since Slack didn't answer, so try again shortly.",
+    owed: 1,
+  },
+  {
+    title: "while the Slack app can't read files",
+    slack: (slack) => slack.failNext("files.info", { error: "missing_scope" }),
+    why: `Image 1 couldn't be uploaded since ${lacking("files:read")}.`,
+    owed: 1,
+  },
+  {
+    title: "that Slack never finishes processing",
+    slack: (slack) => slack.stallProcessing(),
+    why: "Image 1 couldn't be uploaded since Slack took too long to process it, so try again shortly.",
+    owed: 1,
+  },
+  {
+    title: "once its link is paused while it uploads",
+    meanwhile: (database) => database.write((tx) => tx`UPDATE links SET status = 'paused'`),
+    why: "This request's link isn't active.",
+    owed: 1,
+  },
+])(
+  "reply refuses an image $title, queuing nothing and owing a delete of any file it uploaded",
+  async ({ image = [blankPng(2, 2)], alt = ["Build times this week"], offline, ...row }) => {
+    const world = await createOutboxWorld();
+    row.slack?.(world.slack);
+    const reply = replyCommand({
+      database: world.database,
+      bot: offline ? null : world.bot,
+      timings: {
+        now: world.now,
+        sleep: async (ms) => {
+          world.advance(ms);
+          await row.meanwhile?.(world.database);
+        },
+      },
+    });
+
+    const input = { request: 1, text: "It's **fixed**.", image, alt };
+    expect(await refusal(reply(input, { ...LEAD, at: world.now() }))).toBe(
+      `r1 wasn't answered. ${row.why} Run \`toy-box-slack inbox\` to see what waits on you.`,
+    );
+    expect(await world.database.read((sql) => sql`SELECT number FROM outbox`)).toEqual([]);
+    expect(await world.owed()).toHaveLength(row.owed);
+  },
+);
+
+test("reply owes a delete of each image it uploads until it queues the post, due once the CLI stops waiting and within 5 minutes", async () => {
+  const world = await createOutboxWorld();
+  /** How many deletes are due within `ms`. */
+  const dueWithin = (ms: number) =>
+    world.database.read(async (sql) => (await readDueDeletions(sql, world.now() + ms)).length);
+  let processing: number[] | undefined;
+  const reply = replyCommand({
+    database: world.database,
+    bot: world.bot,
+    timings: {
+      now: world.now,
+      sleep: async (ms) => {
+        processing ??= [await dueWithin(COMMAND_TIMEOUT), await dueWithin(5 * 60_000)];
+        world.advance(ms);
+      },
+    },
+  });
+
+  const image = [blankPng(2, 2), blankPng(3, 3)];
+  const input = { request: 1, text: "It's **fixed**.", image, alt: ["Before", "After"] };
+  await reply(input, { ...LEAD, at: world.now() });
+  // So the worker deletes neither while the command may still use it, and both after a crash.
+  expect(processing).toEqual([0, 2]);
+  expect(await world.database.read((sql) => sql`SELECT file_id FROM file_deletions`)).toEqual([]);
 });
 
 test("retract deletes the lead's post from Slack, says what stays used, and says why when it can't", async () => {

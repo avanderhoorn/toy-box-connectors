@@ -1,9 +1,11 @@
-// The bridge as its own process, started in the background or at a terminal, and the owner's other
-// terminal commands.
+// The bridge as its own process, started in the background or at a terminal, the owner's other
+// terminal commands, and the commands a lead runs.
 
 import { onTestFinished } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { openBridgeDatabase, type BridgeDatabase } from "@bridge/server/database";
+import { createTestFolder } from "@bridge/server/testFixtures";
 import { startFakeSlack, type FakeSlackIdentity } from "../fakes/slack";
 
 const REPOSITORY = join(import.meta.dir, "..", "..");
@@ -143,6 +145,32 @@ export function runAtTerminal(home: string, args: string[], env: Record<string, 
 }
 
 /**
+ * Runs `toy-box-slack <args>` the way a lead does, with `env` and `PATH` as its whole environment,
+ * and a home folder of its own unless `env` names one. It reads `stdin`, or nothing as in an agent's
+ * shell. Resolves once it exits, with what it printed.
+ */
+export async function runToyBoxSlack(
+  args: string[],
+  env: Record<string, string> = {},
+  stdin?: string,
+) {
+  const child = Bun.spawn([...CLI, ...args], {
+    cwd: REPOSITORY,
+    env: { PATH: process.env.PATH, HOME: createTestFolder(), ...env },
+    stdin: stdin === undefined ? "ignore" : new Blob([stdin]),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  onTestFinished(() => child.kill("SIGKILL"));
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
+/**
  * A fake Slack whose tokens belong to `identity`, or else the fake's own workspace and app, with the
  * channel C-link a linked bridge watches, and the environment that points a bridge at it with both
  * tokens.
@@ -176,6 +204,17 @@ function environment(home: string, env: Record<string, string>) {
     TOY_BOX_SLACK_HOME: join(home, ".toy-box-slack"),
     ...env,
   };
+}
+
+/**
+ * The regular files in `folder` and the folders in it whose bytes hold `part`. Searching bytes finds
+ * a copy in any table, the WAL or a stray file.
+ */
+export function filesHolding(folder: string, part: string | Uint8Array): string[] {
+  return readdirSync(folder, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+    .filter((path) => readFileSync(path).includes(part));
 }
 
 /** Opens the data folder's database for `use` while no bridge holds it. */

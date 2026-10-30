@@ -5,6 +5,7 @@
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { filesHolding } from "./bridgeProcess";
 import { ALICE, BOT, connectedBridge, said, timestamps } from "./connectedBridge";
 
 /** A text file of two pages, each with a key nobody says anywhere else. */
@@ -60,10 +61,8 @@ test("while the link is paused, the lead reads the text file Alice shares a page
 
   expect(await stop()).toEqual({ code: 0, stderr: saying() });
   expect(readdirSync(dirname(path))).toEqual([]);
-  // Searching every file as bytes finds a copy in any table, the WAL or a stray file, so finding
-  // what Alice wrote shows the search sees what the bridge keeps.
-  const holding = (part: string | Buffer) =>
-    regularFiles(dataFolder).filter((found) => readFileSync(found).includes(part));
+  // Finding what Alice wrote shows the search sees what the bridge keeps.
+  const holding = (part: string | Uint8Array) => filesHolding(dataFolder, part);
   expect([asked, "PELICAN-48", "HERON-17", PIXELS].map(holding)).toEqual([
     [join(dataFolder, "bridge.db")],
     [],
@@ -74,11 +73,4 @@ test("while the link is paused, the lead reads the text file Alice shares a page
 
 function modeOf(path: string): number {
   return statSync(path).mode & 0o777;
-}
-
-/** Every regular file in `folder` and the folders in it. */
-function regularFiles(folder: string): string[] {
-  return readdirSync(folder, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name));
 }
