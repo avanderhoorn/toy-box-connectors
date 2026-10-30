@@ -70,4 +70,18 @@ Great code pursues simplicity by placing a rich domain model at the center, deco
 
 ## Releasing
 
-The README's [Publishing](README.md#publishing) section is the release procedure, and only its Publish workflow publishes to npm.
+Only the Publish workflow publishes to npm. To release:
+
+1. Update `package.json` to the next stable version, and add its release notes under a matching `## 📅 vX.Y.Z (date)` heading in `CHANGELOG.md`, saying what changed for owners and anything they must do besides updating. Commit and push.
+1. Run the end-to-end suite and the live check on that commit, as [tests/AGENTS.md](tests/AGENTS.md) describes, since CI runs neither.
+1. Select **Actions → Publish → Run workflow** on the branch.
+
+The workflow reads the version and notes from that exact commit, rejects an already published npm version, runs checks and tests, and builds the Apple silicon macOS CLI. It publishes the tested package through npm trusted publishing, then creates the matching GitHub tag and release with the changelog notes and npm tarball attached. No npm token or separately entered release version is needed.
+
+npm accepts that publish only from the package's trusted publisher, and the package has none yet because 0.1.0 was published by hand. Before the first release from the workflow, a maintainer with 2FA adds it from a terminal signed in to npm, with `--allow-publish` since a new trusted publisher can only stage a publish by default. Then run the workflow within 2 days, since npm expires a trusted publisher that hasn't published by then.
+
+```sh
+npm trust github @avanderhoorn/toy-box-slack --repo avanderhoorn/toy-box-connectors --file publish.yml --allow-publish
+```
+
+If a run fails before npm publication, fix the failure and rerun. If npm succeeds but GitHub release creation fails, recover the tarball from npm with `npm pack @avanderhoorn/toy-box-slack@X.Y.Z --ignore-scripts`, verify its registry integrity, and use that tarball and the original commit's changelog notes to finish the GitHub release manually. Do not rebuild or republish the same npm version.
