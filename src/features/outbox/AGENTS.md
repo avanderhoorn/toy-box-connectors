@@ -33,7 +33,9 @@ moves on when Slack refuses one, such as a second 👀 on a message.
 
 Queueing a reply calls the request model's `beginAnswer` in the same transaction. Proven
 delivery calls `confirmAnswer`. Only a definite refusal can return it to seen and replace
-the payload on that same failed row. Late results settle only their matching attempt.
+the payload on that same failed row. When link or resume approves a wider audience, every
+item the link holds queued fails that way, while one sending or unknown stays.
+Late results settle only their matching attempt.
 Retraction deletes one confirmed post and keeps the original reservation. Unlink deletes
 the link's local state rather than leaving an orphan-cleanup subsystem.
 

@@ -12,7 +12,7 @@ It runs as one local bridge beside Toy Box on your Mac. Only the bridge holds th
 - **Release notes and digests:** Optional routines publish release notes in the Slack channel, and bring a digest of what people said there back to the Toy Box channel.
 - **Several leads:** One bridge hosts several Slack apps, so leads that share a Slack channel each answer as their own bot.
 - **Keeps little:** By default the bridge keeps only what allowed people say and the threads they ask in, and it forgets any Slack text 30 days after it last changed.
-- **Stops when the channel changes:** If the channel is shared outside your organization, made public or archived, or the app is removed from it, the bridge suspends the link for you to review.
+- **Stops when the channel changes:** If the channel is shared outside your organization, made public or archived, or the app is removed from it, the bridge suspends the link for you to review. When you resume a link more people can read, what the lead wrote for fewer doesn't post, and the lead answers again.
 
 It doesn't support DMs, attachments, Slack Connect, org-wide installs, rotating tokens, or Codex and Claude Code leads.
 

@@ -74,3 +74,38 @@ export function presentLink(
 - What asks the lead: an allowed person ${asks}.
 - What the lead reads: ${reads}.`;
 }
+
+/** A post the lead queued, as an answer to the owner names it. */
+export type QueuedPost = {
+  number: number;
+  kind: "reply" | "publication";
+  requestId: number | null;
+  series: string | null;
+};
+
+/**
+ * Which posts won't go out, since more people can read `channel` than when the lead wrote them, and
+ * which requests, `returned`, the lead gets back to answer again.
+ */
+export function presentDropped(
+  dropped: readonly QueuedPost[],
+  returned: readonly number[],
+  channel: string,
+): string {
+  const wrote = `More people can read ${channel} than when the lead wrote`;
+  const back = returned.length
+    ? `The lead gets ${new Intl.ListFormat("en").format(returned.map((id) => `r${id}`))} back to answer again.`
+    : null;
+  const [post, ...others] = dropped;
+  if (post !== undefined && others.length === 0) {
+    return [`${wrote} ${described(post)}, so it won't post.`, back].filter(Boolean).join(" ");
+  }
+  const list = dropped.map((queued) => `- ${described(queued)}`).join("\n");
+  return [`${wrote} these, so they won't post:\n\n${list}`, back].filter(Boolean).join("\n\n");
+}
+
+function described({ number, kind, requestId, series }: QueuedPost): string {
+  return kind === "reply"
+    ? `o${number}, its answer to r${requestId}`
+    : `o${number}, its ${series} publication`;
+}

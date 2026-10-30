@@ -8,7 +8,8 @@ import type { Installation } from "@slackapi/model/installation";
 // org-shared only inside the installation's own Enterprise org, with its workspaces listed.
 // Linking or resuming keeps the channel's audience on the link as the owner approved it. Every
 // later read is judged against that, never against the read before it, so a refresh nobody
-// compared can't absorb a widening. Narrowing never needs the owner.
+// compared can't absorb a widening. Narrowing never needs the owner. What the lead wrote for the
+// audience the owner approved never posts to a wider one they approve later.
 
 /** Who can read a channel, as the owner approves it and a link keeps it. */
 export type Audience = {
@@ -108,7 +109,7 @@ function audienceProblem(
  * How a channel's audience now is wider than the one the owner approved, or null: shared with
  * another organization or about to be, private made public, or a workspace the approved set lacks.
  */
-function widening(approved: Audience, current: Audience): Widening | null {
+export function widening(approved: Audience, current: Audience): Widening | null {
   if (current.external) return "channel_external";
   if (approved.kind === "private" && current.kind === "public") return "channel_made_public";
   if (current.workspaces.some((team) => !approved.workspaces.includes(team))) {

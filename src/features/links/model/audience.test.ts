@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ChannelFacts } from "@slackapi/model/channels";
 import { channelFacts as facts } from "@slackapi/model/testFixtures";
-import { approvableAudience, judgeChannel, type Audience } from "./audience";
+import { approvableAudience, judgeChannel, widening, type Audience } from "./audience";
 import { privateAudience } from "./testFixtures";
 
 const home = { teamId: "T-home", enterpriseId: "E-org" };
@@ -58,5 +58,29 @@ describe("judging a fresh read of a linked channel", () => {
   ] as const)("%s suspends the link as %s", (_, reason, audience, changes) => {
     const verdict = judgeChannel(audience, changes && facts(changes), home);
     expect(verdict).toEqual({ kind: "suspended", reason });
+  });
+});
+
+describe("comparing an audience with the one the owner approved before it", () => {
+  test.each([
+    ["a private channel made public", "channel_made_public", approved, { kind: "public" }],
+    ["a share with another organization", "channel_external", approved, { external: true }],
+    [
+      "another workspace",
+      "workspace_joined",
+      orgAudience,
+      { workspaces: ["T-b", "T-c", "T-home"] },
+    ],
+  ] as const)("%s widens it as %s", (_, reason, before, changes: Partial<Audience>) => {
+    expect(widening(before, { ...before, ...changes })).toBe(reason);
+  });
+
+  test.each([
+    ["the same private audience", approved, {}],
+    ["the same public audience", { ...approved, kind: "public" }, {}],
+    ["a public channel made private", { ...approved, kind: "public" }, { kind: "private" }],
+    ["a workspace fewer", orgAudience, { workspaces: ["T-home"] }],
+  ] as const)("%s doesn't widen it", (_, before: Audience, changes: Partial<Audience>) => {
+    expect(widening(before, { ...before, ...changes })).toBeNull();
   });
 });

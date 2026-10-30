@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
+import { createStoredLink } from "@links/server/testFixtures";
 import { serveRequest } from "@requests/model/lifecycle";
 import { readRequest, saveRequest } from "@requests/server/database";
 import {
+  failQueuedItems,
   forgetOldPosts,
   OutboxRefusedError,
   queuePublication,
@@ -9,6 +11,7 @@ import {
   recoverOutboxAttempts,
   settleOutboxAttempt,
   startOutboxAttempt,
+  type OutboxItem,
 } from "./database";
 import { createOutboxWorld } from "./testFixtures";
 
@@ -99,6 +102,45 @@ test("a definite refusal can reuse only its own row, after inbox clears reply_fa
   });
   await world.database.write((tx) => tx`DELETE FROM links WHERE id = 'link'`);
   expect(await world.read(item.id)).toBeNull();
+});
+
+test("failing what a link holds queued keeps what may have posted, and gives requests back", async () => {
+  const world = await createOutboxWorld();
+  const { database, now } = world;
+  const publish = (linkId: string, daysAgo: number) => {
+    const slot = { linkId, series: "release-notes", scheduledAt: now() - daysAgo * 86_400_000 };
+    return database.write((tx) => queuePublication(tx, { ...slot, text: "Notes" }, now()));
+  };
+  const start = async (item: OutboxItem) => {
+    if (!(await database.write((tx) => startOutboxAttempt(tx, item, now()))))
+      throw new Error("Expected an attempt");
+  };
+  const unknown = await publish("link", 2);
+  await start(unknown);
+  await database.write((tx) => recoverOutboxAttempts(tx, now()));
+  const sending = await publish("link", 1);
+  await start(sending);
+  await createStoredLink(database, "other");
+  const elsewhere = await publish("other", 0);
+  const reply = await world.queue();
+  const publication = await publish("link", 0);
+
+  const failed = await database.write((tx) =>
+    failQueuedItems(tx, "link", "audience_widened", now()),
+  );
+
+  expect(failed).toMatchObject([
+    { id: reply.id, state: "failed", error: "audience_widened" },
+    { id: publication.id, state: "failed", error: "audience_widened" },
+  ]);
+  expect(failed).toHaveLength(2);
+  expect(await database.read((sql) => readRequest(sql, world.request.id))).toMatchObject({
+    state: "seen",
+    attention: "reply_failed",
+  });
+  expect(await world.read(unknown.id)).toMatchObject({ state: "delivery_unknown" });
+  expect(await world.read(sending.id)).toMatchObject({ state: "sending" });
+  expect(await world.read(elsewhere.id)).toMatchObject({ state: "queued" });
 });
 
 test("a post forgets what it said a month after it last changed, unless it may still go out", async () => {

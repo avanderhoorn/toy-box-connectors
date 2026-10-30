@@ -63,6 +63,13 @@ says why and what ends it. The owner must fix the cause before resuming. A
 new Slack channel ID instead requires unlinking the old link and linking the
 new ID. Do not edit the database to bypass an audience or policy refusal.
 
+When more people can read the channel than the owner approved before, as
+after it was made public, resume or link approves that audience and drops
+what the link held, paused or suspended. Replies and publications the lead
+wrote for fewer readers fail instead of posting, the answer names each, and
+the lead gets their requests back to answer again. A post already sending,
+or whose delivery is uncertain, may have posted, so it stays.
+
 Channel audience is checked at link, at resume and before every post, not
 at startup or before catch-up. If a share or privacy-change event was missed
 offline, the audience comparison waits until a later fresh check.

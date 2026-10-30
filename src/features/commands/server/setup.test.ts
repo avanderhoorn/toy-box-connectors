@@ -2,9 +2,12 @@ import { expect, onTestFinished, test } from "bun:test";
 import { createStoredMessage } from "@activity/server/testFixtures";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
-import { suspendLink } from "@links/server/status";
+import { pauseLink, suspendLink } from "@links/server/status";
 import { countRows, createStoredLink, fillEveryTable } from "@links/server/testFixtures";
+import { queuePublication, queueReply } from "@outbox/server/database";
 import { createOutboxWorld } from "@outbox/server/testFixtures";
+import { readRequest } from "@requests/server/database";
+import { cancelStoredRequest } from "@requests/server/lifecycle";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { askMessage } from "@slackapi/model/testFixtures";
 import type { BotClient } from "@slackapi/server/botClient";
@@ -191,4 +194,79 @@ test("a Slack channel linked to another Toy Box channel is refused, saying anoth
   expect(await refusal(link("releases"))).toBe(
     "#fake-channel is linked to another Toy Box channel through the releases app. Unlink it there, or link this one through another app with `--app`.",
   );
+});
+
+/** Resume for the stored link, reaching Slack and Toy Box, while it holds r1's answer and a publication. */
+async function resuming() {
+  const world = await createOutboxWorld();
+  const { database, bot, now } = world;
+  const toyBox = startFakeToyBox();
+  onTestFinished(() => toyBox.stop());
+  const channelId = toyBox.addChannel();
+  await database.write(
+    (transaction) => transaction`UPDATE links SET toybox_channel_id = ${channelId}`,
+  );
+  const reply = await world.queue();
+  const slot = { linkId: "link", series: "release-notes", scheduledAt: now(), text: "Notes" };
+  const publication = await database.write((transaction) =>
+    queuePublication(transaction, slot, now()),
+  );
+  const resume = resumeCommand({ database, bot, toyBoxOrigin: new URL(toyBox.url) });
+  return {
+    ...world,
+    held: [reply, publication],
+    resume: () => resume({}, { channelId, at: now() }),
+  };
+}
+
+test("resume fails what its link held once more people can read the channel, and gives the lead back each request still waiting", async () => {
+  const { database, slack, request, now, read, held, resume } = await resuming();
+  // r2's requester was denied while its answer was held, so the lead doesn't get r2 back.
+  const denied = await createStoredRequest(database, {
+    state: "seen",
+    rootTs: "1700000100.000300",
+    sourceTs: "1700000100.000300",
+  });
+  const late = await database.write(async (transaction) => {
+    const queued = await queueReply(transaction, { requestId: denied.id, text: "Late." }, now());
+    const asked = await readRequest(transaction, denied.id);
+    await cancelStoredRequest(transaction, asked!, "requester_denied");
+    await suspendLink(transaction, "link", "channel_made_public", now());
+    return queued;
+  });
+  slack.addChannel({ id: "C-link", is_private: false });
+
+  const answer = await resume();
+
+  expect(answer.result).toMatchObject({ status: "active", dropped: ["o1", "o2", "o3"] });
+  expect(answer.text).toEndWith(
+    "More people can read #fake-channel than when the lead wrote these, so they won't post:\n\n- o1, its answer to r1\n- o2, its release-notes publication\n- o3, its answer to r2\n\nThe lead gets r1 back to answer again.",
+  );
+  for (const item of [...held, late]) {
+    expect(await read(item.id)).toMatchObject({ state: "failed", error: "audience_widened" });
+  }
+  expect(await database.read((sql) => readRequest(sql, request.id))).toMatchObject({
+    state: "seen",
+    attention: "reply_failed",
+  });
+});
+
+test("resume judges the channel against the audience the owner approved, so one made public while paused fails what the link held", async () => {
+  const { database, slack, read, held, resume } = await resuming();
+  await database.write((transaction) => pauseLink(transaction, "link", 0));
+  slack.addChannel({ id: "C-link", is_private: false });
+
+  expect((await resume()).result).toMatchObject({ dropped: ["o1", "o2"] });
+  for (const item of held) expect(await read(item.id)).toMatchObject({ state: "failed" });
+});
+
+test("resume posts what a paused link held when no more people can read the channel", async () => {
+  const { database, read, held, resume } = await resuming();
+  await database.write((transaction) => pauseLink(transaction, "link", 0));
+
+  const answer = await resume();
+
+  expect(answer.result).toMatchObject({ status: "active", dropped: [] });
+  expect(answer.text).not.toContain("won't post");
+  for (const item of held) expect(await read(item.id)).toMatchObject({ state: "queued" });
 });

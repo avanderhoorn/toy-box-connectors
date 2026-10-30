@@ -9,13 +9,14 @@ import {
   admissionRefusal,
   approvalRefusal,
   presentAllowed,
+  presentDropped,
   presentLink,
 } from "@commands/model/setup";
 import { channelName, personName, toyBoxChannelName } from "@commands/model/slackText";
 import { presentLinkState } from "@commands/model/status";
 import { count } from "@commands/model/wording";
 import { admissionProblem } from "@links/model/admission";
-import { approvableAudience } from "@links/model/audience";
+import { approvableAudience, widening } from "@links/model/audience";
 import { suspensions } from "@links/model/status";
 import {
   allowPerson,
@@ -25,6 +26,7 @@ import {
   type ChannelLink,
 } from "@links/server/database";
 import { approveLink, deleteLink, pauseLink } from "@links/server/status";
+import { failQueuedItems } from "@outbox/server/database";
 import { deleteLinkRequests, readActiveRequests } from "@requests/server/database";
 import { cancelStoredRequest } from "@requests/server/lifecycle";
 import type { WebClient } from "@slack/web-api";
@@ -158,8 +160,9 @@ export function denyCommand({ database }: SetupCommandOptions): CommandHandler<"
 /**
  * Links the caller's Toy Box channel to `slackChannelId` and makes the link active, with the
  * settings `wanted` names, else the link's own, and the channel's audience as Slack says it is now.
- * A link Slack moved is refused before Toy Box or Slack is asked, and again as it writes, since
- * Slack can move it while they're asked.
+ * When more people can read the channel than the owner approved before, what the link holds
+ * queued fails, since the lead wrote it for fewer. A link Slack moved is refused before Toy Box or
+ * Slack is asked, and again as it writes, since Slack can move it while they're asked.
  */
 async function linkChannel(
   options: SetupCommandOptions,
@@ -198,12 +201,32 @@ async function linkChannel(
     const requestMode = wanted.requestMode ?? link?.requestMode ?? "mention";
     const observe = wanted.observe ?? link?.observe ?? "requesters";
     const settings = { requestMode, observe };
+    const held =
+      link && widening(link.approved, approved) ? await dropHeld(transaction, link.id, at) : null;
     await approveLink(transaction, { toyBoxChannelId, slackChannelId, ...settings, approved }, at);
+    const linked = presentLink(toyBox, channel, approved, settings, app);
     return {
-      result: { slackChannel: slackChannelId, status: "active", ...settings },
-      text: presentLink(toyBox, channel, approved, settings, app),
+      result: {
+        slackChannel: slackChannelId,
+        status: "active",
+        ...settings,
+        dropped: held?.dropped.map(({ number }) => `o${number}`) ?? [],
+      },
+      text: held?.dropped.length
+        ? `${linked}\n\n${presentDropped(held.dropped, held.returned, channel)}`
+        : linked,
     };
   });
+}
+
+/** Fails what the link holds queued, and finds the requests whose answers went back to the lead. */
+async function dropHeld(transaction: Bun.SQL, linkId: string, at: number) {
+  const dropped = await failQueuedItems(transaction, linkId, "audience_widened", at);
+  const waiting = new Set((await readActiveRequests(transaction, linkId)).map(({ id }) => id));
+  const returned = dropped.flatMap(({ requestId }) =>
+    requestId !== null && waiting.has(requestId) ? [requestId] : [],
+  );
+  return { dropped, returned };
 }
 
 /** Refuses a link Slack gave a new channel ID, which only unlink and a new link end. */

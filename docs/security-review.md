@@ -104,7 +104,11 @@ refresh. Link and resume refuse archived channels. External sharing, a widened
 audience, private-to-public conversion,
 archive, a new channel ID, bot removal or an applicable policy refusal suspends
 the link. A failed fresh read does not authorize sending. These checks cannot
-make a send atomic with Slack's next channel change.
+make a send atomic with Slack's next channel change. When link or resume
+approves a wider audience than before, the replies and publications the link
+held queued fail in that transaction rather than post to readers the lead
+didn't write for, and their requests return to the lead. A post already
+sending, or whose delivery is unknown, stays, since it may have posted.
 
 There is no audience refresh at startup or before catch-up. A change missed
 while offline can let text from a changed channel enter the ledger and model
