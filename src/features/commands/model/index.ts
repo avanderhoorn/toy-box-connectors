@@ -29,6 +29,13 @@ export const postReferenceSchema = z
   .transform((reference) => Number(reference.slice(1)))
   .describe("The post, such as o31");
 
+/** A shared file as inbox or activity listed it, such as f12, which the bridge reads as its number. */
+const fileReferenceSchema = z
+  .string()
+  .regex(/^f[1-9][0-9]{0,14}$/, "Write it as inbox or activity listed it, such as f12")
+  .transform((reference) => Number(reference.slice(1)))
+  .describe("The file, such as f12");
+
 /** A Slack thread named by its request, such as r14, or by the lead's post it's under, such as o31. */
 const threadReferenceSchema = z
   .string()
@@ -130,6 +137,23 @@ export const commands = {
         through: z.coerce.number().int().min(1).describe("The change activity named, such as 57"),
       })
       .strict(),
+  },
+  file: {
+    description:
+      "Read a text file or image someone shared in Slack, as inbox or activity listed it",
+    callers: ["lead"],
+    input: z
+      .object({
+        file: fileReferenceSchema,
+        page: z.coerce
+          .number()
+          .int()
+          .min(1)
+          .default(1)
+          .describe("The page of a text file to read, 1 unless set"),
+      })
+      .strict(),
+    positionals: ["file"],
   },
   publish: {
     description:

@@ -15,6 +15,7 @@ import type { ClaimSlackApp } from "@bridge/model/claims";
 import { unconfiguredSlack, type SlackState } from "@commands/model/status";
 import { activityCommand, markReadCommand } from "@commands/server/activity";
 import { dismissCommand } from "@commands/server/dismiss";
+import { fileCommand } from "@commands/server/file";
 import { inboxCommand } from "@commands/server/inbox";
 import { postCommand, publishCommand, replyCommand, retractCommand } from "@commands/server/posts";
 import type { ServedApp } from "@commands/server/serve";
@@ -26,6 +27,7 @@ import {
   resumeCommand,
   unlinkCommand,
 } from "@commands/server/setup";
+import type { ViewingFolder } from "@files/server/viewing";
 import { startOutboxWorker, type OutboxWorker } from "@outbox/server";
 import { recoverOutboxAttempts } from "@outbox/server/database";
 import { createBotClient, type BotClient } from "@slackapi/server/botClient";
@@ -61,7 +63,11 @@ export interface HostedApp {
 export async function openApp(
   app: App,
   tokens: AppTokens,
-  { settings, onError }: { settings: BridgeSettings; onError: (error: unknown) => void },
+  {
+    settings,
+    viewing,
+    onError,
+  }: { settings: BridgeSettings; viewing: ViewingFolder; onError: (error: unknown) => void },
 ): Promise<HostedApp> {
   const log = app.name === DEFAULT_APP ? bridgeLog : labeledLog(app.name);
   const database = await openBridgeDatabase(app.database);
@@ -136,6 +142,7 @@ export async function openApp(
         reply: replyCommand({ database, outbox }),
         activity: activityCommand({ database, workspaceUrl }),
         "mark-read": markReadCommand({ database }),
+        file: fileCommand({ database, bot, viewing }),
         publish: publishCommand({
           database,
           routines: async (channelId) =>

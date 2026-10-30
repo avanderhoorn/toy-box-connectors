@@ -47,6 +47,15 @@ export function personName(name: string | null | undefined, userId: string): str
   return shown || oneLine(userId.replace(labelMarks, " "), NAME_LIMIT);
 }
 
+/**
+ * A file's name, safe to quote at the end of a line the bridge writes, or null when it has none to
+ * show. Every quotation mark becomes ', so the name can't close its quotes. Its brackets stay,
+ * since nothing the bridge adds follows it.
+ */
+export function fileName(name: string | null): string | null {
+  return oneLine((name ?? "").replace(/\p{Quotation_Mark}/gu, "'"), NAME_LIMIT) || null;
+}
+
 /** A channel as #name, or by its ID when the bridge has no name. */
 export function channelName(name: string | null | undefined, channelId: string): string {
   return `#${oneLine(name || channelId, NAME_LIMIT)}`;
@@ -119,7 +128,8 @@ function link(url: string, label: string): string {
   return `${label} (${opened})`;
 }
 
-function neutralizeMentions(text: string): string {
+/** `text` with a zero-width space after every @ Toy Box would read as a mention. */
+export function neutralizeMentions(text: string): string {
   return text.replace(mentionPattern, "$1@\u200b");
 }
 

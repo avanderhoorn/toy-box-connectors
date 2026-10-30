@@ -28,6 +28,17 @@ export type StoredVersion = {
   mentionedBot: boolean;
 };
 
+/** A file a kept message shares, under the number the lead reads it by. */
+export type SharedFile = {
+  /** The file's number, which the lead writes as f12. */
+  id: number;
+  /** The message that shares it. */
+  ts: SlackTs;
+  /** Whoever wrote the message, or null when Slack named no one. */
+  sharerId: string | null;
+  file: SlackFile;
+};
+
 type Applied = Exclude<MergeDecision, { kind: "ignore" }>;
 
 type MessageRow = {
@@ -35,6 +46,19 @@ type MessageRow = {
   deleted: number;
   content_hash: string | null;
   mentions_bot: number;
+};
+
+type SharedFileRow = {
+  id: number;
+  ts: SlackTs;
+  sharerId: string | null;
+  fileId: string;
+  whole: number;
+  name: string | null;
+  mimeType: string | null;
+  mode: string | null;
+  size: number | null;
+  uploaderId: string | null;
 };
 
 /**
@@ -209,6 +233,60 @@ function fileColumns(file: SlackFile): Record<string, string | number | null> {
     mode: file.mode,
     size: file.size,
     uploader_id: file.uploaderId,
+  };
+}
+
+/** The files the messages at `tsList` in `channelId` share, in the order the ledger stored them. */
+export async function readSharedFiles(
+  sql: Bun.SQL,
+  channelId: string,
+  tsList: readonly SlackTs[],
+): Promise<SharedFile[]> {
+  const rows = await sql<SharedFileRow[]>`
+    ${selectSharedFiles(sql)}
+    WHERE f.channel_id = ${channelId} AND f.ts IN ${sql(tsList)}
+    ORDER BY f.id
+  `;
+  return rows.map(sharedFile);
+}
+
+/** File `id` of `channelId`, or null when no message there shares it now. */
+export async function readSharedFile(
+  sql: Bun.SQL,
+  channelId: string,
+  id: number,
+): Promise<SharedFile | null> {
+  const [row] = await sql<SharedFileRow[]>`
+    ${selectSharedFiles(sql)} WHERE f.channel_id = ${channelId} AND f.id = ${id}
+  `;
+  return row ? sharedFile(row) : null;
+}
+
+function selectSharedFiles(sql: Bun.SQL) {
+  return sql`
+    SELECT f.id, f.ts, m.user_id AS sharerId, f.file_id AS fileId, f.whole, f.name,
+      f.mime_type AS mimeType, f.mode, f.size, f.uploader_id AS uploaderId
+    FROM message_files f JOIN messages m ON m.channel_id = f.channel_id AND m.ts = f.ts
+  `;
+}
+
+function sharedFile({ id, ts, sharerId, fileId, whole, ...columns }: SharedFileRow): SharedFile {
+  if (whole === 0) return { id, ts, sharerId, file: { id: fileId, whole: false } };
+  // message_files holds every column of a whole file but its name.
+  const { name, mimeType, mode, size, uploaderId } = columns;
+  return {
+    id,
+    ts,
+    sharerId,
+    file: {
+      id: fileId,
+      whole: true,
+      name,
+      mimeType: mimeType!,
+      mode: mode!,
+      size: size!,
+      uploaderId: uploaderId!,
+    },
   };
 }
 

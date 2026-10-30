@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
+import { createStoredMessage } from "@activity/server/testFixtures";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { failQueuedItem, queueReply } from "@outbox/server/database";
 import { dismissRequest, serveRequest } from "@requests/model/lifecycle";
 import { saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
+import { askMessage, sharedFile } from "@slackapi/model/testFixtures";
 import { inboxCommand } from "./inbox";
 
 const LEAD = { channelId: "toybox-link" };
@@ -81,6 +83,41 @@ test("says why each request's reply didn't post", async () => {
     requests: [
       { id: 1, attention: "reply_failed", replyError: "audience_widened" },
       { id: 2, attention: "reply_failed", replyError: "invalid_blocks" },
+    ],
+  });
+});
+
+test("lists the files each message shares in the order it shares them, and why the lead can't read one", async () => {
+  const database = await openTestDatabase();
+  await createStoredLink(database);
+  await database.write(
+    (transaction) =>
+      transaction`INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-owner', 0)`,
+  );
+  const notes = sharedFile("F-notes", { name: "notes.txt", mimeType: "text/plain", size: 2_048 });
+  const forwarded = sharedFile("F-shot", { uploaderId: "U-mallory" });
+  await createStoredMessage(database, askMessage(undefined, { files: [notes, forwarded] }));
+  await createStoredRequest(database);
+  const inbox = inboxCommand({ database, workspaceUrl: () => null });
+
+  const { result } = await inbox({ limit: 10 }, { ...LEAD, at: 1_000 });
+
+  expect(result).toMatchObject({
+    requests: [
+      {
+        messages: [
+          {
+            files: [
+              { reference: "f1", format: "text", size: 2_048, name: "notes.txt" },
+              {
+                reason: "whoever uploaded it isn't on the allowlist",
+                size: 412_000,
+                name: "build-error.png",
+              },
+            ],
+          },
+        ],
+      },
     ],
   });
 });

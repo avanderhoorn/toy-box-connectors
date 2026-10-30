@@ -8,7 +8,7 @@
 // message that describes a file only by its ID leaves the rest to files.info, which file asks.
 
 import { MIMEType } from "node:util";
-import type { SlackFile } from "@slackapi/model/files";
+import type { SlackFile, WholeFile } from "@slackapi/model/files";
 import type { ImageFormat } from "./images";
 
 /** How the bridge reads a file: as text, or as the image its type names. */
@@ -19,6 +19,10 @@ export type FileVerdict =
   /** Only files.info can say, since the message gave just the file's ID. */
   | { kind: "unsettled" }
   | { kind: "refused"; reason: string };
+/** Whether the lead may read a file the bridge has a whole description of. */
+export type SettledVerdict = Exclude<FileVerdict, { kind: "unsettled" }>;
+/** Whether someone is on the allowlist now, by any of their Slack IDs. */
+export type Allowed = (userId: string) => boolean;
 
 const textCap = 1024 ** 2;
 const imageCap = 10 * 1024 ** 2;
@@ -30,15 +34,18 @@ const textTypes: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Whether the lead may read `file`, which `sharerId` shared. `allowed` says whether someone is on
- * the allowlist now, by any of their Slack IDs.
+ * Whether the lead may read `file`, which `sharerId` shared, or a message that named no one when
+ * it's null.
  */
 export function judgeFile(
-  file: SlackFile,
-  sharerId: string,
-  allowed: (userId: string) => boolean,
-): FileVerdict {
-  if (!allowed(sharerId)) return refused("whoever shared it isn't on the allowlist");
+  file: WholeFile,
+  sharerId: string | null,
+  allowed: Allowed,
+): SettledVerdict;
+export function judgeFile(file: SlackFile, sharerId: string | null, allowed: Allowed): FileVerdict;
+export function judgeFile(file: SlackFile, sharerId: string | null, allowed: Allowed): FileVerdict {
+  if (sharerId === null || !allowed(sharerId))
+    return refused("whoever shared it isn't on the allowlist");
   if (!file.whole) return { kind: "unsettled" };
   if (!allowed(file.uploaderId)) return refused("whoever uploaded it isn't on the allowlist");
   if (file.mode === "external") return refused("it's stored outside Slack");
@@ -47,9 +54,9 @@ export function judgeFile(
   const format = file.mode === "hosted" || file.mode === "snippet" ? formatOf(type) : null;
   if (!format) return refused("the bridge reads only text, PNG and JPEG");
   if (format === "text" && file.size > textCap)
-    return refused("it's over 1 MiB, more text than the bridge reads");
+    return refused("it's over 1 MB, more text than the bridge reads");
   if (format !== "text" && file.size > imageCap)
-    return refused("it's over 10 MiB, more than you can view, so ask for a crop or a JPEG");
+    return refused("it's over 10 MB, more than you can view, so ask for a crop or a JPEG");
   return { kind: "readable", format };
 }
 

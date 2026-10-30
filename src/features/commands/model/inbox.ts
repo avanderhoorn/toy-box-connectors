@@ -5,6 +5,7 @@
 import type { AuthorRole } from "@activity/model/ledger";
 import type { RequestAttention, RequestState } from "@requests/model/lifecycle";
 import { isPending } from "@wakes/model";
+import { presentListedFile, type ListedFile } from "./file";
 import { fenceFor } from "./slackText";
 import { ago, count } from "./wording";
 
@@ -25,6 +26,8 @@ export type InboxMessage = {
   text: string;
   /** How many characters were cut from its end. */
   cut: number;
+  /** The files it shares, in the order the ledger stored them. */
+  files: ListedFile[];
 };
 
 export type InboxRequest = {
@@ -143,12 +146,23 @@ const roleLabels: Record<AuthorRole, string | null> = {
   self: "you",
 };
 
-/** A message in a fence labeled with its author, and whether they're on the allowlist. */
-export function presentMessage({ author, role, edited, text, cut }: InboxMessage): string {
-  if (text.trim() === "") return `A message from ${author.name} has no text.`;
+/**
+ * A message in a fence labeled with its author, and whether they're on the allowlist, then the
+ * files it shares.
+ */
+export function presentMessage({ author, role, edited, text, cut, files }: InboxMessage): string {
+  const listed = files.map(presentListedFile);
+  if (text.trim() === "") {
+    const textless = `A message from ${author.name} has no text`;
+    if (files.length === 0) return `${textless}.`;
+    return [`${textless}, only ${count(files.length, "file")}:`, ...listed].join("\n");
+  }
   const labels = [roleLabels[role], edited ? "edited" : null].filter((label) => label !== null);
   const fence = fenceFor(text);
-  const message = `${fence}slack from ${author.name}${labels.length ? ` (${labels.join(", ")})` : ""}\n${text}\n${fence}`;
-  if (cut === 0) return message;
-  return `${message}\nThis message goes on for ${count(cut, "more character")}, left out here.`;
+  const label = labels.length ? ` (${labels.join(", ")})` : "";
+  const lines = [`${fence}slack from ${author.name}${label}`, text, fence];
+  if (cut > 0)
+    lines.push(`This message goes on for ${count(cut, "more character")}, left out here.`);
+  if (files.length > 0) lines.push(`It shares ${count(files.length, "file")}:`, ...listed);
+  return lines.join("\n");
 }

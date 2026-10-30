@@ -17,7 +17,7 @@
 // so a login job starts it afresh and an owner at a terminal sees why it
 // stopped.
 
-import { join } from "node:path";
+import { resolve } from "node:path";
 import { claimSlackApp, recordedHolders, type ClaimSlackApp } from "@bridge/model/claims";
 import { askForMissingCredentials } from "@commands/client/firstRun";
 import { installSkill } from "@commands/client/skill";
@@ -97,9 +97,9 @@ export async function startBridge(
 
   try {
     for (const { app } of listed) locks.push(await acquireBridgeLock(app.lock));
-    viewing = openViewingFolder(join(dataFolder, "viewing"), failure.resolve);
+    viewing = openViewingFolder(resolve(dataFolder, "viewing"), failure.resolve);
     for (const { app, tokens } of listed) {
-      apps.push(await openApp(app, tokens, { settings, onError: failure.resolve }));
+      apps.push(await openApp(app, tokens, { settings, viewing, onError: failure.resolve }));
     }
     const claims = slackAppClaims(apps);
     const nameApps = apps.length > 1;

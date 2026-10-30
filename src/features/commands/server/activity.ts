@@ -9,7 +9,7 @@ import { CommandRefusedError } from "@commands/model/protocol";
 import { permalink } from "@commands/model/slackText";
 import { findPostThreads } from "@outbox/server/threads";
 import { compareTs } from "@slackapi/model/ts";
-import { messageFromRow, readPersonNames, type MessageRow } from "./inbox";
+import { messageFromRow, readListedFiles, readPersonNames, type MessageRow } from "./inbox";
 import { readCallerLink } from "./link";
 import type { CommandHandler } from "./serve";
 
@@ -49,6 +49,7 @@ export function activityCommand({
         ON CONFLICT (link_id) DO UPDATE SET served_through_seq = excluded.served_through_seq
       `;
       const names = await readPersonNames(transaction, page);
+      const files = await readListedFiles(transaction, link, page);
       const url = workspaceUrl();
       const threads = new Map<string, ActivityThread>();
       const postable = await findPostThreads(transaction, link, [
@@ -64,7 +65,7 @@ export function activityCommand({
           messages: [],
         };
         threads.set(rootTs, thread);
-        thread.messages.push(messageFromRow(message, names));
+        thread.messages.push(messageFromRow(message, names, files));
       }
       return { ...empty, threads: [...threads.values()], more: unread.length - page.length };
     });

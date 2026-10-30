@@ -5,7 +5,7 @@ import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { createStoredOutboxItem } from "@outbox/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
-import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
+import { askMessage, editMessage, replyMessage, sharedFile } from "@slackapi/model/testFixtures";
 import { activityCommand, markReadCommand } from "./activity";
 import { refusal } from "./testFixtures";
 
@@ -15,9 +15,12 @@ test("serves the messages that changed after the cursor a page at a time, and ma
   const database = await openTestDatabase();
   await createStoredLink(database);
   await createStoredLink(database, "other");
-  const elsewhere = askMessage(undefined, { channelId: "C-other" });
+  await database.write(
+    (tx) => tx`INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', 'U-owner', 0)`,
+  );
+  const elsewhere = askMessage(undefined, { channelId: "C-other", files: [sharedFile("F0")] });
   await createStoredMessage(database, elsewhere);
-  const ask = askMessage();
+  const ask = askMessage(undefined, { files: [sharedFile("F1")] });
   for (const message of [
     ask,
     replyMessage(ask, "1700000200.000100", { userId: "U-carol" }),
@@ -37,7 +40,7 @@ test("serves the messages that changed after the cursor a page at a time, and ma
     [
       "Here's what changed in #C-link since you last marked it read.",
       "### Thread started 2 hours ago\nhttps://acme.slack.com/archives/C-link/p1700000100000100",
-      "```slack from U-owner (edited)\nCan you look at prod instead?\n```",
+      '```slack from U-owner (edited)\nCan you look at prod instead?\n```\nIt shares 1 file:\n- f2, PNG, 402 KB, read it with `toy-box-slack file f2`: "build-error.png"',
       "```slack from Toy (you)\nOn it.\n```",
       "Once you've read these, run `toy-box-slack mark-read --through 5`. Then run activity again for 2 more messages.",
     ].join("\n\n"),

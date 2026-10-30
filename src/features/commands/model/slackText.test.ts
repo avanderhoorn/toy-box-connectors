@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   channelName,
   cutText,
+  fileName,
   oneLine,
   personName,
   renderSlackText,
@@ -120,6 +121,13 @@ describe("personName", () => {
     expect(personName("  ", "U0DAVE")).toBe("U0DAVE");
     expect(personName("()", "U0DAVE")).toBe("U0DAVE");
   });
+});
+
+test("a file's name can't close the quotes it's shown in, and is null when nothing's left of it", () => {
+  expect(fileName('a "b" “c” «d» `e`')).toBe("a 'b' 'c' 'd' 'e'");
+  expect(fileName("notes\n.txt")).toBe("notes .txt");
+  expect(fileName(" \n")).toBe(null);
+  expect(fileName(null)).toBe(null);
 });
 
 describe("channel labels", () => {
