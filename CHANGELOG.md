@@ -1,3 +1,11 @@
+## 📅 v0.4.0 (10/30/26)
+
+- `toy-box-slack file` lets the lead read the text files and PNG or JPEG screenshots that people on the allowlist share, when an answer depends on them. Inbox and activity list each message's files, and say why the lead can't read one, such as a PDF
+- The bridge asks Slack about a file and downloads it only when the lead reads it, and only while whoever shared it and whoever uploaded it are on the allowlist. It keeps none of a file's text, and deletes a screenshot about ten minutes after the lead views it
+- For the lead to read files, add the `files:read` bot scope to each app in its **App Manifest** settings and reinstall it as Slack prompts. Until an app has it, `file` says how to add it, and everything else works as before
+- A message stored before the update lists its files once someone edits it
+- Restarting `serve` after updating is all the bridge needs, and leads keep the routines they have. The first start upgrades bridge.db, which 0.3.0 can't open afterward
+
 ## 📅 v0.3.0 (10/30/26)
 
 - `toy-box-slack post` lets the lead post in the linked Slack channel, or in one of its threads, when you ask in Toy Box or a routine says to. When someone asks it to post from Slack, the lead tells you instead. A post still waiting when the link is paused or suspended never goes out, and resume names it so you can ask the lead again
