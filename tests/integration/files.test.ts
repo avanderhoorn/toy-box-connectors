@@ -14,7 +14,7 @@ const NOTES = [
   "The rollback finished with the fallback key HERON-17.",
 ].join("\n");
 const SCREENSHOT = readFileSync(join(import.meta.dir, "..", "fixtures", "build-error.png"));
-/** Compressed pixels from the middle of the screenshot's one IDAT chunk. */
+/** Compressed pixels from inside the screenshot's first IDAT chunk. */
 const PIXELS = SCREENSHOT.subarray(3_000, 3_064);
 
 const [askedTs, shownTs] = timestamps(2);

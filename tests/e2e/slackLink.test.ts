@@ -6,7 +6,7 @@
 // timeout outlasts the harness's deadlines, so a failure names what it waited for.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { FakeSlack } from "../fakes/slack";
@@ -36,6 +36,9 @@ import {
 const RELEASE_NOTES_ROUTINE = skillRoutine("Release notes");
 const DIGEST_ROUTINE = skillRoutine("Slack digest");
 const PURPOSE = `Answer the release team's questions from Slack, publish release notes there, and digest what they say here. Tonight's release ships dark mode and faster search. In your kickoff turn, add ${adding(REQUESTS_ROUTINE)} Then add ${adding(RELEASE_NOTES_ROUTINE)} Then add ${adding(DIGEST_ROUTINE)} Run toy-box-slack only when a routine or the owner asks you to.`;
+const SCREENSHOT = readFileSync(join(import.meta.dir, "..", "fixtures", "build-error.png"));
+/** The runner the screenshot's error names, drawn in its pixels and written nowhere else. */
+const SCREENSHOT_RUNNER = "OSPREY-93";
 
 describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slack", () => {
   let toyBox: IsolatedToyBox;
@@ -145,6 +148,38 @@ describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slac
       expect(seenInSlack(link.slack, askedTs).replies).toBe(2);
     },
     { turns: 2 },
+  );
+
+  scenario(
+    "Alice's question about the log and screenshot she shares gets an answer only they hold",
+    async () => {
+      const [askedTs] = timestamps(1, Date.now());
+      // Each file names a runner nothing else does, and the screenshot names its runner only in its
+      // pixels, so the answer names both only if the lead read the log and viewed the screenshot.
+      const log = link.slack.addFile(
+        "$ bun run deploy --stage canary\nerror: runner PELICAN-48 lost its connection mid-migration\nDeploy 4127 failed.\n",
+        { user: ALICE, name: "deploy.log" },
+      );
+      const screenshot = link.slack.addFile(SCREENSHOT, {
+        user: ALICE,
+        name: "build-error.png",
+        mimetype: "image/png",
+      });
+
+      const ask = `<@${BOT}> which runners should I check before we retry the deploy?`;
+      await channel.turn(() =>
+        link.post(said(ALICE, askedTs, ask, { subtype: "file_share", files: [log, screenshot] })),
+      );
+
+      // The bridge posts the answer once the lead queues it, so the lead's turn can end first.
+      await waitFor(() => expect(seenInSlack(link.slack, askedTs).replies).toBe(1));
+      const [answer] = link.slack
+        .getMessages("C0LINK")
+        .filter((message) => message.thread_ts === askedTs && message.user === BOT);
+      expect(answer.text).toContain("PELICAN-48");
+      expect(answer.text).toContain(SCREENSHOT_RUNNER);
+    },
+    { turns: 1 },
   );
 
   scenario(
