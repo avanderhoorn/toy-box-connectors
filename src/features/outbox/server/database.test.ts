@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readChannelLink } from "@links/server/database";
 import { createStoredLink } from "@links/server/testFixtures";
 import { serveRequest } from "@requests/model/lifecycle";
 import { readRequest, saveRequest } from "@requests/server/database";
@@ -6,6 +7,7 @@ import {
   failQueuedItems,
   forgetOldPosts,
   OutboxRefusedError,
+  queuePost,
   queuePublication,
   readReadyOutbox,
   recoverOutboxAttempts,
@@ -154,12 +156,19 @@ test("a post repeating anything in its place is refused while that may still go 
       (tx) => tx`UPDATE outbox SET state = ${state}, updated_at = ${world.now()} WHERE id = ${id}`,
     );
 
-  // A reply that says it in r1's thread counts, while a post at the top of the channel doesn't.
+  // A reply that says it in r1's thread counts, while a post at the top of the channel doesn't,
+  // and neither does another link's post at the top of its own channel.
   const reply = await world.queue(update);
   await expect(world.queuePost({ request: 1 }, update)).rejects.toThrow(
     repeat(reply.number, "queued"),
   );
   const first = await world.queuePost(undefined, update);
+  await createStoredLink(world.database, "other");
+  const elsewhere = await world.database.write(async (tx) => {
+    const other = await readChannelLink(tx, "C-other");
+    return queuePost(tx, { link: other!, text: update }, world.now());
+  });
+  expect(elsewhere).toMatchObject({ linkId: "other", state: "queued" });
   for (const state of ["queued", "sending", "delivery_unknown"]) {
     await settle(first.id, state);
     world.advance(30 * 86_400_000);

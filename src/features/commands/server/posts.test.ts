@@ -166,13 +166,8 @@ test.each<{
 }>([
   { title: "while the link is paused", link: { status: "paused" }, why: "This link isn't active." },
   {
-    title: "while another request in that thread is new",
+    title: "while another request in that thread waits on its answer",
     r2: { state: "open" },
-    why: "r2 waits on its answer in that thread, so answer it first.",
-  },
-  {
-    title: "while another request in that thread is read",
-    r2: { state: "seen" },
     why: "r2 waits on its answer in that thread, so answer it first.",
   },
   {

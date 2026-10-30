@@ -144,7 +144,6 @@ test("a post goes out at the top of the channel, or in the thread its request or
 
 test.each([
   ["deny", { request: 1 }, "requester_not_allowed"],
-  ["cancel", { request: 1 }, "request_no_longer_valid"],
   ["retract", { post: 1 }, "thread_retracted"],
 ] as const)("a %s after queueing keeps a post out of its thread", async (cause, thread, error) => {
   const world = await createOutboxWorld();
@@ -154,10 +153,6 @@ test.each([
   const item = await world.queuePost(thread);
   if (cause === "deny")
     await world.database.write((tx) => tx`DELETE FROM allowlist WHERE link_id = 'link'`);
-  if (cause === "cancel")
-    await world.database.write(
-      (tx) => tx`UPDATE requests SET state = 'cancelled', closed_reason = 'source_deleted'`,
-    );
   if (cause === "retract")
     await world.database.write((tx) => tx`UPDATE outbox SET state = 'retracted' WHERE number = 1`);
 

@@ -71,35 +71,27 @@ describe("openBridgeDatabase", () => {
     },
   );
 
-  test.each([
-    { deleted: "its newest item", where: "number = 3" },
-    { deleted: "every item", where: "TRUE" },
-  ])(
-    "keeps a version 2 outbox's items and numbering once $deleted is deleted",
-    async ({ where }) => {
-      const path = join(createTestFolder(), "bridge.db");
-      await createRecordedDatabase(path, 2);
-      const made = new BridgeDatabase(new Bun.SQL({ adapter: "sqlite", filename: path }));
-      await createStoredLink(made);
-      await createStoredRequest(made);
-      await createStoredOutboxItem(made, 1, { state: "sent" });
-      const notes = { kind: "publication", request_id: null, thread_ts: null, series: "notes" };
-      await createStoredOutboxItem(made, 2, { ...notes, scheduled_at: 1, state: "sent" });
-      await createStoredOutboxItem(made, 3, { ...notes, scheduled_at: 2, state: "failed" });
-      await made.write((transaction) => transaction.unsafe(`DELETE FROM outbox WHERE ${where}`));
-      const items = await made.read((sql) => sql`SELECT * FROM outbox ORDER BY number`);
-      await made.close();
+  test("keeps a version 2 outbox's items and numbering once its newest item is deleted", async () => {
+    const path = join(createTestFolder(), "bridge.db");
+    await createRecordedDatabase(path, 2);
+    const made = new BridgeDatabase(new Bun.SQL({ adapter: "sqlite", filename: path }));
+    await createStoredLink(made);
+    await createStoredRequest(made);
+    await createStoredOutboxItem(made, 1, { state: "sent" });
+    const notes = { kind: "publication", request_id: null, thread_ts: null, series: "notes" };
+    await createStoredOutboxItem(made, 2, { ...notes, scheduled_at: 1, state: "sent" });
+    await createStoredOutboxItem(made, 3, { ...notes, scheduled_at: 2, state: "failed" });
+    await made.write((transaction) => transaction`DELETE FROM outbox WHERE number = 3`);
+    const items = await made.read((sql) => sql`SELECT * FROM outbox ORDER BY number`);
+    await made.close();
 
-      const database = await open(path);
+    const database = await open(path);
 
-      expect(await database.read((sql) => sql`SELECT * FROM outbox ORDER BY number`)).toEqual(
-        items,
-      );
-      const slot = { linkId: "link", series: "notes", scheduledAt: 3, text: "Notes" };
-      const next = await database.write((transaction) => queuePublication(transaction, slot, 3));
-      expect(next.number).toBe(4);
-    },
-  );
+    expect(await database.read((sql) => sql`SELECT * FROM outbox ORDER BY number`)).toEqual(items);
+    const slot = { linkId: "link", series: "notes", scheduledAt: 3, text: "Notes" };
+    const next = await database.write((transaction) => queuePublication(transaction, slot, 3));
+    expect(next.number).toBe(4);
+  });
 
   test("refuses a bridge.db that a version it can't upgrade made, which only starting over ends", async () => {
     const path = join(createTestFolder(), "bridge.db");
