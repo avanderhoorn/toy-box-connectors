@@ -78,7 +78,7 @@ Only the Publish workflow publishes to npm. To release:
 
 The workflow reads the version and notes from that exact commit, rejects an already published npm version, runs checks and tests, and builds the Apple silicon macOS CLI. It publishes the tested package through npm trusted publishing, then creates the matching GitHub tag and release with the changelog notes and npm tarball attached. No npm token or separately entered release version is needed.
 
-npm accepts that publish only from the package's trusted publisher, and the package has none yet because 0.1.0 was published by hand. Before the first release from the workflow, a maintainer with 2FA adds it from a terminal signed in to npm, with `--allow-publish` since a new trusted publisher can only stage a publish by default. Then run the workflow within 2 days, since npm expires a trusted publisher that hasn't published by then.
+npm accepts that publish only from the package's trusted publisher, which is this repository's `publish.yml` and has published every release since 0.2.0. If the repository or the workflow's file name changes, a maintainer with 2FA sets a new one from a terminal signed in to npm, with `--allow-publish` since a new trusted publisher can only stage a publish by default. Then run the workflow within 2 days, since npm expires a new trusted publisher that hasn't published by then.
 
 ```sh
 npm trust github @avanderhoorn/toy-box-slack --repo avanderhoorn/toy-box-connectors --file publish.yml --allow-publish
