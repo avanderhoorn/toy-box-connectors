@@ -3,8 +3,8 @@
 toy-box-slack is one local Bun bridge between one Slack workspace and Toy Box.
 A link watches one Slack channel, answers allowed people in its threads, posts
 there when the owner asks, and publishes opt-in scheduled updates in that same
-channel. A Copilot lead reads
-the bridge's ledger and queues posts through a CLI.
+channel. Through a CLI, a Copilot lead reads the bridge's ledger and the files
+allowed people share, and queues posts.
 
 **Review status:** this is a reviewer guide, not a compliance attestation or
 deployment approval. The checks below must pass against the landed code.
@@ -15,7 +15,7 @@ records the evidence and its limits.
 ## Slack access
 
 Use a company-owned internal app installed in exactly one workspace and invite
-its bot only to approved channels. The [manifest](manifest.yaml) requests eight
+its bot only to approved channels. The [manifest](manifest.yaml) requests nine
 bot scopes:
 
 | Scope                                                                                     | Purpose                                                                        |
@@ -24,6 +24,7 @@ bot scopes:
 | [`channels:read`](https://docs.slack.dev/reference/scopes/channels.read/)                 | Check public-channel membership, archive state and audience.                   |
 | [`groups:history`](https://docs.slack.dev/reference/scopes/groups.history/)               | The same message access in private channels the bot has joined.                |
 | [`groups:read`](https://docs.slack.dev/reference/scopes/groups.read/)                     | Check those private channels and their audience.                               |
+| [`files:read`](https://docs.slack.dev/reference/scopes/files.read/)                       | Check a shared file and download it when the lead reads it.                    |
 | [`users:read`](https://docs.slack.dev/reference/scopes/users.read/)                       | Resolve names, check admission and identify the installed bot. No email scope. |
 | [`chat:write`](https://docs.slack.dev/reference/scopes/chat.write/)                       | Post answers, publications and posts the owner asks for, and retract its own.  |
 | [`metadata.message:read`](https://docs.slack.dev/reference/scopes/metadata.message.read/) | Confirm a possibly delivered post by its outbox metadata.                      |
@@ -32,12 +33,13 @@ bot scopes:
 [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/) also
 needs an app-level token with `connections:write`. Connections are outbound
 HTTPS and secure WebSockets. There is no public Request URL, interactivity,
-autojoin, user token, impersonation, file download, DM access, admin, SCIM,
+autojoin, user token, impersonation, file upload, DM access, admin, SCIM,
 Discovery, search or `chat:write.public` scope.
 
 **The token is broader than our filter.** Its Slack permissions are not limited
-to linked channels or allowlisted authors. The bridge discards unlinked message
-content before storage, but that does not restrict a stolen token.
+to linked channels or allowlisted authors, and `files:read` reaches every file
+shared where the bot is a member. The bridge discards unlinked message content
+before storage, but that does not restrict a stolen token.
 
 The default `--observe requesters` retains text from allowed people, our bot and
 any person posting in a request thread. Other messages become content-free
@@ -45,15 +47,20 @@ markers. Opt-in `--observe channel` retains other people's channel text too.
 Other bots' text is not retained. The allowlist controls who opens requests,
 not whose words reach the model or who can read the Toy Box transcript.
 
+The lead reads a shared file only while whoever shared it and whoever uploaded
+it are both allowed, which the bridge checks against Slack's fresh `files.info`
+each time the lead reads. A retained message lists its other files by name,
+type and size, with why they can't be read.
+
 ## Copies and consent
 
-| Destination                           | Data and purpose                                                                                                                                                                                             |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `~/.toy-box-slack` by default         | `bridge.db` and its WAL hold retained message text and change records, requests, names and IDs, link settings, allowlists, wake runs and queued output. Credentials are separate. No attachments are stored. |
-| Local Toy Box                         | CLI output enters the lead's session transcript. The lead may post digests or create workspace files. The bridge never posts into Toy Box.                                                                   |
-| Copilot and the chosen model provider | Whatever Slack text and tool output the lead reads can enter model requests. Copilot-only does not specify processing region, retention or contractual training restrictions.                                |
-| Slack                                 | Thread answers, posts, publications and eyes reactions. No progress notes or answer edits.                                                                                                                   |
-| Host backups and diagnostics          | Snapshots, copied reports and support bundles can become additional copies. Approve access and retention before enabling them.                                                                               |
+| Destination                           | Data and purpose                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `~/.toy-box-slack` by default         | `bridge.db` and its WAL hold retained message text and change records, requests, names and IDs, link settings, allowlists, wake runs and queued output, and each shared file's name, type, size and uploader, but never its contents. Credentials are separate. An image the lead reads waits ten minutes in `viewing` for the lead to view it. |
+| Local Toy Box                         | CLI output enters the lead's session transcript. Copilot keeps every image the lead views in its session history, as it keeps the Slack text and file text the lead reads. The lead may post digests or create workspace files. The bridge never posts into Toy Box.                                                                            |
+| Copilot and the chosen model provider | Whatever Slack text, shared files and tool output the lead reads can enter model requests, images included. Copilot-only does not specify processing region, retention or contractual training restrictions.                                                                                                                                    |
+| Slack                                 | Thread answers, posts, publications and eyes reactions. No progress notes or answer edits.                                                                                                                                                                                                                                                      |
+| Host backups and diagnostics          | Snapshots, copied reports and support bundles can become additional copies. Approve access and retention before enabling them.                                                                                                                                                                                                                  |
 
 Name the actual Copilot account and plan, permitted models and providers,
 subprocessors, processing regions, retention and support access before approval.
@@ -125,7 +132,9 @@ context before a later send or resume discovers it.
 One owner on one Mac is the trust model. The data folder must be 0700,
 `credentials.env` must not be group/world accessible (use 0600), and the socket
 is 0600. The database, WAL and lock need not individually be 0600 because
-the folder protects them. Token and URL environment variables override the
+the folder protects them. An image the lead reads is 0600 too, in the data
+folder's `viewing` folder, under a name the bridge makes up rather than takes
+from Slack. Token and URL environment variables override the
 credential file. The published CLI loads no `.env` or `bunfig.toml` from the
 folder it runs in.
 
@@ -153,6 +162,13 @@ credentials are refused at queue and send time without repeating the secret.
 Private-network URLs are not separately policed. This is not enterprise DLP
 and does not constrain the lead's other shell tools.
 
+A shared file is untrusted too. Its text reaches the lead fenced under a label
+naming who shared and uploaded it, with control characters replaced and mentions
+neutralized as in Slack text, and an image is judged by its own bytes, never
+its name or claimed type. The bridge sends the bot token for a file only to
+`https://files.slack.com`, follows no redirect, and reads only a 200 of the
+size `files.info` gave.
+
 ## Retention and deletion
 
 Cleanup runs at startup and hourly, so the bridge keeps Slack text for at most
@@ -165,6 +181,9 @@ hashes that posting once and numbering need.
   author's role but not their user ID.
 - `changes` keeps only each remaining message's latest change, which holds
   identifiers, a timestamp and a kind.
+- `message_files` describes each file a message shares, by its Slack ID, name,
+  type, mode, size and uploader, with no address or contents. A message's rows
+  go with it, and as soon as the ledger keeps only a marker or tombstone of it.
 - A finished request goes, with its `request_messages` and the `outbox` rows
   of its reply and the posts in its thread, once the ledger keeps none of its
   messages. The reason the lead gave for dismissing it goes with it. A request
@@ -181,8 +200,12 @@ hashes that posting once and numbering need.
 - `users` and `user_aliases` keep a person's name and other IDs only while a
   link allows them.
 
-There are no downloaded files, coverage records or durable event receipts to
-retain.
+There are no coverage records or durable event receipts to retain, and the
+bridge stores no file's contents. A text file goes from Slack to the lead in
+memory. An image goes to `viewing`, since the lead's viewer opens only files,
+and the bridge deletes it within a minute of its turning ten minutes old, and
+every one when it starts or stops, so an image outlives the bridge only after
+a crash, until it starts again.
 
 Unlink removes a link's owned bridge data. Observed app uninstall, or token
 revocation naming our bot, empties all other tables and leaves the installation
@@ -192,7 +215,9 @@ offboarding cleanup. An offline bridge cannot detect uninstall immediately.
 
 When observed, Slack deletion, a tombstone or EKM/DLP withdrawal redacts the
 ledger's message and can cancel a pending request and its queued answer.
-It does not retract an answer already sent or erase model context. Slack's
+It does not retract an answer already sent or erase model context. The bridge
+asks Slack about a file each time the lead reads it, so one deleted or
+unshared there can't be read after. Slack's
 [EKM](https://slack.com/help/articles/360019110974-Slack-Enterprise-Key-Management)
 and [DLP](https://slack.com/help/articles/12914005852819-Slack-data-loss-prevention)
 do not revoke copies already exported. Data can reach the model before Slack
@@ -243,12 +268,14 @@ requires immediate notice to Slack and affected users for a data breach.
 
 Verify these against landed code, not this document:
 
-- The manifest's eight scopes, startup token/app/workspace/org identity checks,
+- The manifest's nine scopes, startup token/app/workspace/org identity checks,
   Enterprise routing and refusal of unsupported installations.
 - Exact-ID request admission, caller refusal, terminal-only widening,
   fresh channel checks, and suspension behavior under races and failed lookups.
 - Observation boundaries, stale-question refusal, send-time safety, no
   duplicate send after a crash, and explicit unknown-post status.
+- File reads: sharer and uploader checks against fresh `files.info`, the
+  pinned download host, and the viewing folder's permissions and lifetime.
 - Retention and unlink/uninstall cascades, including outbox text and WAL,
   plus the separately approved external-copy deletion process.
 - Permissions, loopback-only configuration, secret-safe diagnostics and the

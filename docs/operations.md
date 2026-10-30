@@ -103,6 +103,30 @@ post was absent. There is no resend or resolve command, and retraction keeps
 the request or scheduled slot reserved. An allowed person's next follow-up
 can open a new request.
 
+## Shared files
+
+Each app needs the `files:read` scope for the lead to read the text files and
+PNG or JPEG images people share. An app created from an older manifest lacks
+it, so for each one, add `files:read` to the bot scopes in its **App
+Manifest** settings and follow Slack's prompt to reinstall it, then install
+the release and restart the bridge. Its events stay the same. Until an app has
+the scope, `file` refuses with a reason that says how to add it, and nothing
+else changes. A message the bridge stored before the update lists no files
+until someone edits it.
+
+Inbox and activity list each file under its message, as `f12` or with why the
+lead can't read it, such as a PDF. The lead reads text up to 1 MB and PNG or
+JPEG images up to 10 MB and 40 megapixels, and only while whoever shared the
+file and whoever uploaded it are both on the allowlist. `file` asks Slack
+about the file and downloads it each time the lead runs it, so a file deleted
+or unshared since is refused, and so is one whose sharer or uploader you
+denied. Text goes to the lead a page at a time and never to disk. The lead's
+viewer opens only files, so the bridge writes an image to `viewing` in the
+data folder, where only you can read it, and deletes it ten minutes later. It
+empties that folder when it starts and when it stops, so an image outlives the
+bridge only after a crash, until it starts again. Editing a snippet in Slack
+doesn't wake the lead or change an answer it already gave.
+
 ## Deletion and limits
 
 Unlink deletes that link's owned database rows. Observed app uninstall or
@@ -123,10 +147,10 @@ Check Slack before resuming publications after any state reset.
 
 Cleanup runs at startup and hourly. It removes messages whose latest posted
 or edited version is over 30 days old, including markers and tombstones, and
-every change record but each remaining message's latest. A finished request
-goes once none of its messages remain, with the outbox items of its reply and
-the posts in its thread, so those can't be retracted after that, and a
-follow-up in its thread needs a new mention. A post forgets its text 30 days
+every change record but each remaining message's latest. The files a message
+lists go with it. A finished request goes once none of its messages remain,
+with the outbox items of its reply and the posts in its thread, so those can't
+be retracted after that, and a follow-up in its thread needs a new mention. A post forgets its text 30 days
 after it last changed, unless it may still go out, such as a reply queued
 while its link is paused. Its number, hash and state stay, so an unknown post
 can still be confirmed and a publication slot stays reserved. What the lead

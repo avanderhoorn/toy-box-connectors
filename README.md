@@ -7,6 +7,7 @@ It runs as one local bridge beside Toy Box on your Mac. Only the bridge holds th
 ## Features
 
 - **Answers in threads:** When someone you allow mentions the app, the bridge wakes the channel's lead and reacts with 👀 once it has, and the lead answers once in its thread.
+- **Reads shared files:** The lead can read the text files and PNG or JPEG screenshots that people you allow share, when an answer depends on them. The bridge fetches a file from Slack only when the lead reads it, and keeps a screenshot only for the ten minutes the lead has to view it.
 - **Posts when you ask:** Ask the lead in Toy Box, or have a routine ask, and it posts in the Slack channel or one of its threads, mentioning people you allow when you ask it to. Someone in Slack gets an answer, and the lead asks you before posting anything else for them.
 - **Only the people you allow:** Only people on the link's allowlist, by exact Slack member ID, can make the lead act, and the bridge checks that before the lead sees anything. Only you widen access, at your terminal, while the lead can only narrow it.
 - **Nothing lost or sent twice:** Every Slack event the bridge acknowledges survives a crash, and anything it missed while stopped is recovered or reported. A post whose delivery is uncertain is looked up in Slack, never sent again.
@@ -15,9 +16,9 @@ It runs as one local bridge beside Toy Box on your Mac. Only the bridge holds th
 - **Keeps little:** By default the bridge keeps only what allowed people say and the threads they ask in, and it forgets any Slack text 30 days after it last changed.
 - **Stops when the channel changes:** If the channel is shared outside your organization, made public or archived, or the app is removed from it, the bridge suspends the link for you to review. When you resume a link more people can read, what the lead wrote for fewer doesn't post, and the lead answers again.
 
-It doesn't support DMs, attachments, Slack Connect, org-wide installs, rotating tokens, or Codex and Claude Code leads.
+It reads only text, PNG and JPEG files, and posts none. It doesn't support DMs, Slack Connect, org-wide installs, rotating tokens, or Codex and Claude Code leads.
 
-> ⚠️ Slack text the lead reads reaches Copilot and its selected model provider. Get your company's approval before you link a workspace, and read the [reviewer guide](docs/security-review.md).
+> ⚠️ Slack text and files the lead reads reach Copilot and its selected model provider. Get your company's approval before you link a workspace, and read the [reviewer guide](docs/security-review.md).
 
 ## Getting Started
 
@@ -44,7 +45,7 @@ You need an Apple silicon Mac with [Node 24](https://nodejs.org/en/download), an
 
 1. Create the Slack app:
    - At <https://api.slack.com/apps>, choose **Create New App → From a manifest**, pick the approved workspace, and paste [docs/manifest.yaml](docs/manifest.yaml).
-   - Review its eight bot scopes, create the app, and install it from **OAuth & Permissions**, which then shows its **Bot User OAuth Token** (`xoxb-...`).
+   - Review its nine bot scopes, create the app, and install it from **OAuth & Permissions**, which then shows its **Bot User OAuth Token** (`xoxb-...`).
    - Under **Basic Information → App-Level Tokens**, generate a token (`xapp-...`) with the `connections:write` scope.
    - Leave token rotation off. The manifest already turns on Socket Mode, so the app needs no Request URL.
 
@@ -147,11 +148,12 @@ Copies outside the bridge stay, such as Toy Box transcripts and posts already in
 | `dismiss`   | The lead        | End a request that needs no answer                            |
 | `activity`  | The lead        | Read what's new in the Slack channel                          |
 | `mark-read` | The lead        | Mark activity read, so the next read starts after it          |
+| `file`      | The lead        | Read a text file or image someone shared in Slack             |
 | `post`      | The lead        | Post in the Slack channel or one of its threads, when asked   |
 | `publish`   | The lead        | Post once in Slack for a routine's latest scheduled run       |
 | `retract`   | The lead        | Delete one of its confirmed posts from Slack                  |
 
-Run `toy-box-slack <command> --help` for its options. The [operations guide](docs/operations.md) covers status, pauses, uncertain posts, deletion and starting at login, and [research](docs/research) holds the evidence behind the design.
+Run `toy-box-slack <command> --help` for its options. The [operations guide](docs/operations.md) covers status, pauses, uncertain posts, shared files, deletion and starting at login, and [research](docs/research) holds the evidence behind the design.
 
 ## Developing
 

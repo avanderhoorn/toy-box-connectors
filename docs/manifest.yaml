@@ -19,6 +19,7 @@ oauth_config:
       - channels:read
       - groups:history
       - groups:read
+      - files:read
       - users:read
       - chat:write
       - metadata.message:read

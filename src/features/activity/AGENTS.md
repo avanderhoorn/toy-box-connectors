@@ -14,16 +14,19 @@ A delete leaves a tombstone that no version of the message can undo, even one th
 
 Each message gets its author role when it's stored, and a person's comes from their exact user ID, never the workspace the message names. In the default requesters mode, text is kept only from allowlisted people, from the bot, and from anyone posting in a thread where a request started. Every other message becomes a content-free marker, with its author's role but not their ID, so the digest cursor still accounts for it. Another bot's text is never kept. A marker whose text is kept when the same version arrives again is filled in without counting as an edit.
 
+The ledger describes each file a kept message shares in `message_files`, by Slack's ID, name, type, mode, size and uploader, but holds no address or contents, which only the lead's `file` fetches. A row's number is the reference the lead reads the file by, such as `f12`, and is never handed out again. Rows follow the message's text: a marker or a tombstone has none, and a newer version keeps the rows of the files it still shares, so a reference lasts through edits. A message's files count in its content hash, so a version that adds, swaps or removes one is an edit, while a message that shares none hashes as it did before the ledger kept files, so updating the bridge edits nothing. A message stored before then lists no files until a newer version of it arrives. A file Slack describes only by its ID gets a row with just that, for `file` to settle with files.info, and parsing drops a file Slack marks deleted, by any of its three marks.
+
 ## Catching up
 
 Each hello notes a gap since the last hello in the same transaction that records it, so whatever happened while the bridge wasn't connected is caught up on, even after a crash. Once gaps have ended, catch-up reads every linked channel's history, then the threads replied to since, and stores what changed through ingest as live intake would have. It takes changes from five minutes before the earliest gap, since Slack's clock and ours can differ, but never from before the link or from longer ago than the ledger keeps messages. Each channel is stored in one transaction, so the lead never sees half of what was missed, and reading something twice changes nothing. Catch-up waits out Slack's rate limits, skips a channel and suspends its links when Slack shuts the bot out of it, and retries a run that can't finish on the wake backoff, with status saying why. History shows a message only as it stands, so catch-up never finds a delete, and it misses a reply in a thread whose root is older than the ledger keeps.
 
-The ledger forgets a message 30 days after its latest version, a tombstone too, when the bridge starts and hourly after. Readers only ever see a message at its latest change, so that's the one change it keeps, and a forgotten change's sequence is never handed out again, so every new change comes after every cursor.
+The ledger forgets a message 30 days after its latest version, with the files it lists, a tombstone too, when the bridge starts and hourly after. Readers only ever see a message at its latest change, so that's the one change it keeps, and a forgotten change's sequence is never handed out again, so every new change comes after every cursor.
 
 ## Boundaries and invariants
 
 - Commit before ack. A delivery is acked only after what it changed commits, and only while Slack still waits for the ack.
 - Logs hold no message content.
+- The ledger holds no file's address or contents.
 - Every version of a message merges through one idempotent function, so a redelivery converges to the same rows.
 - Nothing from an unlinked channel is stored.
 - The ledger knows who wrote a message only while it keeps what they said.
