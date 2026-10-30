@@ -102,7 +102,11 @@ export async function startBridge(
       commandSocketPath(dataFolder),
       serveCommands({
         apps: served,
-        status: statusCommand({ nameApps, timings: settings.wakeTimings }),
+        status: statusCommand({
+          nameApps,
+          toyBoxOrigin: settings.toyBoxOrigin,
+          timings: settings.wakeTimings,
+        }),
       }),
     );
     return { failed: failure.promise, stop };

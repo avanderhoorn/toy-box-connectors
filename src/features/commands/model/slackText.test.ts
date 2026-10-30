@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  channelName,
   cutText,
   fenceFor,
   oneLine,
   personName,
   renderSlackText,
   mentionedUsers,
+  toyBoxChannelName,
   type SlackNames,
 } from "./slackText";
 
@@ -118,6 +120,21 @@ describe("personName", () => {
     expect(personName(null, "U0DAVE")).toBe("U0DAVE");
     expect(personName("  ", "U0DAVE")).toBe("U0DAVE");
     expect(personName("()", "U0DAVE")).toBe("U0DAVE");
+  });
+});
+
+describe("channel labels", () => {
+  test("are one bounded line", () => {
+    const long = "x".repeat(100);
+    const cut = `${"x".repeat(79)}…`;
+    expect(channelName("release\neng", "C1")).toBe("#release eng");
+    expect(channelName(long, "C1")).toBe(`#${cut}`);
+    expect(toyBoxChannelName("Toy Box\nSlack", "c1")).toBe('"Toy Box Slack"');
+    expect(toyBoxChannelName(long, "c1")).toBe(`"${cut}"`);
+  });
+
+  test("show a Toy Box channel by its ID when nothing's left of its name", () => {
+    expect(toyBoxChannelName(" \n", "c1")).toBe("c1");
   });
 });
 

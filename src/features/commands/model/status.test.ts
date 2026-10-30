@@ -11,6 +11,8 @@ import {
 const connected: SlackState = { connection: "connected", problem: null };
 const link: LinkStatus = {
   toyBoxChannelId: "toybox-link",
+  toyBoxChannel: '"Releases"',
+  slackChannelId: "C-link",
   slackChannel: "#release-eng",
   status: "active",
   statusReason: null,
@@ -87,5 +89,5 @@ test("shows each app's status under its name, saying when no Toy Box channel lin
       presentStatus({ slack: connected, links: [link] }, 0),
     ].join("\n"),
   );
-  expect(shown).toContain("## #release-eng and Toy Box channel toybox-link\n- Link: active.");
+  expect(shown).toContain('## #release-eng and Toy Box channel "Releases"\n- Link: active.');
 });

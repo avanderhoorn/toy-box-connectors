@@ -11,7 +11,7 @@ import {
   presentAllowed,
   presentLink,
 } from "@commands/model/setup";
-import { channelName, oneLine, personName } from "@commands/model/slackText";
+import { channelName, personName, toyBoxChannelName } from "@commands/model/slackText";
 import { presentLinkState } from "@commands/model/status";
 import { count } from "@commands/model/wording";
 import { admissionProblem } from "@links/model/admission";
@@ -220,7 +220,7 @@ async function readLinkableChannel(origin: URL, channelId: string): Promise<stri
   if (!channel) {
     throw new CommandRefusedError(`Toy Box has no channel ${channelId}, so nothing changed.`);
   }
-  const name = `"${oneLine(channel.name, 80)}"`;
+  const name = toyBoxChannelName(channel.name, channelId);
   if (channel.provider !== "copilot") {
     throw new CommandRefusedError(
       `The lead of ${name} runs on ${channel.provider}, and only leads on Copilot can answer in Slack.`,

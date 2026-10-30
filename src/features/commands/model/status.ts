@@ -36,7 +36,10 @@ type Tokens = { botToken: string | null; appToken: string | null };
 
 export type LinkStatus = {
   toyBoxChannelId: string;
-  /** The Slack channel, as #name. */
+  /** The Toy Box channel, as its name in quotes, or by its ID when Toy Box didn't say. */
+  toyBoxChannel: string;
+  slackChannelId: string;
+  /** The Slack channel, as #name, or as #ID when Slack didn't say. */
   slackChannel: string;
   status: "active" | "paused" | "suspended";
   statusReason: string | null;
@@ -107,7 +110,7 @@ function presentLink(link: LinkStatus, at: number): string {
   const answers = people ? `${people} when they ${asks}` : "nobody yet";
   const threads = link.observe === "channel" ? "everyone" : "only the people it answers";
   return [
-    `## ${link.slackChannel} and Toy Box channel ${link.toyBoxChannelId}`,
+    `## ${link.slackChannel} and Toy Box channel ${link.toyBoxChannel}`,
     `- Link: ${presentLinkState(link)}`,
     `- Answers: ${answers}. Threads show ${threads}.`,
     `- Requests: ${link.pending} new or changed, ${link.read} read and not answered.`,

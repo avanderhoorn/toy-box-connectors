@@ -52,6 +52,12 @@ export function channelName(name: string | null | undefined, channelId: string):
   return `#${oneLine(name || channelId, NAME_LIMIT)}`;
 }
 
+/** A Toy Box channel as its name in quotes, or by its ID when the bridge has no name. */
+export function toyBoxChannelName(name: string | null | undefined, channelId: string): string {
+  const shown = oneLine(name ?? "", NAME_LIMIT);
+  return shown ? `"${shown}"` : channelId;
+}
+
 /** A request's Slack link, opening its thread, or null until Slack has said the workspace's URL. */
 export function permalink(
   workspaceUrl: string | null,

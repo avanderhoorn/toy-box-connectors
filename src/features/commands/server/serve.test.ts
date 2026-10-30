@@ -76,6 +76,7 @@ async function serving(apps: App[] = [{ name: DEFAULT_APP, links: ["link"] }]) {
       name,
       database,
       slack: () => ({ connection: "connected", problem: null }),
+      bot: null,
       workspaceUrl: () => null,
       handlers: { ...handlersIn(name), ...handlers },
       log: name === DEFAULT_APP ? log : labeledLog(name),

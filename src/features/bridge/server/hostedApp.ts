@@ -123,6 +123,7 @@ export async function openApp(
       name: app.name,
       database,
       slack: slackState,
+      bot,
       workspaceUrl,
       log,
       handlers: {

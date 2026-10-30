@@ -95,3 +95,13 @@ test("inbox links each request to its message in the workspace Slack names", asy
     "https://fake-workspace.slack.com/archives/C-link/p1700000100000100",
   ]);
 }, 15_000);
+
+test("status names the link's channels as Slack and Toy Box call them", async () => {
+  const { env } = startSlackForBridge();
+  const linked = await startLinkedBridge({ env });
+  await connected(linked);
+
+  const { text } = await linked.status(null);
+
+  expect(text).toContain('\n\n## #fake-channel and Toy Box channel "Linked"\n');
+}, 15_000);
