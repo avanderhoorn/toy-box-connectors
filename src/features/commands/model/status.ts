@@ -5,6 +5,7 @@
 import { suspensions, type SuspendReason } from "@links/model/status";
 import { missingTokensProblem } from "@slackapi/model/identity";
 import { STALL_AFTER, type WakeDecision, type WakeRun } from "@wakes/model";
+import type { SlackPerson } from "./inbox";
 import { ago, clockTime, count, duration } from "./wording";
 
 const connections = {
@@ -45,7 +46,8 @@ export type LinkStatus = {
   statusReason: string | null;
   requestMode: "mention" | "all";
   observe: "requesters" | "channel";
-  allowlist: string[];
+  /** Whom the link answers, in the order they were allowed. */
+  allowlist: SlackPerson[];
   pending: number;
   /** Requests the lead has read but not answered. */
   read: number;
@@ -116,7 +118,9 @@ function presentSections({ slack, links }: Status, at: number, unlinked: string)
 
 function presentLink(link: LinkStatus, at: number): string {
   const asks = link.requestMode === "all" ? "post or mention the bot" : "mention the bot";
-  const people = new Intl.ListFormat("en").format(link.allowlist);
+  const people = new Intl.ListFormat("en").format(
+    link.allowlist.map(({ name, userId }) => `${name} (${userId})`),
+  );
   const answers = people ? `${people} when they ${asks}` : "nobody yet";
   const threads = link.observe === "channel" ? "everyone" : "only the people it answers";
   return [

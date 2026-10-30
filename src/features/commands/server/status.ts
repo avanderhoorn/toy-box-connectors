@@ -166,9 +166,9 @@ async function readLinkStatuses(
     const allowed = await sql<{ userId: string }[]>`
       SELECT user_id AS userId FROM allowlist WHERE link_id = ${id} ORDER BY added_at
     `;
-    const allowlist: string[] = [];
+    const allowlist: LinkStatus["allowlist"] = [];
     for (const { userId } of allowed) {
-      allowlist.push(personName(await readSlackPersonName(sql, userId), userId));
+      allowlist.push({ userId, name: personName(await readSlackPersonName(sql, userId), userId) });
     }
     const unconfirmed: UnconfirmedPost[] = [];
     for (const { channelId, threadTs, ...post } of await sql<UnconfirmedRow[]>`

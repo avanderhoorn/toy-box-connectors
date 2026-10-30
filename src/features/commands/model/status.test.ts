@@ -47,17 +47,19 @@ test("Slack is set up once both tokens are, and until then serve asks the owner 
   );
 });
 
-test("says whom a link answers and when, for one person, several or nobody yet", () => {
+test("says whom a link answers, by name and member ID, and when, for one person, several or nobody yet", () => {
   const answers = (changes: Partial<LinkStatus>) =>
     presentStatus({ slack: connected, links: [{ ...link, ...changes }] }, 0)
       .split("\n")
       .find((line) => line.startsWith("- Answers:"));
+  const ada = { userId: "U0ADA", name: "Ada" };
+  const bo = { userId: "U0BO", name: "Bo" };
 
-  expect(answers({ allowlist: ["Ada"] })).toBe(
-    "- Answers: Ada when they mention the bot. Threads show only the people it answers.",
+  expect(answers({ allowlist: [ada] })).toBe(
+    "- Answers: Ada (U0ADA) when they mention the bot. Threads show only the people it answers.",
   );
-  expect(answers({ allowlist: ["Ada", "Bo"], requestMode: "all", observe: "channel" })).toBe(
-    "- Answers: Ada and Bo when they post or mention the bot. Threads show everyone.",
+  expect(answers({ allowlist: [ada, bo], requestMode: "all", observe: "channel" })).toBe(
+    "- Answers: Ada (U0ADA) and Bo (U0BO) when they post or mention the bot. Threads show everyone.",
   );
   expect(answers({ allowlist: [] })).toBe(
     "- Answers: nobody yet. Threads show only the people it answers.",

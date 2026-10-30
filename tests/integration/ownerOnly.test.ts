@@ -21,6 +21,9 @@ const MALLORY_USER = {
   is_ultra_restricted: false,
 };
 
+/** Alice as status lists her. Nothing stored her name, so it shows her ID. */
+const LISTED_ALICE = { userId: ALICE, name: ALICE };
+
 type Caller = "the lead" | "a terminal";
 
 /**
@@ -70,7 +73,7 @@ test("the lead widens access only if it's a terminal, which says what it changed
     expect(await link()).toMatchObject({
       status: "paused",
       requestMode: "mention",
-      allowlist: [ALICE],
+      allowlist: [LISTED_ALICE],
     });
   }
 });
@@ -138,15 +141,17 @@ test("allow refuses a guest, and deny takes either of someone's IDs", async () =
     exitCode: 1,
     text: "Nobody was allowed, since only full members of the bot's workspace or its Enterprise org can be, and Mallory (W0MALLORY) isn't: they're a guest.",
   });
-  expect(await link()).toMatchObject({ allowlist: [ALICE] });
+  expect(await link()).toMatchObject({ allowlist: [LISTED_ALICE] });
   slack.setUser(MALLORY_USER);
   expect(await allow()).toMatchObject({
     exitCode: 0,
     text: "Mallory (U0MALLORY) can ask the lead to act from #release-eng now.",
   });
-  expect(await link()).toMatchObject({ allowlist: [ALICE, "Mallory"] });
+  expect(await link()).toMatchObject({
+    allowlist: [LISTED_ALICE, { userId: MALLORY, name: "Mallory" }],
+  });
 
   // The link allows her member ID, and deny finds it from the Enterprise one she was allowed by.
   expect((await as("a terminal", "deny", { users: ["W0MALLORY"] })).exitCode).toBe(0);
-  expect(await link()).toMatchObject({ allowlist: [ALICE] });
+  expect(await link()).toMatchObject({ allowlist: [LISTED_ALICE] });
 });
