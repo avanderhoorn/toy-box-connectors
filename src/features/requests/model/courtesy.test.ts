@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { asksQuestion, isCourtesyOnly } from "./courtesy";
 
-const courtesy = (text: string) => isCourtesyOnly({ text, mentionsBot: text.includes("<@U-bot") });
+const courtesy = (text: string) =>
+  isCourtesyOnly({ text, mentionsBot: text.includes("<@U-bot"), files: [] });
 
 test.each([
   "Thank you.",

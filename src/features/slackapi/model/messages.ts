@@ -15,6 +15,23 @@ export const slackMessageSchema = z.object({
   edited: z.object({ ts: slackTsSchema.describe("Edit time") }).nullish(),
   latest_reply: slackTsSchema.nullish().describe("A root's newest reply"),
   hidden: z.boolean().nullish().describe("Content withdrawn"),
+  files: z.array(z.unknown()).nullish().describe("Shared files, each read on its own"),
+});
+// A message describes each file it shares. Slack Connect sends only the file's ID with file_access
+// check_file_info, so only files.info can say what such a file is.
+const fileMarksSchema = z.object({
+  id: id.describe("File ID"),
+  mode: z.unknown().optional().describe("How Slack holds the file, tombstone once deleted"),
+  is_deleted: z.unknown().optional(),
+  is_tombstoned: z.unknown().optional(),
+  file_access: z.unknown().optional().describe("check_file_info when only files.info describes it"),
+});
+const wholeFileSchema = z.object({
+  name: z.string().nullish().describe("File name, chosen by whoever uploaded it"),
+  mimetype: z.string().min(1).describe("MIME type"),
+  mode: z.string().min(1).describe("How Slack holds the file"),
+  size: z.number().int().nonnegative().describe("Bytes"),
+  user: id.describe("Uploader"),
 });
 const bookkeeping = new Set(["message_changed", "message_deleted", "message_replied"]);
 export const slackMessageEventSchema = z.union([
@@ -69,7 +86,20 @@ export type SlackMessage = {
   mentionsBot: boolean;
   editedTs: SlackTs | null;
   version: SlackTs;
+  files: SlackFile[];
 };
+/** A file a message shares, as the message describes it. A partial one has only its ID. */
+export type SlackFile =
+  | {
+      id: string;
+      whole: true;
+      name: string | null;
+      mimeType: string;
+      mode: string;
+      size: number;
+      uploaderId: string;
+    }
+  | { id: string; whole: false };
 export type SlackMessageEvent =
   | { kind: "message"; message: SlackMessage }
   | { kind: "deleted"; channelId: string; ts: SlackTs }
@@ -115,7 +145,38 @@ export function normalizeHistoryMessage(
       mentionsBot: mentions.includes(context.botUserId),
       editedTs: payload.edited?.ts ?? null,
       version: payload.edited?.ts ?? payload.ts,
+      files: sharedFiles(payload.files ?? []),
     },
+  };
+}
+
+/** The files a message shares, once each. One odd file never costs the message the others. */
+function sharedFiles(values: readonly unknown[]): SlackFile[] {
+  const files = new Map<string, SlackFile>();
+  for (const value of values) {
+    const file = readSharedFile(value);
+    if (file && !files.has(file.id)) files.set(file.id, file);
+  }
+  return [...files.values()];
+}
+
+/** A shared file, or null for a deleted one or anything without an ID. */
+function readSharedFile(value: unknown): SlackFile | null {
+  const marks = fileMarksSchema.safeParse(value);
+  if (!marks.success) return null;
+  const { id, mode, is_deleted, is_tombstoned, file_access } = marks.data;
+  // Slack marks a deleted file any of these ways, and a message no longer shares one.
+  if (mode === "tombstone" || is_deleted === true || is_tombstoned === true) return null;
+  const file = wholeFileSchema.safeParse(value);
+  if (file_access === "check_file_info" || !file.success) return { id, whole: false };
+  return {
+    id,
+    whole: true,
+    name: file.data.name ?? null,
+    mimeType: file.data.mimetype,
+    mode: file.data.mode,
+    size: file.data.size,
+    uploaderId: file.data.user,
   };
 }
 

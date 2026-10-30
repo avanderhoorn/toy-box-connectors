@@ -21,6 +21,7 @@ const ask = askMessage();
 const reply = replyMessage(ask, "1700000200.000100");
 const root = { ...ask, text: "the deploy is red", mentions: [], mentionsBot: false };
 const tada = { ...reply, text: ":tada:" };
+const screenshot: SlackMessage = { ...reply, text: "", files: [{ id: "F1", whole: false }] };
 const ok = { ...reply, text: "ok" };
 const toBob = { ...reply, text: "<@U-bob> can you look?", mentions: ["U-bob"] };
 const rootToBob = { ...root, text: "<@U-bob> the deploy is red", mentions: ["U-bob"] };
@@ -47,6 +48,7 @@ test.each<[string, SlackMessage, Partial<ClassifyFacts>, Classification]>([
   ],
   ["a thank-you isn't a request", { ...ask, text: "<@U-bot> thanks!" }, {}, none("courtesy")],
   ["nor is a lone emoji in a request's thread", tada, { active }, none("courtesy")],
+  ["but a reply that only shares a file joins its request", screenshot, { active }, joins],
   [
     "an okay to our question from someone who didn't ask is only context",
     ok,

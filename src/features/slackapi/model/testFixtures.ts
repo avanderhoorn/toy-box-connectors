@@ -24,6 +24,7 @@ export function askMessage(
     mentionsBot: true,
     editedTs: null,
     version: ts,
+    files: [],
     ...changes,
   };
 }

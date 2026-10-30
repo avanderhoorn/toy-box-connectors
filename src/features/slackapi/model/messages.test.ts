@@ -8,17 +8,37 @@ import {
 
 const context = { botUserId: "UBOT", botId: "BBOT" };
 const message = { type: "message", user: "UALICE", text: "<@UBOT> help", ts: "1700000000.000100" };
+const upload = {
+  id: "F1",
+  name: "build.png",
+  mimetype: "image/png",
+  pretty_type: "PNG",
+  mode: "hosted",
+  size: 412_000,
+  user: "UALICE",
+  url_private: "https://files.slack.com/files-pri/T1-F1/build.png",
+};
+const shared = {
+  id: "F1",
+  whole: true,
+  name: "build.png",
+  mimeType: "image/png",
+  mode: "hosted",
+  size: 412_000,
+  uploaderId: "UALICE",
+};
 function normalize(event: unknown) {
   return normalizeMessageEvent(slackMessageEventSchema.parse(event), context);
 }
 
-test("roots, replies and edits retain exact identity and routing context", () => {
-  expect(normalize({ ...message, channel: "C1", thread_ts: message.ts })).toMatchObject({
-    message: { rootTs: message.ts, isReply: false, mentionsBot: true },
+test("roots, replies and edits retain exact identity, routing context and files", () => {
+  const root = { ...message, thread_ts: message.ts, files: [upload] };
+  expect(normalize({ ...root, channel: "C1" })).toMatchObject({
+    message: { rootTs: message.ts, isReply: false, mentionsBot: true, files: [shared] },
   });
-  const reply = { ...message, ts: "1700000000.000101", thread_ts: message.ts };
+  const reply = { ...root, ts: "1700000000.000101" };
   expect(normalize({ ...reply, channel: "C1" })).toMatchObject({
-    message: { rootTs: message.ts, isReply: true },
+    message: { rootTs: message.ts, isReply: true, files: [shared] },
   });
   const edited = { ...reply, edited: { ts: "1700000000.000102" } };
   expect(
@@ -29,9 +49,9 @@ test("roots, replies and edits retain exact identity and routing context", () =>
       hidden: true,
       message: edited,
     }),
-  ).toMatchObject({ message: { version: edited.edited.ts } });
+  ).toMatchObject({ message: { version: edited.edited.ts, files: [shared] } });
   expect(normalizeHistoryMessage("C1", slackMessageSchema.parse(edited), context)).toMatchObject({
-    message: { channelId: "C1", version: edited.edited.ts },
+    message: { channelId: "C1", version: edited.edited.ts, files: [shared] },
   });
 });
 
@@ -74,7 +94,7 @@ test.each([
   });
 });
 
-test("malformed core fields refuse, additive fields and file attachments are ignored", () => {
+test("malformed core fields refuse, while additive fields, odd files and deleted ones are ignored", () => {
   expect(slackMessageEventSchema.safeParse({ ...message, channel: "C1", ts: 1.1 }).success).toBe(
     false,
   );
@@ -82,9 +102,24 @@ test("malformed core fields refuse, additive fields and file attachments are ign
     slackMessageEventSchema.safeParse({ ...message, channel: "C1", subtype: "message_changed" })
       .success,
   ).toBe(false);
-  expect(
-    slackMessageSchema.parse({ ...message, files: [{ id: "F1" }], future_field: true }),
-  ).not.toHaveProperty("files");
+  const files = [
+    { ...upload, id: "F2", file_access: "check_file_info" },
+    { ...upload, id: "F3", size: "412 KB" },
+    { ...upload, id: "F4", mode: "tombstone" },
+    { ...upload, id: "F5", is_deleted: true },
+    { ...upload, id: "F6", is_tombstoned: true },
+    { ...upload, id: 7 },
+    "F8",
+    upload,
+    { ...upload, name: "again.png" },
+  ];
+  const parsed = normalize({ ...message, channel: "C1", files, future_field: true });
+  expect(parsed).toMatchObject({ message: { text: message.text } });
+  expect(parsed).toHaveProperty("message.files", [
+    { id: "F2", whole: false },
+    { id: "F3", whole: false },
+    shared,
+  ]);
 });
 
 test("mentions read once each, with or without a label", () => {

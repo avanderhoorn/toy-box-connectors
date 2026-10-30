@@ -35,9 +35,11 @@ const courtesyPhrase = `(?:${courtesyPhrases.join("|")})`;
 const courtesyPattern = new RegExp(`^${courtesyPhrase}(?: ${courtesyPhrase})*$`);
 
 /** Whether a message only thanks or acknowledges, such as "thanks!", "ok 👍" or a lone emoji. */
-export function isCourtesyOnly(message: Pick<SlackMessage, "text" | "mentionsBot">): boolean {
-  // A question waits for an answer, even a lone ? or an ok?.
-  if (/[?？]/.test(message.text)) return false;
+export function isCourtesyOnly(
+  message: Pick<SlackMessage, "text" | "mentionsBot" | "files">,
+): boolean {
+  // A question waits for an answer, even a lone ? or an ok?, and a shared file waits to be read.
+  if (/[?？]/.test(message.text) || message.files.length > 0) return false;
   const unmarked = message.text.replace(/<[@!][^<>]*>/g, " ");
   // A bare mention, even with a ! after it, asks the lead to read the thread.
   if (message.mentionsBot && !/[^\s\p{P}]/u.test(unmarked)) return false;
