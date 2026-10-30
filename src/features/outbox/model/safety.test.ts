@@ -11,6 +11,7 @@ test.each<readonly [OutputProblem, string, string]>([
   ["aws_key", "secret assigned with =", `aws_secret_access_key = "${"a".repeat(40)}"`],
   ["aws_key", "secret in JSON", `"aws_secret_access_key": "${"a".repeat(40)}"`],
   ["private_key", "OpenSSH", "-----BEGIN OPENSSH PRIVATE KEY-----"],
+  ["private_key", "PGP", "-----BEGIN PGP PRIVATE KEY BLOCK-----"],
   ["url_credentials", "password with a parenthesis", `ftp://${"user"}:p)ass@example.com`],
 ])("refuses %s (%s) as text or code without returning its value", (category, _, secret) => {
   expect(outputProblem(`Do not publish ${secret}`)).toBe(category);
@@ -21,6 +22,7 @@ test.each([
   "Prefixes xoxb- and ghp_ identify key families.",
   "-----BEGIN PUBLIC KEY-----",
   `ssh://${"user"}@example.com`,
+  "http://localhost:3000",
 ])("ordinary text is not a secret: %s", (source) => {
   expect(outputProblem(source)).toBeNull();
 });

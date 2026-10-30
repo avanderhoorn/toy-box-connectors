@@ -15,7 +15,7 @@ const secretShapes: readonly [OutputProblem, RegExp][] = [
   ["openai_key", /\bsk-(?:(?:proj|svcacct)-)?[A-Za-z0-9_-]{20,}/],
   ["aws_key", /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
   ["aws_key", /\baws[_ -]?secret[_ -]?access[_ -]?key[\s"']*[:=]\s*["']?[A-Za-z0-9/+=]{40}/i],
-  ["private_key", /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----/],
+  ["private_key", /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY(?: BLOCK)?-----/],
 ];
 
 export function outputProblem(text: string): OutputProblem | null {
