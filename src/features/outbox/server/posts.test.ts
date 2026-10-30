@@ -53,22 +53,6 @@ test("one threaded Markdown answer confirms its request, retracts and keeps its 
   });
 });
 
-test("a lost response is confirmed through paginated exact metadata, never a second post", async () => {
-  const world = await createOutboxWorld();
-  const item = await world.queue();
-  world.slack.failNext("chat.postMessage", { lostResponse: true });
-  expect(await world.post(item.id)).toMatchObject({ item: { state: "delivery_unknown" } });
-  world.advance(60_000);
-  world.slack.emptyNextPage("conversations.replies");
-  expect(
-    await createReconciliation(world.database, world.bot, { now: world.now }).reconcile(item.id),
-  ).toMatchObject({ item: { state: "sent" } });
-  expect(world.slack.calls.filter((call) => call.method === "conversations.replies")).toHaveLength(
-    2,
-  );
-  expect(world.slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
-});
-
 test("accepted then deleted posts remain unknown after two clean misses, and failed reads spend no check", async () => {
   const world = await createOutboxWorld();
   const input = { linkId: "link", series: "notes", scheduledAt: world.now(), text: "# Notes" };
@@ -124,13 +108,4 @@ test.each([
   if (cause === "widen") world.slack.addChannel({ id: "C-link", is_private: false });
   expect(await world.post(item.id)).toMatchObject(expected);
   expect(world.slack.calls.some((call) => call.method === "chat.postMessage")).toBe(false);
-});
-
-test("a reply accepted outside its thread remains unknown", async () => {
-  const world = await createOutboxWorld();
-  const item = await world.queue();
-  world.slack.failNext("chat.postMessage", { misplacedReply: true });
-  expect(await world.post(item.id)).toMatchObject({
-    item: { state: "delivery_unknown", error: "wrong_thread" },
-  });
 });

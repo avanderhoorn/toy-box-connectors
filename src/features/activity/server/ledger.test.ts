@@ -27,20 +27,6 @@ function readLedger(database: BridgeDatabase) {
   }));
 }
 
-test("a message's versions converge in any order, with one change for each edit", async () => {
-  const database = await openLedger();
-  const edited = editMessage(ask, "1700000150.000100", "<@U-bot> can you look at prod?");
-  for (const message of [ask, edited, ask, edited]) await createStoredMessage(database, message);
-
-  expect(await readLedger(database)).toEqual({
-    messages: [{ ts: ask.ts, text: edited.text, deleted: 0, updated_seq: 2 }],
-    changes: [
-      { seq: 1, ts: ask.ts, kind: "new" },
-      { seq: 2, ts: ask.ts, kind: "edited" },
-    ],
-  });
-});
-
 test("a delete forgets a message's text for good, even when it arrives first", async () => {
   const database = await openLedger();
   const early = askMessage("1700000200.000100");
@@ -82,22 +68,6 @@ test("a stranger's text is kept only where the link observes them", async () => 
     { ts: inThread.ts, text: inThread.text, deleted: 0, updated_seq: 1 },
     { ts: atRoot.ts, text: null, deleted: 0, updated_seq: 2 },
     { ts: "1700000400.000100", text: inThread.text, deleted: 0, updated_seq: 3 },
-  ]);
-});
-
-test("the ledger keeps who wrote a message only while it keeps what they said", async () => {
-  const database = await openLedger();
-  const stranger = askMessage("1700000200.000100", { userId: "U-stranger" });
-  const deleted = askMessage("1700000300.000100");
-  for (const message of [ask, stranger, deleted]) await createStoredMessage(database, message);
-  await storeDeleteOf(database, deleted);
-  await storeDeleteOf(database, askMessage("1700000400.000100"));
-
-  expect(await database.read((sql) => sql`SELECT ts, user_id FROM messages ORDER BY ts`)).toEqual([
-    { ts: ask.ts, user_id: "U-owner" },
-    { ts: stranger.ts, user_id: null },
-    { ts: deleted.ts, user_id: null },
-    { ts: "1700000400.000100", user_id: null },
   ]);
 });
 

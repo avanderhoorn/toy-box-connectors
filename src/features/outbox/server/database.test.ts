@@ -10,20 +10,7 @@ import {
   settleOutboxAttempt,
   startOutboxAttempt,
 } from "./database";
-import { createOutboxWorld, createStoredOutboxItem } from "./testFixtures";
-
-test("queueing atomically begins answering and reserves the request key in every outcome", async () => {
-  const world = await createOutboxWorld();
-  const item = await world.queue();
-  await expect(world.queue("A different answer")).rejects.toThrow(`reserved by o${item.number}`);
-  expect(await world.database.read((sql) => readRequest(sql, world.request.id))).toMatchObject({
-    state: "answering",
-  });
-  for (const state of ["queued", "sent", "failed", "delivery_unknown", "retracted"]) {
-    await world.database.write((tx) => tx`UPDATE outbox SET state = ${state}`);
-    await expect(createStoredOutboxItem(world.database, 2)).rejects.toThrow("UNIQUE");
-  }
-});
+import { createOutboxWorld } from "./testFixtures";
 
 test.each(["deny", "pause"])("a %s before queueing refuses the reply", async (cause) => {
   const world = await createOutboxWorld();

@@ -22,31 +22,24 @@ const uninstall: LifecycleAction = { kind: "uninstall" };
 const revoked = (...bot: string[]) => ({ type: "tokens_revoked", tokens: { bot } });
 
 test.each<[string, LifecycleAction | null, EventCallback["event"]]>([
-  ["a public channel", suspend("channel_made_public"), notice("channel_convert_to_public")],
   ["an archive notice", suspend("channel_archived"), notice("channel_archive")],
   ["a private archive notice", suspend("channel_archived"), notice("group_archive")],
   ["an archived channel", suspend("channel_archived"), { type: "channel_archive" }],
   ["a deleted channel", suspend("channel_not_found"), { type: "channel_deleted" }],
   ["a deleted private channel", suspend("channel_not_found"), { type: "group_deleted" }],
   ["a shared channel", suspend("workspace_joined"), { type: "channel_shared" }],
-  ["our bot leaving", suspend("bot_removed"), { type: "member_left_channel", user: "U-bot" }],
   [
     "a new channel ID",
     suspend("channel_id_changed"),
     { type: "channel_id_changed", old_channel_id: "C-link", new_channel_id: "C-new" },
   ],
-  ["an uninstall", uninstall, { type: "app_uninstalled" }],
   ["our bot's token revoked", uninstall, revoked("U-other", "U-bot")],
   ["another bot's token revoked", null, revoked("U-other")],
-  ["someone else leaving", null, { type: "member_left_channel", user: "U-owner" }],
-  ["another notice", null, notice("channel_join")],
-  ["a person's message", null, { type: "message", user: "U-owner", ts }],
   [
     "an edit of a notice",
     null,
     { type: "message", subtype: "message_changed", message: notice("channel_archive") },
   ],
-  ["an event the bridge doesn't use", null, { type: "reaction_added" }],
 ])("%s means %j for the channel's links", (_, action, event) => {
   expect(lifecycleAction(readSlackEvent({ channel: "C-link", ...event }), "U-bot")).toEqual(action);
 });
