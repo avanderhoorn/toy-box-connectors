@@ -101,17 +101,23 @@ describe("openBridgeDatabase", () => {
     },
   );
 
-  test.each([1, Math.max(...recordedVersions) + 1])(
-    "refuses a bridge.db that version %d made",
-    async (version) => {
-      const path = join(createTestFolder(), "bridge.db");
-      await createDatabaseMadeBy(path, version);
+  test("refuses a bridge.db that a version it can't upgrade made, which only starting over ends", async () => {
+    const path = join(createTestFolder(), "bridge.db");
+    await createDatabaseMadeBy(path, 1);
 
-      await expect(openBridgeDatabase(path)).rejects.toThrow(
-        `${path} was made by another version of toy-box-slack. The bridge has to start over, which forgets every link, so stop the bridge, remove bridge.db and its -wal/-shm files, and start it again. Then link each channel and allow its people again.`,
-      );
-    },
-  );
+    await expect(openBridgeDatabase(path)).rejects.toThrow(
+      `${path} was made by another version of toy-box-slack. The bridge has to start over, which forgets every link, so stop the bridge, remove bridge.db and its -wal/-shm files, and start it again. Then link each channel and allow its people again.`,
+    );
+  });
+
+  test("refuses a bridge.db that a newer version made, sending the owner back to that version", async () => {
+    const path = join(createTestFolder(), "bridge.db");
+    await createDatabaseMadeBy(path, Math.max(...recordedVersions) + 1);
+
+    await expect(openBridgeDatabase(path)).rejects.toThrow(
+      `${path} was made by a newer version of toy-box-slack, which this one can't read. Install the newer version again and start the bridge.`,
+    );
+  });
 });
 
 describe("BridgeDatabase", () => {

@@ -71,7 +71,7 @@ async function configure(sql: Bun.SQL): Promise<void> {
 // owning each feature's persistence model. Owners update by installing a release and restarting, so
 // changing a table raises the version, records its tables in `schemas/`, and migrates a `bridge.db`
 // that any recorded version made. The bridge refuses a `bridge.db` any other version made rather
-// than fail on it later.
+// than fail on it later, and one a newer version made needs that version, not a fresh start.
 const schemaVersion = 3;
 
 /** Each step takes a `bridge.db` from the version it's keyed by to the next one. */
@@ -85,6 +85,11 @@ async function initializeSchema(sql: Bun.SQL, path: string): Promise<void> {
       PRAGMA user_version
     `;
     if (version === schemaVersion) return;
+    if (version > schemaVersion) {
+      throw new BridgeRefusedError(
+        `${path} was made by a newer version of toy-box-slack, which this one can't read. Install the newer version again and start the bridge.`,
+      );
+    }
     if (version === 0) await createSchema(transaction);
     else if (version in migrations) {
       for (let step = version; step < schemaVersion; step++) await migrations[step]!(transaction);
