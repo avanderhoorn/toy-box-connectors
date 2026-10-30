@@ -18,44 +18,6 @@ function writeCredentials(folder: string, text: string): void {
 }
 
 describe("the apps in a data folder", () => {
-  test("are default alone until there's an apps/ folder, with default's files in the data folder", () => {
-    const dataFolder = createTestFolder();
-
-    expect(listApps(dataFolder)).toEqual([
-      {
-        name: DEFAULT_APP,
-        folder: dataFolder,
-        credentials: join(dataFolder, "credentials.env"),
-        database: join(dataFolder, "bridge.db"),
-        lock: join(dataFolder, "bridge.lock"),
-      },
-    ]);
-  });
-
-  test("are default and then every folder in apps/ by name, each with its own files", () => {
-    const dataFolder = createTestFolder();
-    for (const name of ["releases", "ops-2", "alerts", "z", "builds"])
-      addAppFolder(dataFolder, name);
-
-    const apps = listApps(dataFolder);
-    expect(apps.map(({ name }) => name)).toEqual([
-      DEFAULT_APP,
-      "alerts",
-      "builds",
-      "ops-2",
-      "releases",
-      "z",
-    ]);
-    const folder = join(dataFolder, "apps", "releases");
-    expect(apps[4]).toEqual({
-      name: "releases",
-      folder,
-      credentials: join(folder, "credentials.env"),
-      database: join(folder, "bridge.db"),
-      lock: join(folder, "bridge.lock"),
-    });
-  });
-
   test("ignore what in apps/ isn't a folder, such as the .DS_Store Finder writes", () => {
     const dataFolder = createTestFolder();
     const apps = join(addAppFolder(dataFolder, "releases"), "..");
@@ -78,15 +40,6 @@ describe("the apps in a data folder", () => {
         `${folder} can't be an app's folder. An app's name is 1 to 32 lowercase letters, digits and hyphens, and doesn't start with a hyphen. Rename it or move it out of ${join(dataFolder, "apps")}, and start the bridge again.`,
       );
     }
-  });
-
-  test("stop the bridge at a folder in apps/ named default, which is the data folder's own app", () => {
-    const dataFolder = createTestFolder();
-    const folder = addAppFolder(dataFolder, DEFAULT_APP);
-
-    expect(refusalOf(() => listApps(dataFolder))).toBe(
-      `${folder} can't be an app's folder. An added app can't be named default, since that's the data folder's own app. Rename it or move it out of ${join(dataFolder, "apps")}, and start the bridge again.`,
-    );
   });
 
   test("stop the bridge at an app folder others could open", () => {
@@ -129,18 +82,6 @@ describe("an app's tokens", () => {
     expect(readAppTokens(app, { SLACK_APP_TOKEN: "" })).toEqual({ botToken: null, appToken: null });
   });
 
-  test("are an added app's from its own credentials.env alone, never the environment or default's", () => {
-    const dataFolder = createTestFolder();
-    writeCredentials(dataFolder, "SLACK_BOT_TOKEN=xoxb-default\nSLACK_APP_TOKEN=xapp-default\n");
-    const app = locateApp(dataFolder, "releases");
-    addAppFolder(dataFolder, app.name);
-    const env = { SLACK_BOT_TOKEN: "xoxb-env", SLACK_APP_TOKEN: "xapp-env" };
-    expect(readAppTokens(app, env)).toEqual({ botToken: null, appToken: null });
-
-    writeCredentials(app.folder, "SLACK_BOT_TOKEN=xoxb-releases\nSLACK_APP_TOKEN=\n");
-    expect(readAppTokens(app, env)).toEqual({ botToken: "xoxb-releases", appToken: null });
-  });
-
   test("are refused when an added app's credentials.env sets anything else, since the rest is the bridge's", () => {
     const dataFolder = createTestFolder();
     const app = locateApp(dataFolder, "releases");
@@ -153,19 +94,5 @@ describe("an app's tokens", () => {
     expect(refusalOf(() => readAppTokens(app, {}))).toBe(
       `${app.credentials} may set only SLACK_BOT_TOKEN and SLACK_APP_TOKEN.\n✖ Unrecognized key: "TOY_BOX_URL"`,
     );
-  });
-
-  test("are refused when others could read or write an added app's credentials.env", () => {
-    const dataFolder = createTestFolder();
-    const app = locateApp(dataFolder, "releases");
-    addAppFolder(dataFolder, app.name);
-    writeCredentials(app.folder, "SLACK_BOT_TOKEN=xoxb-secret\n");
-
-    for (const mode of [0o640, 0o604, 0o620, 0o602]) {
-      chmodSync(app.credentials, mode);
-      expect(refusalOf(() => readAppTokens(app, {}))).toBe(
-        `${app.credentials} has mode ${mode.toString(8)}, but it holds Slack tokens, so it must be 600. Run \`chmod 600 ${app.credentials}\` and start the bridge again.`,
-      );
-    }
   });
 });

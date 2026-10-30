@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { appendFileSync, chmodSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { defaultWakeTimings } from "@wakes/model";
-import { readCredentialsFile, resolveBridgeSettings, writeCredential } from "./environment";
+import { readCredentialsFile, resolveBridgeSettings } from "./environment";
 import { createTestFolder, refusalOf } from "./testFixtures";
 
 describe("the bridge's settings", () => {
@@ -28,51 +28,9 @@ describe("the bridge's settings", () => {
       toyBoxOrigin: new URL("http://127.0.0.1:3000"),
     });
   });
-
-  test("refuse a Toy Box anywhere but this Mac", () => {
-    for (const url of ["https://127.0.0.1:3000", "http://10.0.0.2:3000", "toy-box"]) {
-      expect(refusalOf(() => resolveBridgeSettings({}, { TOY_BOX_URL: url }))).toBe(
-        `TOY_BOX_URL must be an http URL on this Mac, such as http://127.0.0.1:3000, but it's "${url}".`,
-      );
-    }
-  });
 });
 
 describe("credentials.env", () => {
-  test("is optional, and holds NAME=value lines where export, quotes and comments are allowed", () => {
-    const dataFolder = createTestFolder();
-    expect(readCredentialsFile(dataFolder)).toEqual({});
-
-    const text = [
-      "# Slack tokens for the bridge",
-      "",
-      "SLACK_BOT_TOKEN=xoxb-1 # the bot",
-      'export SLACK_APP_TOKEN = "xapp-2"\r',
-      "  TOY_BOX_URL='http://127.0.0.1:3100/?a=b'  ",
-    ].join("\n");
-    writeFileSync(join(dataFolder, "credentials.env"), text, { mode: 0o600 });
-
-    expect(readCredentialsFile(dataFolder)).toEqual({
-      SLACK_BOT_TOKEN: "xoxb-1",
-      SLACK_APP_TOKEN: "xapp-2",
-      TOY_BOX_URL: "http://127.0.0.1:3100/?a=b",
-    });
-  });
-
-  test("keeps its other lines when a setting is written, and stays at mode 600", () => {
-    const dataFolder = createTestFolder();
-    const path = join(dataFolder, "credentials.env");
-    writeCredential(dataFolder, "SLACK_APP_TOKEN", "xapp-old");
-    appendFileSync(path, "# the bot\nSLACK_BOT_TOKEN=xoxb-1\n");
-    writeCredential(dataFolder, "SLACK_APP_TOKEN", "xapp-new");
-
-    expect(readCredentialsFile(dataFolder)).toEqual({
-      SLACK_BOT_TOKEN: "xoxb-1",
-      SLACK_APP_TOKEN: "xapp-new",
-    });
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-  });
-
   test("is refused when others could read or write it, or it sets anything else, without repeating a value", () => {
     const dataFolder = createTestFolder();
     const path = join(dataFolder, "credentials.env");

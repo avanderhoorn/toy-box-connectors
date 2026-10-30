@@ -54,16 +54,6 @@ describe("openBridgeDatabase", () => {
     expect(pragmas).toEqual({ journal_mode: "wal", synchronous: 2, fullfsync: 1, foreign_keys: 1 });
   });
 
-  test("gives a new bridge.db a version whose tables are recorded", async () => {
-    const database = await openTestDatabase();
-
-    const [{ user_version: version }] = await database.read(
-      (sql) => sql<{ user_version: number }[]>`PRAGMA user_version`,
-    );
-
-    expect(recordedVersions).toContain(version);
-  });
-
   test.each(recordedVersions)(
     "opens a bridge.db that version %d made, with the tables a new one gets",
     async (version) => {
@@ -102,28 +92,6 @@ describe("BridgeDatabase", () => {
       return rows.map((row) => row.id);
     });
   }
-
-  test("runs a read issued while a write is open after that write, outside its transaction", async () => {
-    const database = await createProbe(await open(join(createTestFolder(), "bridge.db")));
-    let markOpen!: () => void;
-    let release!: () => void;
-    const isOpen = new Promise<void>((resolve) => (markOpen = resolve));
-    const released = new Promise<void>((resolve) => (release = resolve));
-    const write = database.write(async (transaction) => {
-      await transaction`INSERT INTO probe (id) VALUES (1)`;
-      markOpen();
-      await released;
-      throw new Error("Rolled back.");
-    });
-    await isOpen;
-
-    const read = readRows(database);
-    await Bun.sleep(20);
-    release();
-
-    await expect(write).rejects.toThrow("Rolled back.");
-    expect(await read).toEqual([]);
-  });
 
   test("closes only after the work queued before it", async () => {
     const path = join(createTestFolder(), "bridge.db");

@@ -76,7 +76,7 @@ export function listenForCommands(
 }
 
 // Bun counts whole seconds. Its types offer idleTimeout only with a port, but Bun applies it to a
-// Unix socket too, as socket.test.ts proves.
+// Unix socket too.
 function idleSeconds(idleTimeout: number): object {
   return { idleTimeout: Math.ceil(idleTimeout / 1_000) };
 }
