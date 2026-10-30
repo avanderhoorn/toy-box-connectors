@@ -369,3 +369,26 @@ test("retract deletes the lead's post from Slack, says what stays used, and says
   await world.post((await world.queuePost()).id);
   expect((await retract({ post: 2 }, lead)).text).toBe("Deleted o2 from Slack.");
 });
+
+test("retract deletes a post's images after its message, owes a delete of each it can't confirm, and finishes when run again", async () => {
+  const world = await createOutboxWorld();
+  const { id } = await world.queue("Here's the chart.", ["F-1", "F-2"]);
+  await world.post(id);
+  const retract = retractCommand({ database: world.database, bot: world.bot });
+  const lead = { ...LEAD, at: world.now() };
+  // Slack deletes the first image but loses its answer.
+  world.slack.failNext("files.delete", { lostResponse: true });
+
+  expect(await refusal(retract({ post: 1 }, lead))).toBe(
+    "o1 wasn't deleted. Its message is gone, but image 1 couldn't be deleted since Slack didn't answer, so try again shortly. Retrying this same post is safe.",
+  );
+  expect(world.slack.getMessages("C-link").map(({ user }) => user)).toEqual(["U-owner"]);
+  expect((await world.owed()).map(({ fileId }) => fileId)).toEqual(["F-1", "F-2"]);
+  expect((await retract({ post: 1 }, lead)).text).toBe(
+    "Deleted o1 from Slack. Its request or run stays used, so nothing posts in its place.",
+  );
+  expect(["F-1", "F-2"].map((file) => world.slack.getFileBytes(file))).toEqual([
+    undefined,
+    undefined,
+  ]);
+});

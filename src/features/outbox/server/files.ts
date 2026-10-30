@@ -1,9 +1,10 @@
 // The files the bridge uploads to show a post's images.
 //
 // A queued item names its files in `outbox_files`, in the order it shows them, and its payload
-// holds what each shows. Every other file the bridge uploaded is owed a delete in
-// `file_deletions` until Slack confirms it gone: one a command uploaded, until it queues the post
-// that shows it, and one a post that won't go out, or was retracted, no longer shows.
+// holds what each shows. The bridge owes Slack a delete in `file_deletions` of each file it
+// uploaded that no message should show, until Slack confirms it gone. A command owes the deletes of
+// the files it uploads until it queues their item, an item that won't go out owes its files'
+// deletes, and retract owes the deletes it can't confirm once the post's message is gone.
 
 /** A delete the bridge owes Slack. */
 export type OwedDeletion = { fileId: string; attempts: number; createdAt: number };

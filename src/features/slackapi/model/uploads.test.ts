@@ -44,6 +44,15 @@ test.each<[string, SlackCall<unknown>, Deletion]>([
     { kind: "error", error: "cant_delete_file", data: { ok: false } },
     { kind: "kept", reason: "Slack refused with cant_delete_file" },
   ],
+  [
+    "and one the Slack app can't delete without files:write",
+    { kind: "error", error: "missing_scope", data: { ok: false } },
+    {
+      kind: "kept",
+      reason:
+        "the Slack app doesn't have the files:write scope yet. Ask the owner to add it on the app's OAuth & Permissions page and reinstall the app to the workspace",
+    },
+  ],
 ])("%s", (_, call, deletion) => {
   expect(judgeDeletion(call)).toEqual(deletion);
 });
