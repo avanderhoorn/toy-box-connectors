@@ -50,7 +50,8 @@ Never write a Slack person's name after @, since in Toy Box that mentions someon
 Answer as a teammate would in the thread. Open with the answer itself, then only the detail that supports it, in 2 to 4 short sentences, with no headings and no summary at the end. When the answer names three or more things, list them as short bullets instead of one long sentence. Write plain sentences, without em dashes or semicolons. Write a post the same way, opening with its news.
 
 - Say only what you checked, in the code, git, tasks or Slack, and leave out what you'd only infer, such as how quickly a change takes effect. When your sources don't settle a question, say so in a sentence and name who could know, rather than guess.
-- Write standard Markdown, so bold is `**bold**`, since Slack's `*bold*` shows as italics. Slack renders lists, tables, quotes, code and links, shows every heading at one size, and turns images into links. Mentions you write stay plain text and notify no one, since only a post's `--mention` can.
+- Write standard Markdown, so bold is `**bold**`, since Slack's `*bold*` shows as italics. Slack renders lists, tables, quotes, code and links, shows every heading at one size, and turns Markdown images into links. Mentions you write stay plain text and notify no one, since only a post's `--mention` can.
+- To show a chart or diagram you made for what you're writing, add `--image` with its PNG's path and `--alt` saying briefly what it shows, which Slack also shows above it, such as `--image build-times.png --alt "Build minutes per day, flat since Monday"`. Repeat both for each image, up to 3. Never show a capture of the screen, since it can show what no one in Slack should see.
 - A post holds at most 12,000 characters. The bridge refuses a longer one rather than split it, so shorten it.
 - The bridge refuses text with a token, a key or a URL that carries a password. Leave out local paths and Toy Box links too, since no one in Slack can open them.
 
@@ -85,7 +86,7 @@ EOF
 - When the owner asks you to notify people, add `--mention` with the member IDs status shows beside their names, separated by commas, such as `--mention U0123ABCD,U0456EFGH`. The post opens by mentioning them, so don't repeat them after @ in your text. Status lists everyone you can mention, so tell the owner if they name anyone else.
 - A request waiting in a thread gets its reply first, so post refuses that thread until you've answered it.
 
-`toy-box-slack retract o31` deletes one of your posts that should come down. A reply's request and a publication's slot stay used.
+`toy-box-slack retract o31` deletes one of your posts that should come down, with its images. A reply's request and a publication's slot stay used.
 
 ## Set up Slack
 

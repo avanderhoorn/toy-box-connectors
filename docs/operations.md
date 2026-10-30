@@ -127,6 +127,33 @@ empties that folder when it starts and when it stops, so an image outlives the
 bridge only after a crash, until it starts again. Editing a snippet in Slack
 doesn't wake the lead or change an answer it already gave.
 
+## Images in posts
+
+Each app needs the `files:write` scope for the lead to show images in what it
+posts, and `files:read` to see that Slack has processed them. For an app
+created from an older manifest, add them to the bot scopes in its **App
+Manifest** settings and follow Slack's prompt to reinstall it, then install the
+release and restart the bridge. Until an app has both, `reply`, `post` and
+`publish` refuse an `--image` with a reason that says which to add, and posts
+without images go as before.
+
+The lead shows up to three PNG images below a post's text, each at most 5 MiB
+and 20 megapixels, with alt text of up to 1,000 characters that Slack shows
+above it. The bridge rebuilds each image from its pixels alone and uploads it
+as a file only the bot can see, then queues the post, which shows the files
+once it goes out. A command starts no Slack work on its images after 30
+seconds, so it answers within the minute the CLI waits, and it refuses rather
+than post without an image Slack hasn't taken.
+
+A file no post shows, such as one whose post was refused or failed, or one a
+crash left before its post was queued, is owed a delete. The bridge keeps trying
+it, waiting longer each time up to an hour apart, for 30 days. Retract deletes a
+post's images after its message. When Slack keeps one, retract says so and owes
+the deletes it couldn't confirm, and running it again finishes. Unlink leaves
+the deletes the bridge owes, since they belong to no link, while uninstalling
+the app forgets them, so the files they name stay in Slack, though no message
+shows them.
+
 ## Deletion and limits
 
 Unlink deletes that link's owned database rows. Observed app uninstall or

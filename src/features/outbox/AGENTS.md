@@ -73,3 +73,28 @@ The send boundary accepts only canonical renderer output, rendering the fallback
 the people its block's opening line mentions, and rechecks secrets without changing the stored
 bytes. Slack translates Markdown into its own block layout, so delivery proof must
 not compare returned blocks with the outbound snapshot.
+
+## Images
+
+A reply, publication or post shows up to three PNG images below its text, which the lead names by
+path, each with its alt text. The CLI sends each file's bytes, and `server/uploads.ts` rebuilds
+each from its pixels alone before Slack sees it. A message shows a file only once Slack has
+processed it, so the command uploads the images before it queues the item. It checks the post as
+queueing would, rebuilds the images, then for each one opens an upload, sends the bytes only to
+Slack's file host and without the token, and completes it without a channel, so the file stays
+private to the bot. It looks with files.info until Slack has processed them all, and starts no
+Slack work after 30 seconds, so it answers within the CLI's wait. One write then queues the item,
+checking it again, and names its files in `outbox_files`, in order, while the payload keeps each
+image's alt text, which the send boundary rechecks for secrets. Each image goes as an image block
+after the text's, naming its file and titled with its alt text, since Slack heads one without a
+title with only its size.
+
+The bridge owes Slack a delete in `file_deletions` of each file no message should show, from the
+moment Slack names it. A command's files are owed due five minutes later, long after it must have
+ended, and queueing clears them, so only a crash leaves them for the worker. Any failure before that
+owes them due at once, and so does an item that fails, since its post won't show them. The worker
+tries the deletes due each pass, stopping at the first Slack keeps, and waits longer each time, from
+a minute to an hour, for 30 days. Retract deletes a post's images after its message. While Slack
+keeps one, the item keeps its state, and that file and the rest are owed, so retracting again
+finishes. `outbox_files` goes with its item, while `file_deletions` names no link, so it outlives
+unlink.

@@ -20,6 +20,7 @@ oauth_config:
       - groups:history
       - groups:read
       - files:read
+      - files:write
       - users:read
       - chat:write
       - metadata.message:read
