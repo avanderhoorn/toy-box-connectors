@@ -26,6 +26,7 @@
       "@activity/*": ["./src/features/activity/*"],
       "@bridge/*": ["./src/features/bridge/*"],
       "@commands/*": ["./src/features/commands/*"],
+      "@files/*": ["./src/features/files/*"],
       "@links/*": ["./src/features/links/*"],
       "@outbox/*": ["./src/features/outbox/*"],
       "@requests/*": ["./src/features/requests/*"],
