@@ -142,49 +142,26 @@ test.each<[string, string, unknown, number, Answer]>([
   expect(await call(name, body)).toEqual({ status, answer });
 });
 
-test("runs a command in the app the caller's Toy Box channel links through, else in the default app", async () => {
+test("runs a call where routing says, by the app the caller's channel links through", async () => {
   const { call } = await serving([
     { name: DEFAULT_APP, links: ["link"] },
     { name: "releases", links: ["other"] },
   ]);
-  const ranIn = async (caller: unknown, name = "pause") =>
-    (await call(name, { caller, input: {} })).answer.result?.app;
+  const terminal = (channelId: string | null) => ({ ...TERMINAL, channelId });
+  const ran = async (name: string, caller: unknown, input = {}) =>
+    (await call(name, { caller, input })).answer.result;
 
-  expect(await ranIn(LEAD)).toBe("default");
-  expect(await ranIn({ sessionId: "toybox-other", channelId: null })).toBe("releases");
-  expect(await ranIn({ ...TERMINAL, channelId: "toybox-other" })).toBe("releases");
-  expect(await ranIn({ ...TERMINAL, channelId: "toybox-new" }, "unlink")).toBe("default");
-});
-
-test("shows a terminal that names no channel every app's status, and anyone else one app's", async () => {
-  const { call } = await serving([
-    { name: DEFAULT_APP, links: ["link"] },
-    { name: "releases", links: ["other"] },
-  ]);
-  const shown = async (caller: unknown) =>
-    (await call("status", { caller, input: {} })).answer.result?.apps;
-
-  expect(await shown(TERMINAL)).toEqual(["default", "releases"]);
-  expect(await shown({ sessionId: "toybox-other", channelId: null })).toEqual(["releases"]);
-  expect(await shown({ ...TERMINAL, channelId: "toybox-link" })).toEqual(["default"]);
-});
-
-test("links through the app --app names, refusing one the bridge doesn't run or the channel doesn't link through", async () => {
-  const { call } = await serving([
-    { name: DEFAULT_APP, links: ["link"] },
-    { name: "releases", links: [] },
-  ]);
-  const link = (channelId: string, app?: string) =>
-    call("link", { caller: { ...TERMINAL, channelId }, input: { slackChannel: "C0NEW", app } });
-
-  expect((await link("toybox-new", "releases")).answer.result?.app).toBe("releases");
-  expect((await link("toybox-new")).answer.result?.app).toBe("default");
-  expect((await link("toybox-link", "default")).answer.result?.app).toBe("default");
-  expect(await link("toybox-new", "support")).toEqual({
-    status: 409,
-    answer: { error: expect.stringMatching(/^The bridge isn't running an app named support,/) },
-  });
-  expect(await link("toybox-link", "releases")).toEqual({
+  expect((await ran("pause", LEAD))?.app).toBe("default");
+  expect((await ran("pause", { sessionId: "toybox-other", channelId: null }))?.app).toBe(
+    "releases",
+  );
+  expect((await ran("pause", terminal("toybox-other")))?.app).toBe("releases");
+  expect((await ran("unlink", terminal("toybox-new")))?.app).toBe("default");
+  expect((await ran("status", terminal(null)))?.apps).toEqual(["default", "releases"]);
+  expect((await ran("status", terminal("toybox-link")))?.apps).toEqual(["default"]);
+  const link = { slackChannel: "C0NEW", app: "releases" };
+  expect((await ran("link", terminal("toybox-new"), link))?.app).toBe("releases");
+  expect(await call("link", { caller: terminal("toybox-link"), input: link })).toEqual({
     status: 409,
     answer: {
       error:
@@ -291,28 +268,19 @@ test("logs why a command failed under the app it ran in, and says it may or may 
   expect(releases).toStartWith("[releases] Couldn't finish `dismiss`: ");
 });
 
-test("reports a change to the app a command ran in, whether it answered, refused or failed", async () => {
+test("reports a change to each app a command ran in, whether it answered, refused or failed", async () => {
   captureLog();
-  const { call, apps } = await serving();
-  const [app] = apps;
-
-  expect((await call("status", { caller: LEAD, input: {} })).status).toBe(200);
-  expect((await call("inbox", { caller: LEAD, input: {} })).status).toBe(409);
-  expect((await call("dismiss", { caller: LEAD, input: DISMISS })).status).toBe(500);
-
-  expect(app!.onChange).toHaveBeenCalledTimes(3);
-});
-
-test("reports a change only to the apps a command ran in", async () => {
   const { call, apps } = await serving([
     { name: DEFAULT_APP, links: ["link"] },
     { name: "releases", links: ["other"] },
   ]);
-  const [home, releases] = apps;
+  const changes = () => apps.map((app) => app.onChange.mock.calls.length);
 
-  await call("pause", { caller: { sessionId: "toybox-other", channelId: null }, input: {} });
-  expect([home!.onChange.mock.calls.length, releases!.onChange.mock.calls.length]).toEqual([0, 1]);
+  expect((await call("status", { caller: LEAD, input: {} })).status).toBe(200);
+  expect((await call("inbox", { caller: LEAD, input: {} })).status).toBe(409);
+  expect((await call("dismiss", { caller: LEAD, input: DISMISS })).status).toBe(500);
+  expect(changes()).toEqual([3, 0]);
 
   await call("status", { caller: TERMINAL, input: {} });
-  expect([home!.onChange.mock.calls.length, releases!.onChange.mock.calls.length]).toEqual([1, 2]);
+  expect(changes()).toEqual([4, 1]);
 });

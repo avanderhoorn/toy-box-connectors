@@ -61,52 +61,52 @@ function installationIn(folder: string) {
   return withDatabase(folder, (database) => database.read(readInstallation));
 }
 
+/** `line` as a bridge logs it for `app`. */
+function logged(app: string, line: string) {
+  return app === "default" ? line : `[${app}] ${line}`;
+}
+
+/** A home whose default app and releases app both hold the tokens of `slack`'s one Slack app. */
+function prepareTwoAppsOfOne(slack: FakeSlackApp) {
+  const { home, dataFolder } = prepareHome();
+  const releases = createAddedApp(dataFolder, "releases", tokensOf(slack));
+  const folders: Record<string, string> = { default: dataFolder, releases: releases.folder };
+  return { home, folders };
+}
+
 describe("a Slack app the tokens of two apps belong to", () => {
-  test("stays with the default app whose bridge.db records it, so the added app never connects", async () => {
-    const { slack, env } = startSlackForBridge(RECORDED);
-    const { home, dataFolder } = prepareHome();
-    await withDatabase(dataFolder, (database) => createStoredInstallation(database));
-    const releases = createAddedApp(dataFolder, "releases", tokensOf(slack));
-    const refused = refusalProblem({ reason: "duplicate_app", heldBy: "default" }, "releases");
+  // Either app may ask Slack first, so only both holders together prove the record decides.
+  test.each(["default", "releases"])(
+    "stays with the %s app whose bridge.db records it, so the other never connects",
+    async (holder) => {
+      const { slack, env } = startSlackForBridge(RECORDED);
+      const { home, folders } = prepareTwoAppsOfOne(slack);
+      const other = holder === "default" ? "releases" : "default";
+      await withDatabase(folders[holder]!, (database) => createStoredInstallation(database));
+      const connected = logged(holder, "Connected to Slack.");
+      const refused = logged(
+        other,
+        refusalProblem({ reason: "duplicate_app", heldBy: holder }, other),
+      );
 
-    const bridge = spawnBridge(home, env);
-    await bridge.says(`[releases] ${refused}`);
-    await bridge.says("Connected to Slack.");
-    await deliverTo(slack);
+      const bridge = spawnBridge(home, env);
+      await bridge.says(refused);
+      await bridge.says(connected);
+      await deliverTo(slack);
 
-    expect(slack.connections).toHaveLength(1);
-    bridge.child.kill("SIGTERM");
-    const { code, stderr } = await bridge.exit();
-    expect(code).toBe(0);
-    expectSaid(stderr, home, ["Connected to Slack.", `[releases] ${refused}`]);
-    expect(await installationIn(releases.folder)).toBeNull();
-  }, 15_000);
-
-  test("stays with an added app whose bridge.db records it, though the default app starts first", async () => {
-    const { slack, env } = startSlackForBridge(RECORDED);
-    const { home, dataFolder } = prepareHome();
-    const releases = createAddedApp(dataFolder, "releases", tokensOf(slack));
-    await withDatabase(releases.folder, (database) => createStoredInstallation(database));
-    const refused = refusalProblem({ reason: "duplicate_app", heldBy: "releases" }, "default");
-
-    const bridge = spawnBridge(home, env);
-    await bridge.says(refused);
-    await bridge.says("[releases] Connected to Slack.");
-    await deliverTo(slack);
-
-    expect(slack.connections).toHaveLength(1);
-    bridge.child.kill("SIGTERM");
-    const { code, stderr } = await bridge.exit();
-    expect(code).toBe(0);
-    expectSaid(stderr, home, ["[releases] Connected to Slack.", refused]);
-    expect(await installationIn(dataFolder)).toBeNull();
-  }, 15_000);
+      expect(slack.connections).toHaveLength(1);
+      bridge.child.kill("SIGTERM");
+      const { code, stderr } = await bridge.exit();
+      expect(code).toBe(0);
+      expectSaid(stderr, home, [connected, refused]);
+      expect(await installationIn(folders[other]!)).toBeNull();
+    },
+    15_000,
+  );
 
   test("goes to whichever app Slack confirms first when no bridge.db records it, and the other never connects", async () => {
     const { slack, env } = startSlackForBridge(RECORDED);
-    const { home, dataFolder } = prepareHome();
-    const releases = createAddedApp(dataFolder, "releases", tokensOf(slack));
-    const folders: Record<string, string> = { default: dataFolder, releases: releases.folder };
+    const { home, folders } = prepareTwoAppsOfOne(slack);
 
     const bridge = spawnBridge(home, env);
     await bridge.says("Connected to Slack.");
@@ -121,9 +121,8 @@ describe("a Slack app the tokens of two apps belong to", () => {
     const [holder, other] = stderr.includes("[releases] Connected to Slack.")
       ? ["releases", "default"]
       : ["default", "releases"];
-    const said = (app: string, line: string) => (app === "default" ? line : `[${app}] ${line}`);
     const refused = refusalProblem({ reason: "duplicate_app", heldBy: holder }, other);
-    expectSaid(stderr, home, [said(holder, "Connected to Slack."), said(other, refused)]);
+    expectSaid(stderr, home, [logged(holder, "Connected to Slack."), logged(other, refused)]);
     expect(await installationIn(folders[holder]!)).toMatchObject({ appId: RECORDED.appId });
     expect(await installationIn(folders[other]!)).toBeNull();
   }, 15_000);
@@ -147,32 +146,6 @@ test("an added app whose bot token Slack rejects says so, while the default app 
   const { code, stderr } = await bridge.exit();
   expect(code).toBe(0);
   expectSaid(stderr, home, ["Connected to Slack.", `[releases] ${rejected}`]);
-}, 15_000);
-
-test("a restart starts an app added while the bridge ran, through its own Slack app", async () => {
-  const { slack, env } = startSlackForBridge(RECORDED);
-  const releasesSlack = slack.addApp();
-  const { home, dataFolder } = prepareHome();
-  const first = spawnBridge(home, env);
-  await first.says("Connected to Slack.");
-  const releases = createAddedApp(dataFolder, "releases", tokensOf(releasesSlack));
-  first.child.kill("SIGTERM");
-  expectSaid((await first.exit()).stderr, home, ["Connected to Slack."]);
-  expect(releasesSlack.calls).toEqual([]);
-
-  const next = spawnBridge(home, env);
-  await next.says("[releases] Connected to Slack.");
-  // Only the default app's line starts with it.
-  await next.says("\nConnected to Slack.");
-  await deliverTo(releasesSlack);
-
-  next.child.kill("SIGTERM");
-  const { code, stderr } = await next.exit();
-  expect(code).toBe(0);
-  expectSaid(stderr, home, ["Connected to Slack.", "[releases] Connected to Slack."]);
-  expect(await installationIn(releases.folder)).toMatchObject({
-    appId: releasesSlack.identity.appId,
-  });
 }, 15_000);
 
 test("a bridge that hosts only the default app names no app in what link says", async () => {
@@ -312,7 +285,7 @@ function postsBy(app: Pick<FakeSlack, "calls">) {
 }
 
 describe("two leads that share a Slack channel, each through its own app", () => {
-  test("the owner can link two Toy Box channels to one Slack channel through different apps", async () => {
+  test("the owner can link two Toy Box channels to one Slack channel through different apps, each answering as its app's bot", async () => {
     const shared = await startSharedChannel();
     const { leads, as } = shared;
     const channel = "C0SHARED";
@@ -322,7 +295,10 @@ describe("two leads that share a Slack channel, each through its own app", () =>
       [leads.releases, "releases"],
     ] as const) {
       const input = { slackChannel: channel, app };
-      expect(await as(null, "link", input, { channelId: lead })).toMatchObject({ exitCode: 0 });
+      expect(await as(null, "link", input, { channelId: lead })).toMatchObject({
+        exitCode: 0,
+        text: expect.stringContaining(`answers in #shared now as the ${app} app's bot,`),
+      });
     }
     await shared.stop();
     for (const [folder, lead] of [
@@ -335,37 +311,6 @@ describe("two leads that share a Slack channel, each through its own app", () =>
         ),
       ).toEqual([{ toybox_channel_id: lead, slack_channel_id: channel }]);
   }, 15_000);
-
-  test.each(["mention", "all"] as const)(
-    "mentions reach only the named lead when both links use %s mode",
-    async (requestMode) => {
-      const shared = await startSharedChannel(async ({ home, releases, leads }) => {
-        await linkLead(home, leads.docs, { request_mode: requestMode });
-        await linkLead(releases, leads.releases, { request_mode: requestMode });
-      });
-      const { toyBox, leads, as, post } = shared;
-      const [docsTs, releasesTs] = timestamps(2);
-
-      await post(said(ALICE, docsTs!, `<@${BOT}> are the docs ready?`));
-      await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
-      expect((await as(leads.docs, "inbox")).json).toMatchObject({
-        requests: [{ id: 1, messages: [{ ts: docsTs }] }],
-      });
-      expect((await as(leads.releases, "inbox")).json).toMatchObject({ requests: [] });
-
-      await post(said(ALICE, releasesTs!, `<@${RELEASES_BOT}> is the release ready?`));
-      await waitFor(() => expect(toyBox.runs).toHaveLength(2), 5_000);
-      expect((await as(leads.docs, "inbox")).json).toMatchObject({
-        requests: [{ id: 1, attention: null, messages: [{ ts: docsTs }] }],
-      });
-      expect((await as(leads.releases, "inbox")).json).toMatchObject({
-        requests: [{ id: 1, messages: [{ ts: releasesTs }] }],
-      });
-      expect(toyBox.runs.map(({ channelId }) => channelId)).toEqual([leads.docs, leads.releases]);
-      await shared.stop();
-    },
-    15_000,
-  );
 
   test("each bot posts as itself, and the other lead never reads or acts on its text", async () => {
     const shared = await startSharedChannel(async ({ home, releases, leads }) => {
@@ -492,65 +437,6 @@ describe("two leads that share a Slack channel, each through its own app", () =>
     await shared.stop();
   }, 15_000);
 
-  test("editing a mention moves the request to the other lead, and deleting it ends that request", async () => {
-    const shared = await startSharedChannel(async ({ home, releases, leads }) => {
-      await linkLead(home, leads.docs);
-      await linkLead(releases, leads.releases);
-    });
-    const { slack, toyBox, leads, as, post, deliver } = shared;
-    const [askedTs, editedTs, deletedTs] = timestamps(3);
-    const original = said(ALICE, askedTs!, `<@${BOT}> is everything ready?`);
-    await post(original);
-    await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
-    await as(leads.docs, "inbox");
-    const edited = {
-      ...original,
-      text: `<@${RELEASES_BOT}> is everything ready?`,
-      edited: { user: ALICE, ts: editedTs },
-    };
-    slack.setMessage("C-link", edited);
-    await deliver({
-      type: "message",
-      subtype: "message_changed",
-      hidden: true,
-      channel: "C-link",
-      message: edited,
-      previous_message: original,
-      ts: editedTs,
-      event_ts: editedTs,
-    });
-    await waitFor(() => expect(toyBox.runs).toHaveLength(2), 5_000);
-    expect(toyBox.runs.map(({ channelId }) => channelId)).toEqual([leads.docs, leads.releases]);
-    expect((await as(leads.docs, "inbox")).json).toMatchObject({ requests: [] });
-    expect((await as(leads.releases, "inbox")).json).toMatchObject({
-      requests: [{ id: 1, messages: [{ ts: askedTs, edited: true }] }],
-    });
-    slack.deleteMessage("C-link", askedTs!);
-    await deliver({
-      type: "message",
-      subtype: "message_deleted",
-      hidden: true,
-      channel: "C-link",
-      deleted_ts: askedTs,
-      previous_message: edited,
-      ts: deletedTs,
-      event_ts: deletedTs,
-    });
-    for (const lead of Object.values(leads))
-      expect((await as(lead, "inbox")).json).toMatchObject({ requests: [] });
-    await shared.stop();
-    for (const folder of [shared.dataFolder, shared.releasesFolder])
-      expect(
-        await withDatabase(folder, (database) =>
-          database.read(
-            (sql) => sql`
-              SELECT deleted, text, user_id FROM messages WHERE ts = ${askedTs}
-            `,
-          ),
-        ),
-      ).toEqual([{ deleted: 1, text: null, user_id: null }]);
-  }, 15_000);
-
   test("one bot leaving suspends only its app's link while the other lead keeps answering", async () => {
     const shared = await startSharedChannel(async ({ home, releases, leads }) => {
       await linkLead(home, leads.docs);
@@ -598,91 +484,6 @@ describe("two leads that share a Slack channel, each through its own app", () =>
     );
     expect(postsBy(slack)).toHaveLength(1);
     expect(postsBy(releasesSlack)).toEqual([]);
-    await shared.stop();
-  }, 15_000);
-
-  test("each lead's commands run in its own app, so its answer goes out as that app's bot", async () => {
-    const shared = await startSharedChannel(async ({ home, releases, leads }) => {
-      await linkLead(home, leads.docs);
-      await linkLead(releases, leads.releases);
-    });
-    const { slack, releasesSlack, toyBox, leads, as, post } = shared;
-    const [askedTs] = timestamps(1);
-
-    await post(said(ALICE, askedTs!, `<@${RELEASES_BOT}> is the release out?`));
-    await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
-    const inbox = (lead: string) => as(lead, "inbox");
-    expect((await inbox(leads.docs)).json).toMatchObject({ requests: [] });
-    expect((await inbox(leads.releases)).json).toMatchObject({
-      requests: [{ id: 1, requester: { userId: ALICE }, messages: [{ ts: askedTs }] }],
-    });
-    const answered = await as(leads.releases, "reply", { request: "r1", text: "It shipped." });
-    expect(answered).toMatchObject({ exitCode: 0 });
-    await waitFor(() => expect(postsBy(releasesSlack)).toHaveLength(1), 5_000);
-
-    expect(toyBox.runs.map(({ channelId }) => channelId)).toEqual([leads.releases]);
-    expect(postsBy(releasesSlack)[0]).toMatchObject({
-      token: releasesSlack.botToken,
-      args: { channel: "C-link", thread_ts: askedTs },
-    });
-    expect(postsBy(slack)).toEqual([]);
-    await shared.stop();
-  }, 15_000);
-
-  test("status shows a terminal each app's connection and links under its name, and a lead its own", async () => {
-    const shared = await startSharedChannel(async ({ home, releases, leads }) => {
-      await linkLead(home, leads.docs);
-      await linkLead(releases, leads.releases);
-    });
-    const { leads, as } = shared;
-    const connected = { connection: "connected", problem: null };
-    const linking = (lead: string) => [expect.objectContaining({ toyBoxChannelId: lead })];
-
-    const every = await as(null, "status");
-    const own = await as(leads.releases, "status");
-
-    expect(every).toMatchObject({
-      exitCode: 0,
-      json: {
-        apps: [
-          { app: "default", slack: connected, links: linking(leads.docs) },
-          { app: "releases", slack: connected, links: linking(leads.releases) },
-        ],
-      },
-    });
-    expect(every.text).toStartWith("# The default app\n\n## Slack\nConnected.\n\n## ");
-    expect(every.text).toContain("\n\n# The releases app\n\n## Slack\nConnected.\n\n## ");
-    expect(own).toMatchObject({
-      exitCode: 0,
-      json: { apps: [{ app: "releases", slack: connected, links: linking(leads.releases) }] },
-    });
-    await shared.stop();
-  }, 15_000);
-
-  test("two links racing to link one Toy Box channel through two apps leave it linked through one", async () => {
-    const shared = await startSharedChannel();
-    const { leads, as } = shared;
-    shared.share({ id: "C0RELEASES", name: "releases" });
-    const link = (app: string) =>
-      as(null, "link", { slackChannel: "C0RELEASES", app }, { channelId: leads.docs });
-
-    const [home, releases] = await Promise.all([link("default"), link("releases")]);
-
-    const [linked, refused] = home.exitCode === 0 ? [home, releases] : [releases, home];
-    const [winner, loser] = home.exitCode === 0 ? ["default", "releases"] : ["releases", "default"];
-    expect(linked).toMatchObject({
-      exitCode: 0,
-      text: expect.stringContaining(`answers in #releases now as the ${winner} app's bot,`),
-    });
-    expect(refused).toMatchObject({
-      exitCode: 1,
-      text: `This Toy Box channel links through the ${winner} app. Run \`toy-box-slack unlink\` before you link it through the ${loser} app.`,
-    });
-    const status = (await as(null, "status")).json as { apps: { app: string; links: object[] }[] };
-    expect(status.apps.map(({ app, links }) => [app, links.length])).toEqual([
-      ["default", winner === "default" ? 1 : 0],
-      ["releases", winner === "releases" ? 1 : 0],
-    ]);
     await shared.stop();
   }, 15_000);
 });

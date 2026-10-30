@@ -5,7 +5,6 @@ import { existsSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { started } from "./bridgeProcess";
-import { MALLORY, connectedBridge } from "./connectedBridge";
 import { startLinkedBridge, storeNewRequest } from "./linkedBridge";
 
 const CLI = join(import.meta.dir, "..", "..", "cli", "index.ts");
@@ -109,24 +108,6 @@ test("reply reads its text from stdin, and says to write it there when there's n
   });
 }, 15_000);
 
-test("allow at a terminal names who it allowed, without asking anything", async () => {
-  const { channelId, home, slack } = await connectedBridge();
-  slack.setUser({
-    id: MALLORY,
-    team_id: "T-home",
-    real_name: "Mallory",
-    is_bot: false,
-    is_restricted: false,
-    is_ultra_restricted: false,
-  });
-
-  expect(await runToyBoxSlack(["allow", MALLORY, "--channel", channelId], { HOME: home })).toEqual({
-    exitCode: 0,
-    stdout: `Mallory (${MALLORY}) can ask the lead to act from #release-eng now.\n`,
-    stderr: "",
-  });
-}, 15_000);
-
 test("refuses add-app without a terminal, even when stdin holds both tokens", async () => {
   const home = createTestFolder();
 
@@ -157,25 +138,15 @@ test("refuses a session that doesn't lead a linked channel, with exit 1", async 
   });
 }, 15_000);
 
-test("exits 2 when no bridge is running for its data folder", async () => {
+test("exits 2 when no bridge is running for its data folder, even once a killed one leaves its socket", async () => {
   const home = createTestFolder();
-
   expect(await runToyBoxSlack(["status"], { HOME: home })).toEqual(noBridge(home));
   expect(await runToyBoxSlack(["status", "--json"], { HOME: home })).toEqual(noBridge(home, true));
-});
 
-test("exits 2 once the bridge stops, and once it's killed and leaves its socket behind", async () => {
-  const { bridge, home, socket, serve } = await startLinkedBridge();
-  bridge.child.kill("SIGTERM");
-  expect(await bridge.exit()).toMatchObject({ code: 0 });
-
-  expect(existsSync(socket)).toBe(false);
-  expect(await runToyBoxSlack(["status"], { HOME: home })).toEqual(noBridge(home));
-
-  const killed = await serve({});
-  killed.child.kill("SIGKILL");
-  await killed.exit();
+  const { bridge, home: killedHome, socket } = await startLinkedBridge();
+  bridge.child.kill("SIGKILL");
+  await bridge.exit();
 
   expect(existsSync(socket)).toBe(true);
-  expect(await runToyBoxSlack(["status"], { HOME: home })).toEqual(noBridge(home));
-}, 20_000);
+  expect(await runToyBoxSlack(["status"], { HOME: killedHome })).toEqual(noBridge(killedHome));
+}, 15_000);

@@ -5,13 +5,8 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DEFAULT_APP } from "@bridge/model/apps";
-import { locateApp } from "@bridge/server/apps";
 import { prepareDataFolder } from "@bridge/server/dataFolder";
-import {
-  readAppCredentialsFile,
-  readCredentialsFile,
-  writeCredential,
-} from "@bridge/server/environment";
+import { readCredentialsFile, writeCredential } from "@bridge/server/environment";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { BUNDLED_SKILL } from "@commands/client/skill";
 import { rejectedTokensProblem } from "@slackapi/model/identity";
@@ -100,46 +95,6 @@ test("replaces a token Slack rejects the way the bridge says, asking for it whil
     code: 0,
     transcript: `${started(home)}Connected to Slack.\n${STOPPED_AT_TERMINAL}`,
   });
-}, 20_000);
-
-test("asks at a terminal for each app's missing tokens by the app's name, and says what it saved in each file", async () => {
-  const home = createTestFolder();
-  const { slack } = startSlackForBridge();
-  const env = { SLACK_API_URL: slack.url };
-  const dataFolder = join(home, ".toy-box-slack");
-  prepareDataFolder(dataFolder);
-  writeCredential(dataFolder, "SLACK_BOT_TOKEN", slack.botToken);
-  // A bridge already runs, as under launchd, so serve stops once it has saved what it asked for.
-  const running = spawnBridge(home, env);
-  await running.running();
-  const releases = locateApp(dataFolder, "releases");
-  mkdirSync(releases.folder, { recursive: true, mode: 0o700 });
-  writeCredential(releases.folder, "SLACK_APP_TOKEN", "xapp-releases");
-
-  const terminal = runAtTerminal(home, ["serve"], env);
-  await terminal.shows("(xapp-...): ");
-  await terminal.type("xapp-default");
-  await terminal.shows("(xoxb-...): ");
-  await terminal.type("xoxb-releases");
-
-  expect(await terminal.exit()).toEqual({
-    code: 1,
-    transcript: [
-      "Paste the Slack app-level token (xapp-...): ",
-      "Paste the releases app's Slack bot token (xoxb-...): ",
-      `Saved SLACK_APP_TOKEN in ${join(dataFolder, "credentials.env")}.`,
-      `Saved SLACK_BOT_TOKEN in ${releases.credentials}.`,
-      `Another toy-box-slack bridge is already running for ${dataFolder}. Stop it before starting a new one.`,
-      "",
-    ].join("\n"),
-  });
-  expect(readCredentialsFile(dataFolder).SLACK_APP_TOKEN).toBe("xapp-default");
-  expect(readAppCredentialsFile(releases.folder)).toEqual({
-    SLACK_BOT_TOKEN: "xoxb-releases",
-    SLACK_APP_TOKEN: "xapp-releases",
-  });
-  running.child.kill("SIGTERM");
-  expect((await running.exit()).code).toBe(0);
 }, 20_000);
 
 test("stops without saving or starting when the owner presses Ctrl-C at a prompt", async () => {

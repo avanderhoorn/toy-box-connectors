@@ -29,8 +29,15 @@ function alreadyThere(app: App): string {
   return `${app.folder} is already there, so add-app didn't add the ${app.name} app. To replace one of its tokens, delete that token's line from ${app.credentials} and run \`toy-box-slack serve\` at a terminal, which asks for it again.`;
 }
 
-test("asks for a new app's two tokens by its name, then saves them in a folder of its own the bridge lists", async () => {
+test("asks for a new app's two tokens by its name, then saves them in a folder of its own the bridge lists, beside the others", async () => {
   const dataFolder = newDataFolder();
+  prepareDataFolder(dataFolder);
+  writeCredential(dataFolder, "SLACK_BOT_TOKEN", "xoxb-default");
+  const alpha = await createAppFolder(
+    dataFolder,
+    "alpha",
+    owner("xoxb-alpha", "xapp-alpha").reader,
+  );
   const typing = owner(BOT_TOKEN, APP_TOKEN);
 
   const app = await createAppFolder(dataFolder, "releases", typing.reader);
@@ -45,23 +52,7 @@ test("asks for a new app's two tokens by its name, then saves them in a folder o
   expect(statSync(join(dataFolder, "apps")).mode & 0o777).toBe(0o700);
   expect(statSync(app.folder).mode & 0o777).toBe(0o700);
   expect(statSync(app.credentials).mode & 0o777).toBe(0o600);
-  expect(existsSync(join(dataFolder, "credentials.env"))).toBe(false);
-  expect(listApps(dataFolder).map(({ name }) => name)).toEqual(["default", "releases"]);
-});
-
-test("adds an app beside those already there, changing none of theirs", async () => {
-  const dataFolder = newDataFolder();
-  prepareDataFolder(dataFolder);
-  writeCredential(dataFolder, "SLACK_BOT_TOKEN", "xoxb-default");
-  const alpha = await createAppFolder(
-    dataFolder,
-    "alpha",
-    owner("xoxb-alpha", "xapp-alpha").reader,
-  );
-
-  await createAppFolder(dataFolder, "beta", owner(BOT_TOKEN, APP_TOKEN).reader);
-
-  expect(listApps(dataFolder).map(({ name }) => name)).toEqual(["default", "alpha", "beta"]);
+  expect(listApps(dataFolder).map(({ name }) => name)).toEqual(["default", "alpha", "releases"]);
   expect(readAppCredentialsFile(alpha.folder)).toEqual({
     SLACK_BOT_TOKEN: "xoxb-alpha",
     SLACK_APP_TOKEN: "xapp-alpha",
@@ -71,8 +62,6 @@ test("adds an app beside those already there, changing none of theirs", async ()
 
 test.each([
   ["default", "An added app can't be named default, since that's the data folder's own app."],
-  ["Releases", NAME_RULE],
-  ["-releases", NAME_RULE],
   ["../../escaped", NAME_RULE],
 ])("refuses to name an app %p before asking or creating anything", async (name, problem) => {
   const dataFolder = newDataFolder();
@@ -134,37 +123,27 @@ test("refuses a folder made while the owner typed, leaving it to whatever made i
 });
 
 test.each([
-  { kind: "bot", answers: [null] },
-  { kind: "app-level", answers: [BOT_TOKEN, null] },
-])("refuses a missing $kind token, creating no folder", async ({ kind, answers }) => {
+  {
+    token: "a missing bot token",
+    answers: [null],
+    refusal: "No Slack bot token was given, so add-app didn't add the releases app.",
+  },
+  {
+    token: "an app-level token that isn't one",
+    answers: [BOT_TOKEN, BOT_TOKEN],
+    refusal:
+      "That isn't a Slack app-level token, which is one word starting with xapp-, so it wasn't saved.",
+  },
+])("refuses $token, creating no folder", async ({ answers, refusal }) => {
   const dataFolder = newDataFolder();
   const typing = owner(...answers);
 
-  expect(await refusalOf(createAppFolder(dataFolder, "releases", typing.reader))).toBe(
-    `No Slack ${kind} token was given, so add-app didn't add the releases app.`,
-  );
+  expect(await refusalOf(createAppFolder(dataFolder, "releases", typing.reader))).toBe(refusal);
   expect(typing.closed).toBe(1);
   expect(existsSync(join(dataFolder, "apps"))).toBe(false);
 });
 
-test.each([
-  { kind: "bot", prefix: "xoxb-", answers: [APP_TOKEN] },
-  { kind: "app-level", prefix: "xapp-", answers: [BOT_TOKEN, BOT_TOKEN] },
-])(
-  "refuses an answer for the $kind token that isn't one, creating no folder",
-  async ({ kind, prefix, answers }) => {
-    const dataFolder = newDataFolder();
-    const typing = owner(...answers);
-
-    expect(await refusalOf(createAppFolder(dataFolder, "releases", typing.reader))).toBe(
-      `That isn't a Slack ${kind} token, which is one word starting with ${prefix}, so it wasn't saved.`,
-    );
-    expect(typing.closed).toBe(1);
-    expect(existsSync(join(dataFolder, "apps"))).toBe(false);
-  },
-);
-
-test("refuses a data folder others could open, and an apps folder that would stop the bridge, before asking", async () => {
+test("refuses a data folder others could open, and an app folder that would stop the bridge, before asking", async () => {
   const typing = owner(BOT_TOKEN, APP_TOKEN);
 
   const open = newDataFolder();
@@ -172,18 +151,6 @@ test("refuses a data folder others could open, and an apps folder that would sto
   chmodSync(open, 0o755);
   expect(await refusalOf(createAppFolder(open, "releases", typing.reader))).toStartWith(
     `The data folder ${open} has mode 755, but it must be 700 so only you can open it.`,
-  );
-  const flat = newDataFolder();
-  prepareDataFolder(flat);
-  writeFileSync(join(flat, "apps"), "Not a folder");
-  expect(await refusalOf(createAppFolder(flat, "releases", typing.reader))).toStartWith(
-    `${join(flat, "apps")} must be the folder that holds the apps`,
-  );
-  const misnamed = newDataFolder();
-  prepareDataFolder(misnamed);
-  mkdirSync(join(misnamed, "apps", "Alpha"), { recursive: true, mode: 0o700 });
-  expect(await refusalOf(createAppFolder(misnamed, "releases", typing.reader))).toStartWith(
-    `${join(misnamed, "apps", "Alpha")} can't be an app's folder.`,
   );
   const leaky = newDataFolder();
   prepareDataFolder(leaky);

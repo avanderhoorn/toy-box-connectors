@@ -25,6 +25,7 @@ const ok = { ...reply, text: "ok" };
 const bare = { ...ask, text: "<@U-bot>" };
 const bareReply = { ...reply, text: "<@U-bot>", mentions: ["U-bot"], mentionsBot: true };
 const toBob = { ...reply, text: "<@U-bob> can you look?", mentions: ["U-bob"] };
+const rootToBob = { ...root, text: "<@U-bob> the deploy is red", mentions: ["U-bob"] };
 const toBoth = { ...toBob, mentions: ["U-bob", "U-bot"], mentionsBot: true };
 const atLink = askMessage(facts.link.linkedAtTs);
 const weekOld = askMessage(tsAt(facts.now - requestLifetimeMs));
@@ -62,6 +63,7 @@ test.each<[string, SlackMessage, Partial<ClassifyFacts>, Classification]>([
   ["any other reply is context", reply, {}, none("context_only")],
   ["a root message follows up nothing", root, { askedBefore: true }, none("context_only")],
   ["in all mode every root message asks", root, { link: all }, asks("channel_root")],
+  ["but not one for other people", rootToBob, { link: all }, none("addressed_to_others")],
   ["but a reply still needs a mention or a past ask", reply, { link: all }, none("context_only")],
 ])("%s", (_, message, changes, expected) => {
   expect(classify(message, { ...facts, ...changes })).toEqual(expected);

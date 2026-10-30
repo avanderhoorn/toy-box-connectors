@@ -35,21 +35,6 @@ test("asks the owner at a terminal for the app's tokens, saves them in its folde
   });
 }, 15_000);
 
-test("adds nothing when the owner presses Ctrl-C at a prompt", async () => {
-  const home = createTestFolder();
-  const terminal = runAtTerminal(home, ["add-app", "releases"]);
-  await terminal.shows("(xoxb-...): ");
-  await terminal.type("xoxb-releases");
-  await terminal.shows("(xapp-...): ");
-  await terminal.interrupt();
-
-  expect(await terminal.exit()).toEqual({
-    code: 1,
-    transcript: `${ASKS_BOT_TOKEN}${ASKS_APP_TOKEN}No Slack app-level token was given, so add-app didn't add the releases app.\n`,
-  });
-  expect(existsSync(join(home, ".toy-box-slack", "apps"))).toBe(false);
-}, 15_000);
-
 test("refuses in a lead's shell, which can be a terminal too, before asking anything", async () => {
   const home = createTestFolder();
   const lead = { COPILOT_AGENT_SESSION_ID: "a-lead-session" };

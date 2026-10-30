@@ -42,9 +42,9 @@ function addedApp(dataFolder: string, name: string, credentials: AppCredentials 
   return app;
 }
 
-test("asks a new data folder for both tokens, and saves them at mode 600", async () => {
+test("asks a new data folder for both tokens, and saves them at mode 600 without the spaces pasted around them", async () => {
   const dataFolder = dataFolderWith();
-  const typing = owner(BOT_TOKEN, APP_TOKEN);
+  const typing = owner(` ${BOT_TOKEN}  `, APP_TOKEN);
 
   const saved = await askForMissingCredentials(dataFolder, {}, typing.reader);
 
@@ -107,7 +107,7 @@ test("opens no reader when the bridge has everything it needs", async () => {
 });
 
 test("asks for each added app's missing tokens by its name, after the default app's, and saves them in its own folder", async () => {
-  const dataFolder = dataFolderWith({ SLACK_BOT_TOKEN: BOT_TOKEN });
+  const dataFolder = dataFolderWith();
   const alpha = addedApp(dataFolder, "alpha");
   const beta = addedApp(dataFolder, "beta", {
     SLACK_BOT_TOKEN: "xoxb-beta",
@@ -116,7 +116,9 @@ test("asks for each added app's missing tokens by its name, after the default ap
   const gamma = addedApp(dataFolder, "gamma", { SLACK_BOT_TOKEN: "xoxb-gamma" });
   const typing = owner(APP_TOKEN, "xoxb-alpha", "xapp-alpha", "xapp-gamma");
 
-  const saved = await askForMissingCredentials(dataFolder, {}, typing.reader);
+  // The environment's token counts for the default app alone.
+  const env = { SLACK_BOT_TOKEN: BOT_TOKEN };
+  const saved = await askForMissingCredentials(dataFolder, env, typing.reader);
 
   expect(typing.asked).toEqual([
     ASKS_APP_TOKEN,
@@ -142,36 +144,7 @@ test("asks for each added app's missing tokens by its name, after the default ap
     SLACK_BOT_TOKEN: "xoxb-gamma",
     SLACK_APP_TOKEN: "xapp-gamma",
   });
-  expect(readCredentialsFile(dataFolder)).toEqual({
-    SLACK_BOT_TOKEN: BOT_TOKEN,
-    SLACK_APP_TOKEN: APP_TOKEN,
-  });
-});
-
-test("asks for an added app's tokens even when the environment sets the default app's", async () => {
-  const dataFolder = dataFolderWith();
-  const releases = addedApp(dataFolder, "releases");
-  const typing = owner("xoxb-releases", "xapp-releases");
-
-  const env = { SLACK_BOT_TOKEN: BOT_TOKEN, SLACK_APP_TOKEN: APP_TOKEN };
-  const saved = await askForMissingCredentials(dataFolder, env, typing.reader);
-
-  expect(typing.asked).toEqual([asksBotTokenOf("releases"), asksAppTokenOf("releases")]);
-  expect(saved).toEqual([`Saved SLACK_BOT_TOKEN and SLACK_APP_TOKEN in ${releases.credentials}.`]);
-  expect(readAppCredentialsFile(releases.folder)).toEqual({
-    SLACK_BOT_TOKEN: "xoxb-releases",
-    SLACK_APP_TOKEN: "xapp-releases",
-  });
-  expect(existsSync(join(dataFolder, "credentials.env"))).toBe(false);
-});
-
-test("saves a pasted token without the spaces around it", async () => {
-  const dataFolder = dataFolderWith({ SLACK_APP_TOKEN: APP_TOKEN });
-  const typing = owner(` ${BOT_TOKEN}  `);
-
-  await askForMissingCredentials(dataFolder, {}, typing.reader);
-
-  expect(readCredentialsFile(dataFolder).SLACK_BOT_TOKEN).toBe(BOT_TOKEN);
+  expect(readCredentialsFile(dataFolder)).toEqual({ SLACK_APP_TOKEN: APP_TOKEN });
 });
 
 test("refuses a token that's missing or isn't one, without repeating it or saving it", async () => {
@@ -217,22 +190,7 @@ test("refuses a token that's missing or isn't one, without repeating it or savin
   }
 });
 
-test("keeps what it saved before a refusal, so running again asks only for the rest", async () => {
-  const dataFolder = dataFolderWith();
-
-  const refused = askForMissingCredentials(dataFolder, {}, owner(BOT_TOKEN, null).reader);
-  expect(await refusalOf(refused)).toBe(
-    "No Slack app-level token was given, so toy-box-slack didn't start.",
-  );
-  expect(readCredentialsFile(dataFolder)).toEqual({ SLACK_BOT_TOKEN: BOT_TOKEN });
-
-  const typing = owner(APP_TOKEN);
-  const saved = await askForMissingCredentials(dataFolder, {}, typing.reader);
-  expect(typing.asked).toEqual([ASKS_APP_TOKEN]);
-  expect(saved).toEqual([`Saved SLACK_APP_TOKEN in ${join(dataFolder, "credentials.env")}.`]);
-});
-
-test("refuses an added app's missing token by the app's name, keeping what it saved before", async () => {
+test("refuses a missing token by its app's name, keeping what it saved before, so running again asks only for the rest", async () => {
   const dataFolder = dataFolderWith({ SLACK_BOT_TOKEN: BOT_TOKEN });
   const releases = addedApp(dataFolder, "releases");
 
