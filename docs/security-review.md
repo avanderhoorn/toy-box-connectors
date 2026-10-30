@@ -176,8 +176,8 @@ hashes that posting once and numbering need.
   number, payload hash, state, destination and Slack `ts` remain, so an unknown
   post can still be proven and a publication slot stays reserved. What the
   lead queues with `post` reserves nothing, so its whole row goes then
-  instead, unless Slack never confirmed it or an item is still in its thread,
-  which the bridge names by the post's number.
+  instead, unless Slack never confirmed it or another `outbox` row is still in
+  its thread, which the bridge names by the post's number.
 - `users` and `user_aliases` keep a person's name and other IDs only while a
   link allows them.
 
