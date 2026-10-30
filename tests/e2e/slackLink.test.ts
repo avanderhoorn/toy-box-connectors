@@ -194,7 +194,7 @@ describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slac
   );
 
   scenario(
-    "the owner's ask in Toy Box posts once at the top of the Slack channel",
+    "the owner's ask in Toy Box posts once at the top of the Slack channel, notifying nobody",
     async () => {
       const since = Date.now();
       const posted = postedInChannel(link.slack);
@@ -202,17 +202,22 @@ describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slac
         channel.say("Tell the release team in Slack that tonight's release moves to 9pm."),
       );
 
-      // The bridge posts once the lead queues it, so the lead's turn can end first.
-      await waitFor(() =>
-        expect(
-          link.query("SELECT kind, thread_ts, state FROM outbox WHERE created_at >= ?", since),
-        ).toEqual([{ kind: "post", thread_ts: null, state: "sent" }]),
+      const slackTs = await postedSince(link, since);
+      expect(postedInChannel(link.slack)).toEqual([...posted, slackTs]);
+      expect(notifiedBy(link.slack, slackTs)).toEqual([]);
+    },
+    { turns: 1 },
+  );
+
+  scenario(
+    "the owner's ask to notify Alice posts once, mentioning her by the member ID status shows",
+    async () => {
+      const since = Date.now();
+      await channel.turn(() =>
+        channel.say("Post in Slack that QA signs off at 8pm tonight, and make sure Alice sees it."),
       );
-      const [{ slack_ts }] = link.query<{ slack_ts: string }>(
-        "SELECT slack_ts FROM outbox WHERE created_at >= ?",
-        since,
-      );
-      expect(postedInChannel(link.slack)).toEqual([...posted, slack_ts]);
+
+      expect(notifiedBy(link.slack, await postedSince(link, since))).toEqual([ALICE]);
     },
     { turns: 1 },
   );
@@ -303,4 +308,28 @@ function postedInChannel(slack: FakeSlack) {
     .getMessages("C0LINK")
     .filter((message) => message.user === BOT && message.thread_ts === undefined)
     .map(({ ts }) => ts);
+}
+
+/**
+ * The ts of the one post the lead queued since `since`, once it's sent at the top of the channel.
+ * The bridge posts once the lead queues it, so the lead's turn can end first.
+ */
+async function postedSince(link: SlackLink, since: number) {
+  await waitFor(() =>
+    expect(
+      link.query("SELECT kind, thread_ts, state FROM outbox WHERE created_at >= ?", since),
+    ).toEqual([{ kind: "post", thread_ts: null, state: "sent" }]),
+  );
+  const [{ slack_ts }] = link.query<{ slack_ts: string }>(
+    "SELECT slack_ts FROM outbox WHERE created_at >= ?",
+    since,
+  );
+  return slack_ts;
+}
+
+/** Whom the bot's message at `ts` in C0LINK notifies: everyone its markdown block mentions. */
+function notifiedBy(slack: FakeSlack, ts: string) {
+  const { blocks } = slack.getMessages("C0LINK").find((message) => message.ts === ts)!;
+  const [{ text }] = blocks as [{ text: string }];
+  return Array.from(text.matchAll(/<@([UW][A-Z0-9]+)>/g), ([, userId]) => userId);
 }

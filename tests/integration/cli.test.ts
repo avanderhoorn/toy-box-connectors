@@ -89,6 +89,24 @@ test("reply reads its text from stdin, and says to write it there when there's n
   });
 }, 15_000);
 
+test("post reads the thread it names, and whom to mention as one option, by member IDs separated by commas", async () => {
+  const { channelId, home } = await startLinkedBridge({ allowed: ["U0ALICE", "U0BOB"] });
+  const lead = { HOME: home, COPILOT_AGENT_SESSION_ID: channelId };
+
+  expect(
+    await runToyBoxSlack(["post", "--mention", "U0ALICE, U0BOB"], lead, "Shipped **1.2**.\n"),
+  ).toEqual({
+    exitCode: 0,
+    stdout: "Queued o1 in #C-link, mentioning U0ALICE and U0BOB.\n",
+    stderr: "",
+  });
+  expect(await runToyBoxSlack(["post", "--thread", "o9"], lead, "Shipped **1.2**.\n")).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr: "Nothing posted. This channel has no post o9.\n",
+  });
+}, 15_000);
+
 test("refuses add-app without a terminal, even when stdin holds both tokens", async () => {
   const home = createTestFolder();
 

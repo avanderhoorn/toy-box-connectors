@@ -8,6 +8,7 @@
 import type { BridgeDatabase } from "@bridge/server/database";
 import { threadReference } from "@commands/model";
 import { CommandRefusedError } from "@commands/model/protocol";
+import { personName } from "@commands/model/slackText";
 import { clockTime } from "@commands/model/wording";
 import type { OutboxWorker } from "@outbox/server";
 import {
@@ -18,6 +19,7 @@ import {
 } from "@outbox/server/database";
 import { retractPost } from "@outbox/server/retract";
 import type { BotClient } from "@slackapi/server/botClient";
+import { readSlackPersonName } from "@slackapi/server/users";
 import {
   findRoutine,
   latestScheduledRun,
@@ -87,21 +89,36 @@ export function publishCommand({
   };
 }
 
-/** Queues a post the owner or a routine asked for, in the watched channel or one of its threads. */
+/**
+ * Queues a post the owner or a routine asked for, in the watched channel or one of its threads,
+ * and names whom it'll notify, so the lead sees any mention it meant that the post won't make.
+ */
 export function postCommand({ database, outbox }: QueueCommandOptions): CommandHandler<"post"> {
-  return async ({ thread, text }, { channelId, at }) => {
-    const { link, post } = await database.write(async (transaction) => {
+  return async ({ thread, mention: mentions = [], text }, { channelId, at }) => {
+    const mentioned = [...new Set(mentions)];
+    const { link, post, names } = await database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
       const post = await outboxRefusal("Nothing posted.", "", () =>
-        queuePost(transaction, { link, thread, text }, at),
+        queuePost(transaction, { link, thread, text, mentions: mentioned }, at),
       );
-      return { link, post };
+      const names: string[] = [];
+      for (const userId of mentioned) {
+        names.push(personName(await readSlackPersonName(transaction, userId), userId));
+      }
+      return { link, post, names };
     });
     outbox?.poke();
     const reference = thread ? threadReference(thread) : null;
+    const place = reference ? `${reference}'s thread` : link.channel;
+    const notifying = names.length ? `, mentioning ${new Intl.ListFormat("en").format(names)}` : "";
     return {
-      result: { post: `o${post.number}`, thread: reference, state: post.state },
-      text: `Queued o${post.number} in ${reference ? `${reference}'s thread` : link.channel}.`,
+      result: {
+        post: `o${post.number}`,
+        thread: reference,
+        mentions: mentioned,
+        state: post.state,
+      },
+      text: `Queued o${post.number} in ${place}${notifying}.`,
     };
   };
 }

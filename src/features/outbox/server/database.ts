@@ -160,18 +160,26 @@ export const repeatPostMs = 10 * 60_000;
 
 /**
  * Queues a post the owner or a routine asked the lead for, at the top of the link's channel or in
- * the thread it names. Unlike a reply or publication it reserves nothing, so it's refused as a
- * repeat, naming what it repeats, while anything that says the same in the same place may still go
- * out or Slack never confirmed it, and for a while after it went out.
+ * the thread it names, mentioning only people the link allows. Unlike a reply or publication it
+ * reserves nothing, so it's refused as a repeat, naming what it repeats, while anything that says
+ * the same in the same place may still go out or Slack never confirmed it, and for a while after
+ * it went out.
  */
 export async function queuePost(
   tx: Bun.SQL,
-  input: { link: ChannelLink; thread?: PostThread; text: string },
+  input: { link: ChannelLink; thread?: PostThread; text: string; mentions?: readonly string[] },
   now: number,
 ): Promise<OutboxItem> {
-  const { link, thread } = input;
+  const { link, thread, mentions = [] } = input;
   if (link.status !== "active") throw new OutboxRefusedError("This link isn't active.");
-  const payload = rendered(input.text);
+  const strangers = mentions.filter((userId) => !link.allowlist.has(userId));
+  if (strangers.length) {
+    const are = strangers.length === 1 ? "isn't" : "aren't";
+    throw new OutboxRefusedError(
+      `${new Intl.ListFormat("en").format(strangers)} ${are} on the allowlist, so a post can't mention them.`,
+    );
+  }
+  const payload = rendered(input.text, mentions);
   const place = thread
     ? await findThreadPlace(tx, link, thread)
     : { threadTs: null, requestId: null };
@@ -348,8 +356,8 @@ export async function forgetOldPosts(tx: Bun.SQL, now: number): Promise<void> {
   `;
 }
 
-function rendered(text: string): RenderedMessage {
-  const result = renderMarkdown(text);
+function rendered(text: string, mentions: readonly string[] = []): RenderedMessage {
+  const result = renderMarkdown(text, mentions);
   if (result.kind === "refused") {
     const problem =
       result.problem === "message_too_long"

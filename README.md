@@ -7,7 +7,7 @@ It runs as one local bridge beside Toy Box on your Mac. Only the bridge holds th
 ## Features
 
 - **Answers in threads:** When someone you allow mentions the app, the bridge wakes the channel's lead and reacts with 👀 once it has, and the lead answers once in its thread.
-- **Posts when you ask:** Ask the lead in Toy Box, or have a routine ask, and it posts in the Slack channel or one of its threads. Someone in Slack gets an answer, and the lead asks you before posting anything else for them.
+- **Posts when you ask:** Ask the lead in Toy Box, or have a routine ask, and it posts in the Slack channel or one of its threads, mentioning people you allow when you ask it to. Someone in Slack gets an answer, and the lead asks you before posting anything else for them.
 - **Only the people you allow:** Only people on the link's allowlist, by exact Slack member ID, can make the lead act, and the bridge checks that before the lead sees anything. Only you widen access, at your terminal, while the lead can only narrow it.
 - **Nothing lost or sent twice:** Every Slack event the bridge acknowledges survives a crash, and anything it missed while stopped is recovered or reported. A post whose delivery is uncertain is looked up in Slack, never sent again.
 - **Release notes and digests:** Optional routines publish release notes in the Slack channel, and bring a digest of what people said there back to the Toy Box channel.

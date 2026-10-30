@@ -77,18 +77,18 @@ test("post queues in the channel or the thread it names, and refuses another cha
   const text = "Shipped **1.2**.";
 
   expect(await post({ text }, lead)).toEqual({
-    result: { post: "o1", thread: null, state: "queued" },
+    result: { post: "o1", thread: null, mentions: [], state: "queued" },
     text: "Queued o1 in #C-link.",
   });
   await database.write(
     (tx) => tx`UPDATE outbox SET state = 'sent', slack_ts = '1700000200.000100' WHERE number = 1`,
   );
   expect(await post({ thread: { request: 1 }, text }, lead)).toEqual({
-    result: { post: "o2", thread: "r1", state: "queued" },
+    result: { post: "o2", thread: "r1", mentions: [], state: "queued" },
     text: "Queued o2 in r1's thread.",
   });
   expect(await post({ thread: { post: 1 }, text }, lead)).toEqual({
-    result: { post: "o3", thread: "o1", state: "queued" },
+    result: { post: "o3", thread: "o1", mentions: [], state: "queued" },
     text: "Queued o3 in o1's thread.",
   });
   // Another channel's request or post is refused like a missing one, so the lead learns nothing of it.
@@ -114,6 +114,32 @@ test("post queues in the channel or the thread it names, and refuses another cha
     );
   }
   expect(outbox.poke).toHaveBeenCalledTimes(3);
+});
+
+test("post mentions only people on the allowlist, once each, and names whom it notifies", async () => {
+  const { database, now } = await createOutboxWorld();
+  await database.write(async (tx) => {
+    await tx`INSERT INTO users (user_id, real_name) VALUES ('U0ALICE', 'Alice Chen')`;
+    await tx`
+      INSERT INTO allowlist (link_id, user_id, added_at)
+      VALUES ('link', 'U0ALICE', 0), ('link', 'U0BOB', 0)
+    `;
+  });
+  const post = postCommand({ database });
+  const lead = { ...LEAD, at: now() };
+
+  expect(await post({ mention: ["U0ALICE", "U0BOB", "U0ALICE"], text: "Shipped." }, lead)).toEqual({
+    result: { post: "o1", thread: null, mentions: ["U0ALICE", "U0BOB"], state: "queued" },
+    text: "Queued o1 in #C-link, mentioning Alice Chen and U0BOB.",
+  });
+  expect(await refusal(post({ mention: ["U0MALLORY"], text: "Shipped again." }, lead))).toBe(
+    "Nothing posted. U0MALLORY isn't on the allowlist, so a post can't mention them.",
+  );
+  expect(
+    await refusal(post({ mention: ["U0ALICE", "U0MALLORY", "U0EVE"], text: "Again." }, lead)),
+  ).toBe(
+    "Nothing posted. U0MALLORY and U0EVE aren't on the allowlist, so a post can't mention them.",
+  );
 });
 
 test.each([

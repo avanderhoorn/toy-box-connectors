@@ -160,6 +160,29 @@ test.each([
   expect(world.slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
 });
 
+test("a post's block notifies the people it mentions only while the link still allows them", async () => {
+  const world = await createOutboxWorld();
+  await world.database.write(
+    (tx) => tx`INSERT INTO allowlist (link_id, user_id, added_at)
+      VALUES ('link', 'U0ALICE', 0), ('link', 'U0BOB', 0)`,
+  );
+  const posts = () => world.slack.calls.filter((call) => call.method === "chat.postMessage");
+
+  const sent = await world.queuePost(undefined, "Shipped **1.2**.", ["U0ALICE"]);
+  expect(await world.post(sent.id)).toMatchObject({ item: { state: "sent" } });
+  expect(posts()[0]!.args).toMatchObject({
+    text: "Shipped **1.2**.",
+    blocks: JSON.stringify([{ type: "markdown", text: "<@U0ALICE>\n\nShipped **1.2**." }]),
+  });
+  // Bob, who's denied below, comes after Alice, so only a check of every mention refuses this.
+  const held = await world.queuePost(undefined, "Shipped **1.3**.", ["U0ALICE", "U0BOB"]);
+  await world.database.write((tx) => tx`DELETE FROM allowlist WHERE user_id = 'U0BOB'`);
+  expect(await world.post(held.id)).toMatchObject({
+    item: { state: "failed", error: "mention_not_allowed" },
+  });
+  expect(posts()).toHaveLength(1);
+});
+
 test("a post in a request's thread neither answers the request nor hands it back", async () => {
   const world = await createOutboxWorld();
   const reply = await world.queue();

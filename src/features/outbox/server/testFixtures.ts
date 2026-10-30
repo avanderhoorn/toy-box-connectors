@@ -90,10 +90,10 @@ export async function createOutboxWorld() {
     queue: (text = "A **safe answer**.") =>
       database.write((tx) => queueReply(tx, { requestId: request.id, text }, now())),
     /** Queues a post the owner asked for, at the top of the channel or in `thread`. */
-    queuePost: (thread?: PostThread, text = "Shipped **1.2**.") =>
+    queuePost: (thread?: PostThread, text = "Shipped **1.2**.", mentions?: readonly string[]) =>
       database.write(async (tx) => {
         const link = await readChannelLink(tx, "C-link");
-        return queuePost(tx, { link: link!, thread, text }, now());
+        return queuePost(tx, { link: link!, thread, text, mentions }, now());
       }),
     read: (id: string) => database.read((sql) => readOutboxItem(sql, id)),
     post: createPostDelivery(database, bot, { now }).post,

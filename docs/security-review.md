@@ -145,10 +145,13 @@ there is no `doctor` command that checks it.
 
 Slack text is labeled and untrusted. Reply refuses until inbox has shown
 changed source text. Output is one markdown block, at most 12,000 characters,
-with mentions neutralized and unfurls disabled. Known secret shapes and URLs
-with credentials are refused at queue and send time without repeating the
-secret. Private-network URLs are not separately policed. This is not enterprise
-DLP and does not constrain the lead's other shell tools.
+with every mention the lead writes neutralized and unfurls disabled. The only
+mentions that notify anyone open a post's block, where the bridge adds the
+people the lead names by member ID once it checks the link allows each of
+them, at queue and again at send time. Known secret shapes and URLs with
+credentials are refused at queue and send time without repeating the secret.
+Private-network URLs are not separately policed. This is not enterprise DLP
+and does not constrain the lead's other shell tools.
 
 ## Retention and deletion
 

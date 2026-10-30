@@ -107,6 +107,8 @@ export function createPostDelivery(
     if (problem) return refuse(tx, item, problem, at);
     const payload = checkLeadPayload(item.payload);
     if (payload.kind !== "valid") return refuse(tx, item, payload.problem, at);
+    if (payload.mentions.some((userId) => !link.allowlist.has(userId)))
+      return refuse(tx, item, "mention_not_allowed", at);
     const started = await startOutboxAttempt(tx, item, at);
     return started
       ? { kind: "started", item: started, identity: installation, message: payload.message }

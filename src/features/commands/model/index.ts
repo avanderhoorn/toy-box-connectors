@@ -70,10 +70,24 @@ const slackChannelSchema = z
   .regex(/^[CDG][A-Z0-9]{2,20}$/, "Give the channel's ID, such as C0123ABCD, not its name")
   .describe("The Slack channel's ID, such as C0123ABCD, which its details show at the bottom");
 
+const memberIdSchema = z
+  .string()
+  .regex(/^[UW][A-Z0-9]{2,20}$/, "Give member IDs, such as U0123ABCD");
+
 const slackUsersSchema = z
-  .array(z.string().regex(/^[UW][A-Z0-9]{2,20}$/, "Give member IDs, such as U0123ABCD"))
+  .array(memberIdSchema)
   .min(1)
   .describe("Slack member IDs, such as U0123ABCD, which each one's profile shows");
+
+/** Whom a post notifies, as one option, since the CLI keeps only the last of a repeated one. */
+const mentionsSchema = z
+  .string()
+  .transform((ids) => ids.split(",").map((id) => id.trim()))
+  .pipe(z.array(memberIdSchema))
+  .optional()
+  .describe(
+    "People on the allowlist to notify, by the member IDs status shows, separated by commas, such as U0123ABCD,U0456EFGH",
+  );
 
 export const commands = {
   inbox: {
@@ -134,7 +148,9 @@ export const commands = {
     description:
       "Post in the Slack channel, or in a thread there, when the owner or a routine asks you to",
     callers: ["lead"],
-    input: z.object({ thread: threadReferenceSchema, text: postTextSchema }).strict(),
+    input: z
+      .object({ thread: threadReferenceSchema, mention: mentionsSchema, text: postTextSchema })
+      .strict(),
   },
   retract: {
     description:

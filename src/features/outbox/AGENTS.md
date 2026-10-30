@@ -19,14 +19,16 @@ decides whether a thread takes a post. A request's thread does while the request
 cancelled, its requester is still allowed and no request there waits on its reply, so a post
 never stands in for an answer. A top-level item's thread does while that item is in Slack.
 Activity names each thread a post can go in by that same check, so it never offers a thread
-`post` would refuse.
+`post` would refuse. A post can mention people its link allows, by member ID, and is refused
+naming anyone else.
 
 ## Posting once
 
 Before posting, read fresh channel facts and recheck the installation, link, destination,
-the thread's request and its requester's current permission, and that the top-level item a post
-is under is still in Slack, so a reply or post whose request was cancelled fails instead of
-posting. Commit `sending`, the attempt number and its start time before calling Slack. SDK
+the thread's request and its requester's current permission, that the top-level item a post
+is under is still in Slack, and that the link still allows everyone a post mentions, so a reply
+or post whose request was cancelled, or a post mentioning someone denied since, fails instead
+of posting. Commit `sending`, the attempt number and its start time before calling Slack. SDK
 retries are disabled. Share the client's method cooldowns and defer a 429 until its Retry-After
 deadline. Restarting may encounter another 429, never retry an ambiguous post.
 
@@ -56,13 +58,16 @@ the link's local state rather than leaving an orphan-cleanup subsystem.
 
 ## Text
 
-Send one Slack `markdown` block with an identical mention-neutralized fallback, disabled
-automatic parsing and disabled unfurls. Escape `<` only before `@` or `!`, break plain broadcast
-words with a zero-width space, and leave other Markdown unchanged, including code.
-Refuse blank output or more than 12,000 escaped characters rather than split or truncate it.
+Send one Slack `markdown` block with a mention-neutralized fallback, disabled automatic
+parsing and disabled unfurls. The block repeats the fallback, and a post's opens with a line of
+the people it mentions, once each, which the fallback leaves out, since the block alone notifies
+them. Escape `<` only before `@` or `!`, break plain broadcast words with a zero-width space,
+and leave other Markdown unchanged, including code. Refuse blank output or a block over 12,000
+characters rather than split or truncate it.
 `outputProblem` refuses recognizable credentials
 by category without repeating them. It is a guardrail, not complete DLP.
 
-The send boundary accepts only canonical renderer output and rechecks secrets without changing
-the stored bytes. Slack translates Markdown into its own block layout, so delivery proof must
+The send boundary accepts only canonical renderer output, rendering the fallback again with
+the people its block's opening line mentions, and rechecks secrets without changing the stored
+bytes. Slack translates Markdown into its own block layout, so delivery proof must
 not compare returned blocks with the outbound snapshot.
