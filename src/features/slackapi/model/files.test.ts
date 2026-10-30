@@ -19,23 +19,33 @@ const info = {
   shares: { private: { "C-link": [{ ts, channel_name: "toy-box-private", team_id: "T-home" }] } },
 };
 
+const reads: FileInfoVerdict = {
+  kind: "file",
+  file: {
+    id: "F1",
+    whole: true,
+    name: "build.png",
+    mimeType: "image/png",
+    mode: "hosted",
+    size: 412_000,
+    uploaderId: "U-alice",
+    url: info.url_private_download,
+  },
+};
+
 test.each<[string, SlackCall<unknown>, FileInfoVerdict]>([
   [
     "a file shared in a private channel reads",
     { kind: "ok", result: { ok: true, file: info } },
+    reads,
+  ],
+  [
+    "and so does one shared in a public channel",
     {
-      kind: "file",
-      file: {
-        id: "F1",
-        whole: true,
-        name: "build.png",
-        mimeType: "image/png",
-        mode: "hosted",
-        size: 412_000,
-        uploaderId: "U-alice",
-        url: info.url_private_download,
-      },
+      kind: "ok",
+      result: { ok: true, file: { ...info, shares: { public: { "C-link": [{ ts }] } } } },
     },
+    reads,
   ],
   [
     "but not while Slack lists only another message, or another channel's, as sharing it, which may only be late",
@@ -89,6 +99,11 @@ test.each<[string, SlackCall<unknown>, FileInfoVerdict]>([
       },
     },
     { kind: "refused", reason: "it's stored outside Slack" },
+  ],
+  [
+    "nor when the workspace's plan hides it",
+    { kind: "ok", result: { ok: true, file: { ...info, is_hidden_by_limit: true } } },
+    { kind: "refused", reason: "the workspace's Slack plan hides it" },
   ],
   [
     "and a missing scope says how to add it",

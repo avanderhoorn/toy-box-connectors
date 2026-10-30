@@ -34,6 +34,20 @@ test("an image is the owner's alone, under a name the bridge makes up, for ten m
   viewing.close();
 });
 
+test("gives each view a path of its own, so viewing a file again leaves the first in place", async () => {
+  const viewing = openViewingFolder(join(createTestFolder(), "viewing"), unexpected);
+  onTestFinished(() => viewing.close());
+
+  const first = await viewing.show(12, "png", Uint8Array.of(0x89, 0x50));
+  const again = await viewing.show(12, "png", Uint8Array.of(0x89, 0x51));
+
+  expect([again === first, [...readFileSync(first)], [...readFileSync(again)]]).toEqual([
+    false,
+    [0x89, 0x50],
+    [0x89, 0x51],
+  ]);
+});
+
 test("deletes only the images it makes, any a crash left when it opens and all of them when it closes", async () => {
   const folder = createTestFolder();
   const id = crypto.randomUUID();

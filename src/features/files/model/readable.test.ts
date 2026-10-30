@@ -75,6 +75,12 @@ test("JSON, XML and YAML read as text", () => {
   }
 });
 
+test("no file reads from a message that names no one, even one someone allowed uploaded", () => {
+  expect(judgeFile(notes, null, allowed)).toEqual(
+    refused("whoever shared it isn't on the allowlist"),
+  );
+});
+
 function readable(format: FileFormat): SettledVerdict {
   return { kind: "readable", format };
 }
