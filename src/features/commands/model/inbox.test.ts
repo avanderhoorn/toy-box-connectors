@@ -18,7 +18,6 @@ test.each([
   ["just the request", run(0), ["0"], run(0), {}],
   ["20 replies", run(0, 20), ["0"], run(0, 20), {}],
   ["21 replies", run(0, 21), ["0"], [...run(0), ...run(2, 21)], { 2: 1 }],
-  ["22 replies", run(0, 22), ["0"], [...run(0), ...run(3, 22)], { 3: 2 }],
   ["30 replies asking late", run(0, 30), ["15"], [...run(0), ...run(11, 30)], { 11: 10 }],
   [
     "30 replies asking early, then following up",

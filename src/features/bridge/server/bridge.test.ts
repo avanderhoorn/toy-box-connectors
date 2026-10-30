@@ -1,13 +1,5 @@
 import { expect, onTestFinished, test } from "bun:test";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { App } from "./apps";
 import { startBridge } from "./bridge";
@@ -25,6 +17,13 @@ async function start(dataFolder: string) {
   return bridge;
 }
 
+/** Every path under `folder`, to notice anything created there. */
+function contents(folder: string) {
+  return readdirSync(folder, { recursive: true, encoding: "utf8" }).toSorted((a, b) =>
+    a.localeCompare(b),
+  );
+}
+
 test("creates its data folder, lock and database on first start", async () => {
   const dataFolder = join(createTestFolder(), ".toy-box-slack");
 
@@ -34,36 +33,47 @@ test("creates its data folder, lock and database on first start", async () => {
   expect(readdirSync(dataFolder)).toEqual(expect.arrayContaining(["bridge.db", "bridge.lock"]));
 });
 
-test("refuses a data folder that others can open before it creates anything there", async () => {
-  const dataFolder = join(createTestFolder(), "shared");
-  mkdirSync(dataFolder);
-  chmodSync(dataFolder, 0o755);
+test.each<[string, (dataFolder: string, releases: App) => void]>([
+  ["a data folder", (dataFolder) => chmodSync(dataFolder, 0o755)],
+  [
+    "the default app's tokens",
+    (dataFolder) =>
+      writeFileSync(join(dataFolder, "credentials.env"), "SLACK_BOT_TOKEN=xoxb-1\n", {
+        mode: 0o644,
+      }),
+  ],
+  ["an added app's folder", (_, releases) => chmodSync(releases.folder, 0o755)],
+  ["an added app's tokens", (_, releases) => chmodSync(releases.credentials, 0o644)],
+])(
+  "refuses %s that others can open before it creates anything or takes a lock",
+  async (_, spoil) => {
+    const dataFolder = createTestFolder();
+    const releases = createAddedApp(dataFolder, "releases", { SLACK_BOT_TOKEN: "xoxb-1" });
+    spoil(dataFolder, releases);
+    const before = contents(dataFolder);
 
-  await expect(startBridge(dataFolder, env)).rejects.toThrow(BridgeRefusedError);
+    await expect(startBridge(dataFolder, env)).rejects.toThrow(BridgeRefusedError);
 
-  expect(readdirSync(dataFolder)).toEqual([]);
-});
+    expect(contents(dataFolder)).toEqual(before);
+  },
+);
 
-test("refuses tokens that others can read before it takes the lock", async () => {
-  const dataFolder = createTestFolder();
-  writeFileSync(join(dataFolder, "credentials.env"), "SLACK_BOT_TOKEN=xoxb-1\n", { mode: 0o644 });
+test.each(["default", "releases"])(
+  "refuses the %s app's bridge.db another version made, letting go of every app until the owner starts over",
+  async (name) => {
+    const dataFolder = createTestFolder();
+    const releases = createAddedApp(dataFolder, "releases");
+    const folder = name === "default" ? dataFolder : releases.folder;
+    await createDatabaseMadeBy(join(folder, "bridge.db"), 1);
 
-  await expect(startBridge(dataFolder, env)).rejects.toThrow("must be 600");
+    await expect(startBridge(dataFolder, env)).rejects.toThrow(BridgeRefusedError);
+    for (const file of ["bridge.db", "bridge.db-wal", "bridge.db-shm"]) {
+      rmSync(join(folder, file), { force: true });
+    }
 
-  expect(readdirSync(dataFolder)).toEqual(["credentials.env"]);
-});
-
-test("refuses a bridge.db another version made until the owner starts over", async () => {
-  const dataFolder = createTestFolder();
-  await createDatabaseMadeBy(join(dataFolder, "bridge.db"), 1);
-
-  await expect(startBridge(dataFolder, env)).rejects.toThrow(BridgeRefusedError);
-  for (const file of ["bridge.db", "bridge.db-wal", "bridge.db-shm"]) {
-    rmSync(join(dataFolder, file), { force: true });
-  }
-
-  await start(dataFolder);
-});
+    await start(dataFolder);
+  },
+);
 
 test("holds every app's own lock and bridge.db while it runs, and lets each lock go when it stops", async () => {
   const dataFolder = createTestFolder();
@@ -81,22 +91,6 @@ test("holds every app's own lock and bridge.db while it runs, and lets each lock
   for (const lock of locks) await (await acquireBridgeLock(lock)).release();
 });
 
-test("refuses an added app's folder or tokens that others can open before it takes any lock", async () => {
-  for (const spoil of [
-    (app: App) => chmodSync(app.folder, 0o755),
-    (app: App) => chmodSync(app.credentials, 0o644),
-  ]) {
-    const dataFolder = createTestFolder();
-    const releases = createAddedApp(dataFolder, "releases", { SLACK_BOT_TOKEN: "xoxb-1" });
-    spoil(releases);
-
-    await expect(startBridge(dataFolder, env)).rejects.toThrow(BridgeRefusedError);
-
-    expect(readdirSync(dataFolder)).toEqual(["apps"]);
-    expect(readdirSync(releases.folder)).toEqual(["credentials.env"]);
-  }
-});
-
 test("refuses while another bridge holds an added app's lock, letting go of the locks it took", async () => {
   const dataFolder = createTestFolder();
   const releases = createAddedApp(dataFolder, "releases");
@@ -111,17 +105,4 @@ test("refuses while another bridge holds an added app's lock, letting go of the 
   expect(existsSync(releases.database)).toBe(false);
   const lock = await acquireBridgeLock(join(dataFolder, "bridge.lock"));
   await lock.release();
-});
-
-test("refuses an added app's bridge.db another version made, letting go of every app it opened", async () => {
-  const dataFolder = createTestFolder();
-  const releases = createAddedApp(dataFolder, "releases");
-  await createDatabaseMadeBy(releases.database, 1);
-
-  await expect(startBridge(dataFolder, env)).rejects.toThrow(BridgeRefusedError);
-  for (const file of ["bridge.db", "bridge.db-wal", "bridge.db-shm"]) {
-    rmSync(join(releases.folder, file), { force: true });
-  }
-
-  await start(dataFolder);
 });

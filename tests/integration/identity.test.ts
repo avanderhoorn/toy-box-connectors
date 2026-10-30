@@ -79,33 +79,21 @@ describe("confirming the tokens", () => {
     expect(await database.read(readInstallation)).toEqual(installation);
   });
 
-  test("tokens from another workspace, app, bot or bot user are refused, changing nothing", async () => {
-    for (const [field, found] of [
-      ["teamId", "TOTHER"],
-      ["appId", "AOTHER"],
-      ["botId", "BOTHER"],
-      ["botUserId", "UOTHER"],
+  test("tokens from another workspace, app, bot, bot user or Enterprise org are refused, changing nothing", async () => {
+    for (const [identity, refusal] of [
+      [{ teamId: "TOTHER" }, { reason: "mismatch", field: "teamId", found: "TOTHER" }],
+      [{ appId: "AOTHER" }, { reason: "mismatch", field: "appId", found: "AOTHER" }],
+      [{ botId: "BOTHER" }, { reason: "mismatch", field: "botId", found: "BOTHER" }],
+      [{ botUserId: "UOTHER" }, { reason: "mismatch", field: "botUserId", found: "UOTHER" }],
+      // A workspace that joined an Enterprise org since it was set up.
+      [{ enterpriseId: "EFAKE" }, { reason: "moved_org" }],
     ] as const) {
       const database = await openTestDatabase();
       await confirm(database, fakeSlack());
 
-      expect(await confirm(database, fakeSlack({ [field]: found }))).toEqual({
-        kind: "refused",
-        refusal: { reason: "mismatch", field, found },
-      });
+      expect(await confirm(database, fakeSlack(identity))).toEqual({ kind: "refused", refusal });
       expect(await database.read(readInstallation)).toEqual(fakeInstallation);
     }
-  });
-
-  test("a workspace that joined an Enterprise org since it was set up is refused", async () => {
-    const database = await openTestDatabase();
-    await confirm(database, fakeSlack());
-
-    expect(await confirm(database, fakeSlack({ enterpriseId: "EFAKE" }))).toEqual({
-      kind: "refused",
-      refusal: { reason: "moved_org" },
-    });
-    expect(await database.read(readInstallation)).toEqual(fakeInstallation);
   });
 });
 
@@ -249,48 +237,42 @@ describe("a rejected bot token", () => {
 });
 
 describe("an answer the bridge can't get or read", () => {
-  test("decides nothing, saying when Slack asked the bridge to wait", async () => {
-    for (const [method, failure, detail, retryAt] of [
-      ["auth.test", { retryAfter: 30 }, "Slack is holding back auth.test", NOW + 30_000],
-      ["auth.test", { status: 503 }, "Slack didn't answer auth.test: HTTP 503", null],
-      ["bots.info", { error: "bot_not_found" }, "Slack refused bots.info with bot_not_found", null],
-    ] as const) {
+  test("decides nothing, saying why and when Slack asked the bridge to wait", async () => {
+    const unreadable = (method: string) =>
+      `Slack answered ${method} with something the bridge can't read`;
+    for (const [fail, detail, retryAt] of [
+      [
+        (slack) => slack.failNext("auth.test", { retryAfter: 30 }),
+        "Slack is holding back auth.test",
+        NOW + 30_000,
+      ],
+      [
+        (slack) => slack.failNext("auth.test", { status: 503 }),
+        "Slack didn't answer auth.test: HTTP 503",
+        null,
+      ],
+      [
+        (slack) => slack.failNext("bots.info", { error: "bot_not_found" }),
+        "Slack refused bots.info with bot_not_found",
+        null,
+      ],
+      [
+        (slack) => slack.setBotResponse({ user_id: "UCONTRADICTION" }),
+        "Slack's auth.test names bot user UFAKEBOT but bots.info UCONTRADICTION",
+        null,
+      ],
+      [(slack) => slack.setAuthResponse({ team_id: 7 }), unreadable("auth.test"), null],
+      [(slack) => slack.setBotResponse({ app_id: null }), unreadable("bots.info"), null],
+    ] as const satisfies readonly (readonly [
+      (slack: FakeSlack) => void,
+      string,
+      number | null,
+    ])[]) {
       const slack = fakeSlack();
-      slack.failNext(method, failure);
+      fail(slack);
       const database = await openTestDatabase();
 
       expect(await confirm(database, slack)).toEqual({ kind: "unavailable", detail, retryAt });
-      expect(await database.read(readInstallation)).toBeNull();
-    }
-  });
-
-  test("bots.info describing another bot user decides nothing", async () => {
-    const slack = fakeSlack();
-    slack.setBotResponse({ user_id: "UCONTRADICTION" });
-    const database = await openTestDatabase();
-
-    expect(await confirm(database, slack)).toEqual({
-      kind: "unavailable",
-      detail: "Slack's auth.test names bot user UFAKEBOT but bots.info UCONTRADICTION",
-      retryAt: null,
-    });
-    expect(await database.read(readInstallation)).toBeNull();
-  });
-
-  test("an answer that isn't Slack's shape decides nothing", async () => {
-    for (const [method, set] of [
-      ["auth.test", (slack: FakeSlack) => slack.setAuthResponse({ team_id: 7 })],
-      ["bots.info", (slack: FakeSlack) => slack.setBotResponse({ app_id: null })],
-    ] as const) {
-      const slack = fakeSlack();
-      set(slack);
-      const database = await openTestDatabase();
-
-      expect(await confirm(database, slack)).toEqual({
-        kind: "unavailable",
-        detail: `Slack answered ${method} with something the bridge can't read`,
-        retryAt: null,
-      });
       expect(await database.read(readInstallation)).toBeNull();
     }
   });

@@ -511,27 +511,27 @@ describe("refusing Slack", () => {
 });
 
 describe("an added app", () => {
-  test("a token Slack rejects is named as the app's, in status and the log", async () => {
+  test.each<[string, (fake: FakeSlack) => void, SlackState["connection"], string]>([
+    [
+      "a token Slack rejects",
+      (fake) => fake.failNext("apps.connections.open", { error: "invalid_auth" }),
+      "auth_failed",
+      rejectedTokensProblem([["SLACK_APP_TOKEN", "invalid_auth"]], "releases"),
+    ],
+    [
+      "a refusal",
+      (fake) => fake.setNextHelloAppId("A-other"),
+      "refused",
+      refusalProblem({ reason: "other_app" }, "releases"),
+    ],
+  ])("names %s as the app's, in status and the log", async (_, fail, connection, problem) => {
     const logged = captureLog();
     const link = await linkFakeSlack();
-    link.fake.failNext("apps.connections.open", { error: "invalid_auth" });
+    fail(link.fake);
 
     const { supervisor } = link.supervise({ app: "releases" });
 
-    const problem = rejectedTokensProblem([["SLACK_APP_TOKEN", "invalid_auth"]], "releases");
-    await waitFor(() => expect(supervisor.state()).toEqual({ connection: "auth_failed", problem }));
-    expect(logged()).toEqual([problem]);
-  });
-
-  test("a refusal is named as the app's, in status and the log", async () => {
-    const logged = captureLog();
-    const link = await linkFakeSlack();
-    link.fake.setNextHelloAppId("A-other");
-
-    const { supervisor } = link.supervise({ app: "releases" });
-
-    const problem = refusalProblem({ reason: "other_app" }, "releases");
-    await waitFor(() => expect(supervisor.state()).toEqual({ connection: "refused", problem }));
+    await waitFor(() => expect(supervisor.state()).toEqual({ connection, problem }));
     expect(logged()).toEqual([problem]);
   });
 });

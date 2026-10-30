@@ -18,11 +18,8 @@ const names: SlackNames = new Map([
 const ZWSP = "\u200b";
 
 describe("rendering Slack text", () => {
-  test("shows people by the names the bridge stored", () => {
+  test("shows people by the names the bridge stored, else the label Slack sent, else the ID", () => {
     expect(renderSlackText("<@U0BOT> ask <@U0ALICE>", names)).toBe("{toy-box} ask {Alice Chen}");
-  });
-
-  test("falls back to the label Slack sent, then to the ID", () => {
     expect(
       renderSlackText("<@U0CAROL|carol> in <#C0OPS|ops>, <#C0NONE> and <@U0DAVE>", names),
     ).toBe("{carol} in #ops, #C0NONE and {U0DAVE}");
@@ -67,7 +64,8 @@ describe("rendering Slack text", () => {
     );
   });
 
-  test("neutralizes every @ Toy Box reads as a mention, even one that markup or a control hides", () => {
+  test("neutralizes every @ Toy Box reads as a mention, even one that markup or a control hides, but no email address", () => {
+    expect(renderSlackText("write to dev@example.com", names)).toBe("write to dev@example.com");
     expect(renderSlackText("@lead please, cc (@everyone)", names)).toBe(
       `@${ZWSP}lead please, cc (@${ZWSP}everyone)`,
     );
@@ -76,10 +74,6 @@ describe("rendering Slack text", () => {
     );
     expect(renderSlackText("ping @\u0007lead", names)).toBe(`ping @${ZWSP}lead`);
     expect(renderSlackText("ask @1password", names)).toBe(`ask @${ZWSP}1password`);
-  });
-
-  test("leaves email addresses alone", () => {
-    expect(renderSlackText("write to dev@example.com", names)).toBe("write to dev@example.com");
   });
 
   test("percent-encodes a mention in a URL, so the URL still opens", () => {

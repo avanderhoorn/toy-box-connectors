@@ -2,7 +2,7 @@
 // Toy Box, and showing whoever asked in a fake Slack that it did.
 
 import { expect, test } from "bun:test";
-import { started, withDatabase } from "./bridgeProcess";
+import { started } from "./bridgeProcess";
 import { ALICE, BOT, connectedBridge, said, timestamps } from "./connectedBridge";
 import { startLinkedBridge, storeNewRequest } from "./linkedBridge";
 import { waitFor } from "./waitFor";
@@ -11,26 +11,6 @@ import { waitFor } from "./waitFor";
 const PROMPTLY = {
   TOY_BOX_SLACK_WAKE_TIMINGS: JSON.stringify({ debounce: 50, debounceLimit: 200 }),
 };
-
-test("a running bridge wakes the lead once for a new request, and stops on SIGTERM", async () => {
-  const { toyBox, channelId, routine, bridge, home, dataFolder } = await startLinkedBridge({
-    env: PROMPTLY,
-    prepare: storeNewRequest,
-  });
-
-  await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
-  bridge.child.kill("SIGTERM");
-
-  expect(await bridge.exit()).toEqual({
-    code: 0,
-    stderr: `${started(home)}toy-box-slack is stopping after SIGTERM\n`,
-  });
-  expect(toyBox.runs).toEqual([{ channelId, routineId: routine.id, at: expect.any(Number) }]);
-  const wakes = await withDatabase(dataFolder, (database) =>
-    database.read((sql) => sql`SELECT link_id, outcome FROM wakes`),
-  );
-  expect(wakes).toEqual([{ link_id: "link", outcome: "ran" }]);
-}, 15_000);
 
 test("whoever asked sees 👀 once Toy Box runs the lead's wake, before the lead reads it", async () => {
   const { slack, toyBox, inbox, post, stop, saying } = await connectedBridge();

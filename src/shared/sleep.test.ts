@@ -7,15 +7,10 @@ test("waits the time it's given", async () => {
   expect(performance.now() - startedAt).toBeGreaterThanOrEqual(25);
 });
 
-test("ends when its signal aborts", async () => {
+test("ends when its signal aborts, at once if it already has", async () => {
   const stopping = new AbortController();
   const slept = sleep(60_000, stopping.signal);
   stopping.abort();
   expect(await slept).toBeUndefined();
-});
-
-test("doesn't wait once its signal has aborted", async () => {
-  const stopping = new AbortController();
-  stopping.abort();
   expect(await sleep(60_000, stopping.signal)).toBeUndefined();
 });
