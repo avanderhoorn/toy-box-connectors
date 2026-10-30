@@ -8,7 +8,8 @@ import { compareTs, slackTsSchema, type SlackTs } from "./ts";
 // file_access check_file_info, so the bridge reads a file only on files.info's fresh facts. Slack
 // lists where a file is shared by channel, public channels apart from private ones, with the ts of
 // each message that shares it, so a file reads only while the message that listed it still shares
-// it. Slack doesn't hold an external file's bytes, and its URL is whatever its uploader chose, so
+// it. Slack can list a share a moment after its message, so a share it doesn't list may only be
+// late. Slack doesn't hold an external file's bytes, and its URL is whatever its uploader chose, so
 // the bridge never fetches one.
 
 /** A file a message shares, as the message describes it. A partial one has only its ID. */
@@ -112,7 +113,7 @@ export function judgeFileInfo(
     return refused(
       file.has_more_shares === true
         ? "it's shared in too many places for Slack to confirm its message still shares it"
-        : "its message no longer shares it",
+        : "Slack doesn't list it as shared in its message, so if it was just shared, try again shortly",
     );
   const url = file.url_private_download ?? file.url_private;
   if (!url) return refused("Slack gave no address for it");

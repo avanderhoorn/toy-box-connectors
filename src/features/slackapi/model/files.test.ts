@@ -38,7 +38,7 @@ test.each<[string, SlackCall<unknown>, FileInfoVerdict]>([
     },
   ],
   [
-    "but not once only another message, or another channel's, shares it",
+    "but not while Slack lists only another message, or another channel's, as sharing it, which may only be late",
     {
       kind: "ok",
       result: {
@@ -52,7 +52,11 @@ test.each<[string, SlackCall<unknown>, FileInfoVerdict]>([
         },
       },
     },
-    { kind: "refused", reason: "its message no longer shares it" },
+    {
+      kind: "refused",
+      reason:
+        "Slack doesn't list it as shared in its message, so if it was just shared, try again shortly",
+    },
   ],
   [
     "though a list Slack cut short doesn't show that it stopped",
