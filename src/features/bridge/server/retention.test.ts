@@ -45,6 +45,38 @@ test("one pass forgets a month-old question with its request and reply, and who 
   ]);
 });
 
+test("a month-old post goes on its own, unless Slack never confirmed it or an item is still in its thread", async () => {
+  const database = await openTestDatabase();
+  await createStoredLink(database);
+  // r1 is still being answered, so a post in its thread can't go with it.
+  await createStoredRequest(database, { state: "answering" });
+  const now = 1_700_000_200_000 + RETENTION_MS;
+  const top = { kind: "post", request_id: null, thread_ts: null, state: "sent" };
+  const under = (ts: string) => ({ ...top, thread_ts: ts });
+  await createStoredOutboxItem(database, 1, { ...top, slack_ts: "1700000150.000100" });
+  await createStoredOutboxItem(database, 2, {
+    ...under("1700000150.000100"),
+    state: "delivery_unknown",
+  });
+  await createStoredOutboxItem(database, 3, { ...under("1700000150.000100"), state: "retracted" });
+  await createStoredOutboxItem(database, 4, { ...top, slack_ts: "1700000160.000100" });
+  await createStoredOutboxItem(database, 5, {
+    ...under("1700000160.000100"),
+    updated_at: now - 86_400_000,
+  });
+  await createStoredOutboxItem(database, 6, { ...top, slack_ts: "1700000170.000100" });
+  await createStoredOutboxItem(database, 7, { kind: "post", state: "failed" });
+
+  await database.write((transaction) => applyRetention(transaction, now));
+
+  expect(await database.read((sql) => sql`SELECT number FROM outbox ORDER BY number`)).toEqual([
+    { number: 1 },
+    { number: 2 },
+    { number: 4 },
+    { number: 5 },
+  ]);
+});
+
 test.each(["queued", "sending", "delivery_unknown"])(
   "a finished request stays while a post in its thread is %s",
   async (state) => {

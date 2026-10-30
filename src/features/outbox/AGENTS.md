@@ -9,9 +9,11 @@ number and state, rather than queueing again. A post reserves nothing, so it ref
 of any item saying the same in the same place while that item may still go out or its delivery
 is unknown, and for 10 minutes after it's sent. An item that may still go out keeps its payload.
 Any other forgets it 30 days after it last changed and keeps its hash, so delivery can still be
-proven and the reservation still holds. A reply's item goes with its request, whose number is
-never handed out again, and so does a post in that request's thread. A finished request stays
-while such a post may still go out or its delivery is unknown, so the post can still be proven.
+proven and the reservation still holds. A post's whole row goes then instead, unless its delivery
+is unknown or an item is still in its thread, which the bridge names by the post's number. A
+reply's item goes with its request, whose number is never handed out again, and so does a post in
+that request's thread. A finished request stays while such a post may still go out or its delivery
+is unknown, so the post can still be proven.
 
 A post goes at the top of its link's channel, or in a thread there that it names by a request in
 it, such as r14, or by the link's own top-level item it's under, such as o31. `server/threads.ts`

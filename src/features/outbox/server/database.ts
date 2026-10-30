@@ -345,10 +345,19 @@ export async function recoverOutboxAttempts(tx: Bun.SQL, now: number): Promise<s
 }
 
 /**
- * Forgets what each post said once it can't go out anymore and hasn't changed for as long as the
- * bridge keeps what was said. Its row stays, so nothing it reserved posts again.
+ * Forgets what each item said once it can't go out anymore and hasn't changed for as long as the
+ * bridge keeps what was said. A reply's or publication's row stays, so nothing it reserved posts
+ * again. A post reserves nothing, so its row goes too, unless Slack never confirmed it or an item
+ * is still in its thread, which the bridge names by the post's number.
  */
 export async function forgetOldPosts(tx: Bun.SQL, now: number): Promise<void> {
+  await tx`
+    DELETE FROM outbox AS post
+    WHERE kind = 'post' AND state NOT IN ('queued', 'sending', 'delivery_unknown')
+      AND updated_at < ${now - RETENTION_MS} AND NOT EXISTS (
+        SELECT 1 FROM outbox WHERE link_id = post.link_id AND thread_ts = post.slack_ts
+      )
+  `;
   await tx`
     UPDATE outbox SET payload = NULL
     WHERE payload IS NOT NULL AND state NOT IN ('queued', 'sending')

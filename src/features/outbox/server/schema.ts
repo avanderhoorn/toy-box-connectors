@@ -1,8 +1,9 @@
 export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
   await db.unsafe(`
-    -- A post that may still go out keeps what it says. One that can't may lose it, while its row
-    -- keeps its request or publication slot reserved. A reply's row goes with its request, and so
-    -- does a post in that request's thread.
+    -- An item that may still go out keeps what it says. One that can't may lose it, while a
+    -- reply's or publication's row keeps its slot reserved. A reply's row goes with its request,
+    -- and so does a post in that request's thread. A post reserves nothing, so its row can go
+    -- sooner on its own.
     CREATE TABLE outbox (
       number INTEGER PRIMARY KEY AUTOINCREMENT,
       id TEXT NOT NULL UNIQUE,
