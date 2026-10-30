@@ -1,4 +1,4 @@
-import { expect, onTestFinished, test } from "bun:test";
+import { expect, jest, onTestFinished, test } from "bun:test";
 import { DEFAULT_APP } from "@bridge/model/apps";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
@@ -118,6 +118,26 @@ test("waits up to its deadline for a name that takes a moment", async () => {
   const { text } = await status([{ ...app, bot: unhurried }], { channelId, at: 1_000 });
 
   expect(text).toContain('\n\n## #toy-box and Toy Box channel "Toy Box Slack"\n');
+});
+
+test("stops waiting for a name two seconds after asking, showing the channel by its ID", async () => {
+  const { app, toyBox, channelId } = await startNamedLink();
+  const status = statusCommand({ nameApps: false, toyBoxOrigin: new URL(toyBox.url) });
+  const asked = Promise.withResolvers<void>();
+  const silent: BotClient = {
+    call: () => {
+      asked.resolve();
+      return new Promise(() => {});
+    },
+  };
+  jest.useFakeTimers();
+  onTestFinished(() => jest.useRealTimers());
+
+  const shown = status([{ ...app, bot: silent }], { channelId, at: 1_000 });
+  await asked.promise;
+  jest.advanceTimersByTime(2_000);
+
+  expect((await shown).text).toContain("\n\n## #C-link and Toy Box channel ");
 });
 
 test.each<[string, BotClient["call"]]>([
