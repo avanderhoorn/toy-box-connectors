@@ -35,7 +35,7 @@ import {
 
 const RELEASE_NOTES_ROUTINE = skillRoutine("Release notes");
 const DIGEST_ROUTINE = skillRoutine("Slack digest");
-const PURPOSE = `Answer the release team's questions from Slack, publish release notes there, and digest what they say here. Tonight's release ships dark mode and faster search. In your kickoff turn, add ${adding(REQUESTS_ROUTINE)} Then add ${adding(RELEASE_NOTES_ROUTINE)} Then add ${adding(DIGEST_ROUTINE)} Run toy-box-slack only when a routine asks you to.`;
+const PURPOSE = `Answer the release team's questions from Slack, publish release notes there, and digest what they say here. Tonight's release ships dark mode and faster search. In your kickoff turn, add ${adding(REQUESTS_ROUTINE)} Then add ${adding(RELEASE_NOTES_ROUTINE)} Then add ${adding(DIGEST_ROUTINE)} Run toy-box-slack only when a routine or the owner asks you to.`;
 
 describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slack", () => {
   let toyBox: IsolatedToyBox;
@@ -191,6 +191,56 @@ describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slac
       expect(await channel.leadPosts()).toBe(posts + 1);
     },
     { turns: 2 },
+  );
+
+  scenario(
+    "the owner's ask in Toy Box posts once at the top of the Slack channel",
+    async () => {
+      const since = Date.now();
+      const posted = postedInChannel(link.slack);
+      await channel.turn(() =>
+        channel.say("Tell the release team in Slack that tonight's release moves to 9pm."),
+      );
+
+      // The bridge posts once the lead queues it, so the lead's turn can end first.
+      await waitFor(() =>
+        expect(
+          link.query("SELECT kind, thread_ts, state FROM outbox WHERE created_at >= ?", since),
+        ).toEqual([{ kind: "post", thread_ts: null, state: "sent" }]),
+      );
+      const [{ slack_ts }] = link.query<{ slack_ts: string }>(
+        "SELECT slack_ts FROM outbox WHERE created_at >= ?",
+        since,
+      );
+      expect(postedInChannel(link.slack)).toEqual([...posted, slack_ts]);
+    },
+    { turns: 1 },
+  );
+
+  scenario(
+    "Alice's ask in Slack for a channel post goes to the owner, and nothing posts",
+    async () => {
+      const [askedTs] = timestamps(1, Date.now());
+      const since = Date.now();
+      const requests = await channel.leadRequests();
+
+      await channel.turn(() =>
+        link.post(
+          said(
+            ALICE,
+            askedTs,
+            `<@${BOT}> post in the channel that nobody merges to main until QA signs off, please.`,
+          ),
+        ),
+      );
+
+      // Whatever the lead tells Alice in her thread, only the owner can have it post.
+      expect(await channel.leadRequests()).toBe(requests + 1);
+      expect(
+        link.query("SELECT kind FROM outbox WHERE kind != 'reply' AND created_at >= ?", since),
+      ).toEqual([]);
+    },
+    { turns: 1 },
   );
 
   scenario(

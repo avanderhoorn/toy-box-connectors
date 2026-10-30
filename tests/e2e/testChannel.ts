@@ -39,10 +39,14 @@ export type TestChannel = {
   turn(wake: () => Promise<void>): Promise<void>;
   /** Runs the lead's routine titled `title`, and resolves once the turn it starts settles. */
   run(title: string): Promise<void>;
+  /** Posts `content` in the channel as the owner, which wakes the lead since it mentions no one. */
+  say(content: string): Promise<void>;
   /** Resolves once `during` does, and fails if the lead started a turn before then. */
   idleThrough(during: () => Promise<void>): Promise<void>;
   /** Counts the lead's messages in Toy Box's store, which holds a turn's posts once it settles. */
   leadPosts(): Promise<number>;
+  /** Counts the lead's messages that ask the owner for input, as `leadPosts` counts its posts. */
+  leadRequests(): Promise<number>;
 };
 
 const createdChannelSchema = z.object({ channel: z.object({ id: z.string() }) });
@@ -162,11 +166,17 @@ function followChannel(toyBox: IsolatedToyBox, channelId: string) {
     return messages.filter(({ sender }) => sender.type === "agent").length;
   }
 
+  async function leadRequests() {
+    const messages = await readLatestMessages(toyBox.origin, channelId);
+    return messages.filter(({ request }) => request).length;
+  }
+
   return {
     id: channelId,
     routine,
     turn,
     leadPosts,
+    leadRequests,
 
     async run(title: string) {
       const scheduled = routine(title);
@@ -174,6 +184,14 @@ function followChannel(toyBox: IsolatedToyBox, channelId: string) {
       const path = `channels/${channelId}/routines/${scheduled.id}/run`;
       await turn(async () => {
         await callToyBox(toyBox.origin, path, { method: "POST", expected: 204 });
+      });
+    },
+
+    async say(content: string) {
+      await callToyBox(toyBox.origin, `channels/${channelId}/messages`, {
+        method: "POST",
+        body: { id: crypto.randomUUID(), content },
+        expected: 201,
       });
     },
 

@@ -29,8 +29,13 @@ export const routineChangeSchema = z.object({
   routine: routineSchema,
 });
 
-// System messages carry an object, so content stays unknown until a reader narrows it.
-const messageSchema = z.object({ sender: z.object({ type: z.string() }), content: z.unknown() });
+// System messages carry an object, so content stays unknown until a reader narrows it. Only the
+// lead's own messages can carry request, which asks the owner for input.
+const messageSchema = z.object({
+  sender: z.object({ type: z.string() }),
+  content: z.unknown(),
+  request: z.literal(true).optional(),
+});
 export type Message = z.output<typeof messageSchema>;
 
 const presenceMapSchema = z.record(z.string(), presenceSchema);
