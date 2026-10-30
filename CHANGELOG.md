@@ -1,3 +1,12 @@
+## 📅 v0.3.0 (10/30/26)
+
+- `toy-box-slack post` lets the lead post in the linked Slack channel, or in one of its threads, when you ask in Toy Box or a routine says to. When someone asks it to post from Slack, the lead tells you instead. A post still waiting when the link is paused or suspended never goes out, and resume names it so you can ask the lead again
+- `post --mention` notifies people on the allowlist, by the member IDs status shows
+- Status lists each allowed person by name and member ID. In `status --json`, allowlist entries are now `{ userId, name }` instead of names
+- Resuming or relinking a channel more people can read now drops what the lead wrote for fewer, names it, and gives the lead those requests back to answer again
+- The lead can't post a PGP private key block, as with the other secrets the bridge refuses
+- Updating and restarting `serve` is all it takes, and leads keep the routines they have. The first start upgrades bridge.db, which 0.2.x can't open afterward. If 0.2.x asks you to remove it, install 0.3.0 again instead, since removing it forgets every link
+
 ## 📅 v0.2.1 (10/30/26)
 
 - Whoever asks sees 👀 as soon as the lead is woken, rather than when it reads the request
