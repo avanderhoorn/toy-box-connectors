@@ -1,4 +1,5 @@
 import { expect, onTestFinished, test } from "bun:test";
+import { blankPng } from "@files/model/testFixtures";
 import { LogLevel, WebClient } from "@slack/web-api";
 import { z } from "zod";
 import { startFakeSlack, type FakeSlackApp } from "./index";
@@ -234,4 +235,48 @@ test("files.info finds a file's shares in its messages, and only the bot's token
     unsigned.headers.get("content-type"),
     new URL(unsigned.headers.get("location")!).pathname,
   ]).toEqual([302, "text/html; charset=utf-8", "/signin"]);
+});
+
+test("an image block shows only an image the bot uploaded, once Slack has processed it", async () => {
+  const { fake, client } = setup();
+  const channel = fake.addChannel();
+  const png = blankPng(4, 3);
+  const opened = z.object({ upload_url: z.string(), file_id: z.string() }).parse(
+    await client.apiCall("files.getUploadURLExternal", {
+      filename: "image-1.png",
+      length: png.length,
+      alt_txt: "A blank chart",
+    }),
+  );
+  const sent = await fetch(opened.upload_url, {
+    method: "POST",
+    headers: { "content-type": "application/octet-stream" },
+    body: png,
+  });
+  expect([sent.status, await sent.text()]).toEqual([200, `OK - ${png.length}`]);
+  await client.files.completeUploadExternal({ files: [{ id: opened.file_id }] });
+  const show = (id: string) =>
+    client.chat.postMessage({
+      channel,
+      text: "The chart",
+      blocks: [{ type: "image", slack_file: { id }, alt_text: "A blank chart" }],
+    });
+  const unshowable = {
+    data: {
+      error: "invalid_blocks",
+      response_metadata: {
+        messages: ["[ERROR] invalid slack file [json-pointer:/blocks/0/slack_file.id/slack_file]"],
+      },
+    },
+  };
+  await expect(show(opened.file_id)).rejects.toMatchObject(unshowable);
+  expect((await client.files.info({ file: opened.file_id })).file).toMatchObject({ mimetype: "" });
+  expect((await client.files.info({ file: opened.file_id })).file).toMatchObject({
+    mimetype: "image/png",
+    original_w: 4,
+    original_h: 3,
+  });
+  expect((await show(opened.file_id)).ok).toBe(true);
+  const theirs = fake.addFile(png, { user: "UALICE", name: "chart.png", mimetype: "image/png" });
+  await expect(show(theirs.id)).rejects.toMatchObject(unshowable);
 });

@@ -21,6 +21,12 @@
 // https://docs.slack.dev/reference/methods/files.info/
 // https://docs.slack.dev/reference/objects/file-object/
 // https://docs.slack.dev/messaging/working-with-files/#download
+// Uploads, which stay private until a message shows them, and which Slack processes first:
+// https://docs.slack.dev/messaging/working-with-files/#upload
+// https://docs.slack.dev/reference/methods/files.getUploadURLExternal/
+// https://docs.slack.dev/reference/methods/files.completeUploadExternal/
+// https://docs.slack.dev/reference/methods/files.delete/
+// https://docs.slack.dev/reference/block-kit/blocks/image-block/
 
 import { z } from "zod";
 import type { FakeSlackCall, FakeSlackFailure, FakeSlackIdentity } from "./index";
@@ -45,13 +51,30 @@ export type FakeSlackFile = {
   [key: string]: unknown;
 };
 type PageMethod = "conversations.history" | "conversations.replies";
+type StoredFile = {
+  file: FakeSlackFile;
+  bytes: Uint8Array;
+  /** An upload Slack is still processing, which it finishes after files.info shows it `looks` times. */
+  processing?: { looks: number; done: Partial<FakeSlackFile> };
+};
+/** An upload files.getUploadURLExternal opened, which files.completeUploadExternal makes a file. */
+type OpenUpload = {
+  /** Names the upload in the address its bytes go to, since they come without the token. */
+  ticket: string;
+  filename: string;
+  length: number;
+  user: string;
+  bytes?: Uint8Array;
+};
 
 export function createFakeSlackStore() {
   return {
     channels: new Map<string, FakeSlackChannel>(),
     users: new Map<string, Map<string, FakeSlackUser>>(),
     messages: new Map<string, Map<string, FakeSlackMessage>>(),
-    files: new Map<string, { file: FakeSlackFile; bytes: Uint8Array }>(),
+    files: new Map<string, StoredFile>(),
+    uploads: new Map<string, OpenUpload>(),
+    deletedFiles: new Set<string>(),
     timestampMicros: 0n,
   };
 }
@@ -66,6 +89,7 @@ const BOT_SCOPES = [
   "metadata.message:read",
   "reactions:write",
   "files:read",
+  "files:write",
 ];
 const bool = z
   .union([z.boolean(), z.enum(["true", "false", "1", "0"])])
@@ -96,6 +120,17 @@ const object = z.record(z.string(), z.unknown());
 const blocks = z.union([json, z.array(object)]).pipe(z.array(object));
 const metadata = z.union([json, object]).pipe(object);
 const listedFiles = z.array(z.object({ id: z.string() }));
+const imageBlock = z
+  .object({
+    type: z.literal("image"),
+    slack_file: z.object({ id: z.string().min(1) }).strict(),
+    alt_text: z.string().min(1).max(2000),
+    title: z
+      .object({ type: z.literal("plain_text"), text: z.string().min(1).max(2000) })
+      .strict()
+      .optional(),
+  })
+  .strict();
 const schemas = {
   "apps.connections.open": z.object({}).strict(),
   "auth.test": z.object({}).strict(),
@@ -123,6 +158,20 @@ const schemas = {
     .object({ channel: z.string().min(1), timestamp: ts, name: z.string().min(1) })
     .strict(),
   "files.info": z.object({ file: z.string().min(1) }).strict(),
+  "files.getUploadURLExternal": z
+    .object({
+      filename: z.string().min(1),
+      length: z.coerce.number().int().positive(),
+      alt_txt: z.string().optional(),
+    })
+    .strict(),
+  // Naming a channel would share the file before any message shows it.
+  "files.completeUploadExternal": z
+    .object({
+      files: json.pipe(z.array(z.object({ id: z.string().min(1) }).strict()).min(1)),
+    })
+    .strict(),
+  "files.delete": z.object({ file: z.string().min(1) }).strict(),
 };
 
 export function createFakeSlackApi(options: {
@@ -138,7 +187,7 @@ export function createFakeSlackApi(options: {
   emitEvent: (event: Record<string, unknown>, context: Record<string, unknown>) => void;
 }) {
   const { identity, now, store } = options;
-  const { channels, messages, files } = store;
+  const { channels, messages, files, uploads, deletedFiles } = store;
   const users = store.users.get(identity.teamId) ?? new Map<string, FakeSlackUser>();
   store.users.set(identity.teamId, users);
   const calls: FakeSlackCall[] = [];
@@ -151,6 +200,9 @@ export function createFakeSlackApi(options: {
   const botChanges: Record<string, unknown> = {};
   const pending = new Set<() => void>();
   const maxPageSize = options.pageSize ?? 100;
+  // files.info shows an upload unprocessed once, so the bridge has to wait for Slack.
+  let processingLooks = 1;
+  let uploadOrigin = options.filesOrigin;
   if (!Number.isInteger(maxPageSize) || maxPageSize < 1)
     throw new Error("Fake Slack pageSize must be a positive integer.");
   const controls = {
@@ -258,6 +310,14 @@ export function createFakeSlackApi(options: {
     },
     emptyNextPage(method: PageMethod) {
       emptyPages.set(method, (emptyPages.get(method) ?? 0) + 1);
+    },
+    /** Slack never finishes processing what the bot uploads from now on. */
+    stallProcessing() {
+      processingLooks = Infinity;
+    },
+    /** files.getUploadURLExternal gives addresses on `origin` from now on. */
+    setUploadOrigin(origin: string) {
+      uploadOrigin = origin;
     },
   };
   controls.setUser({
@@ -375,6 +435,24 @@ export function createFakeSlackApi(options: {
     });
   }
 
+  /**
+   * Why Slack can't show an image block. One must name an image the bot can see that Slack has
+   * processed, and the only images the bot sees here are its own.
+   */
+  function unshowableImage(blocks: readonly Record<string, unknown>[]): string | null {
+    for (const [index, block] of blocks.entries()) {
+      if (block.type !== "image") continue;
+      const image = imageBlock.safeParse(block);
+      if (!image.success)
+        return `[ERROR] failed to match all allowed schemas [json-pointer:/blocks/${index}]`;
+      const stored = files.get(image.data.slack_file.id);
+      // Slack's own pointer, as slackapi/python-slack-sdk#1521 shows.
+      if (!stored || stored.processing || stored.file.user !== identity.botUserId)
+        return `[ERROR] invalid slack file [json-pointer:/blocks/${index}/slack_file.id/slack_file]`;
+    }
+    return null;
+  }
+
   function post(
     requested: z.output<(typeof schemas)["chat.postMessage"]>,
     injected?: FakeSlackFailure,
@@ -387,6 +465,8 @@ export function createFakeSlackApi(options: {
     const problem = writeProblem(input.channel);
     if (problem) return failure(problem);
     if (!input.text && !input.blocks?.length) return failure("no_text");
+    const imageProblem = unshowableImage(input.blocks ?? []);
+    if (imageProblem) return failure("invalid_blocks", [imageProblem]);
     const store = messages.get(input.channel)!;
     const parent = input.thread_ts === undefined ? undefined : store.get(input.thread_ts);
     if (input.thread_ts && (!parent || (parent.thread_ts && parent.thread_ts !== parent.ts)))
@@ -551,7 +631,12 @@ export function createFakeSlackApi(options: {
 
   function fileInfo(input: z.output<(typeof schemas)["files.info"]>): Response {
     const stored = files.get(input.file);
-    if (!stored) return failure("file_not_found");
+    if (!stored) return failure(deletedFiles.has(input.file) ? "file_deleted" : "file_not_found");
+    if (stored.processing && stored.processing.looks > 0) stored.processing.looks -= 1;
+    else if (stored.processing) {
+      Object.assign(stored.file, stored.processing.done);
+      delete stored.processing;
+    }
     const shares: Record<"public" | "private", Record<string, unknown[]>> = {
       public: {},
       private: {},
@@ -621,6 +706,82 @@ export function createFakeSlackApi(options: {
         ? "application/force-download"
         : stored.file.mimetype;
     return new Response(stored.bytes, { headers: { "content-type": type } });
+  }
+
+  function openUpload(input: z.output<(typeof schemas)["files.getUploadURLExternal"]>): Response {
+    if (input.alt_txt !== undefined && input.alt_txt.length > 1000)
+      return failure("alt_txt_too_large");
+    const fileId = `F${crypto.randomUUID().replaceAll("-", "").toUpperCase()}`;
+    const ticket = crypto.randomUUID();
+    uploads.set(fileId, {
+      ticket,
+      filename: input.filename,
+      length: input.length,
+      user: identity.botUserId,
+    });
+    return Response.json({
+      ok: true,
+      upload_url: new URL(`/upload/v1/${ticket}`, uploadOrigin).href,
+      file_id: fileId,
+    });
+  }
+
+  /** Takes an upload's bytes, which Slack's guide sends raw and without the token. */
+  async function upload(request: Request): Promise<Response> {
+    const ticket = new URL(request.url).pathname.slice("/upload/v1/".length);
+    const opened = [...uploads.values()].find((upload) => upload.ticket === ticket);
+    const type = request.headers.get("content-type");
+    if (request.method !== "POST") return unexpectedUpload(`An upload used ${request.method}.`);
+    if (request.headers.has("authorization")) return unexpectedUpload("An upload carried a token.");
+    if (type !== "application/octet-stream")
+      return unexpectedUpload(`An upload was sent as ${type}.`);
+    if (!opened || opened.bytes)
+      return unexpectedUpload("An upload went to an address that wasn't open for its bytes.");
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    if (bytes.length !== opened.length)
+      return unexpectedUpload(
+        `An upload sent ${bytes.length} bytes after opening for ${opened.length}.`,
+      );
+    opened.bytes = bytes;
+    return new Response(`OK - ${bytes.length}`);
+  }
+
+  function unexpectedUpload(message: string): Response {
+    problems.push(message);
+    return new Response(message, { status: 400 });
+  }
+
+  function completeUploads(
+    input: z.output<(typeof schemas)["files.completeUploadExternal"]>,
+  ): Response {
+    const completing: { id: string; filename: string; bytes: Uint8Array }[] = [];
+    for (const { id } of input.files) {
+      const upload = uploads.get(id);
+      if (!upload?.bytes || upload.user !== identity.botUserId)
+        return unexpected("A completion named a file whose bytes the bot hadn't sent.");
+      completing.push({ id, filename: upload.filename, bytes: upload.bytes });
+    }
+    for (const { id, filename, bytes } of completing) {
+      uploads.delete(id);
+      controls.addFile(bytes, {
+        id,
+        name: filename,
+        mimetype: "",
+        filetype: "",
+        user: identity.botUserId,
+      });
+      files.get(id)!.processing = { looks: processingLooks, done: processed(bytes) };
+    }
+    return Response.json({ ok: true, files: completing.map(({ id }) => files.get(id)!.file) });
+  }
+
+  function deleteFile(input: z.output<(typeof schemas)["files.delete"]>): Response {
+    const stored = files.get(input.file);
+    if (!stored) return failure(deletedFiles.has(input.file) ? "file_deleted" : "file_not_found");
+    if (stored.file.user !== identity.botUserId) return failure("cant_delete_file");
+    files.delete(input.file);
+    deletedFiles.add(input.file);
+    return Response.json({ ok: true });
   }
 
   async function handle(request: Request): Promise<Response> {
@@ -731,6 +892,12 @@ export function createFakeSlackApi(options: {
         return run(schemas[method], reaction);
       case "files.info":
         return run(schemas[method], fileInfo);
+      case "files.getUploadURLExternal":
+        return run(schemas[method], openUpload);
+      case "files.completeUploadExternal":
+        return run(schemas[method], completeUploads);
+      case "files.delete":
+        return run(schemas[method], deleteFile);
       default:
         return unexpected(`Unknown fake Slack method: ${method}`);
     }
@@ -742,6 +909,7 @@ export function createFakeSlackApi(options: {
     problems,
     handle,
     download,
+    upload,
     isMember(channelId: string) {
       return membership.has(channelId) && membership.get(channelId) !== false;
     },
@@ -776,4 +944,15 @@ function compareTs(left: string, right: string): number {
   if (BigInt(a) !== BigInt(b)) return BigInt(a) < BigInt(b) ? -1 : 1;
   const width = Math.max(af.length, bf.length);
   return af.padEnd(width, "0").localeCompare(bf.padEnd(width, "0"));
+}
+
+/** What processing adds to a PNG the bot uploaded, which is all it uploads. */
+function processed(png: Uint8Array): Partial<FakeSlackFile> {
+  const header = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  return {
+    mimetype: "image/png",
+    filetype: "png",
+    original_w: header.getUint32(16),
+    original_h: header.getUint32(20),
+  };
 }

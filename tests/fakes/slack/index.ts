@@ -176,6 +176,7 @@ export function startFakeSlack(
     const api = tokens.get(token ?? "") ?? apps.get(primary.appToken)!.api;
     if (target.pathname.startsWith("/api/")) return api.handle(request);
     if (target.pathname.startsWith("/files-pri/")) return api.download(request);
+    if (target.pathname.startsWith("/upload/v1/")) return api.upload(request);
     problems.push(`Unexpected Slack route: ${target.pathname}`);
     return new Response("Unknown fake Slack route", { status: 404 });
   }

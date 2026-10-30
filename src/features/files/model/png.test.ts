@@ -1,10 +1,9 @@
 import { expect, test } from "bun:test";
-import { crc32, deflateSync } from "node:zlib";
+import { deflateSync } from "node:zlib";
 import { rebuildPng, type Rebuild } from "./png";
+import { chunk, header, idat, iend, ihdr, png } from "./testFixtures";
 
-const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const [gray, truecolor, palette] = [0, 2, 3];
-const iend = chunk("IEND");
 const damaged: Rebuild = { kind: "refused", reason: "is damaged" };
 
 test("a PNG keeps only its header, its transparent color and the rows from every IDAT", async () => {
@@ -106,31 +105,6 @@ test.each<[string, Uint8Array, Rebuild]>([
 ])("%s", async (_, bytes, rebuild) => {
   expect(await rebuildPng(bytes)).toEqual(rebuild);
 });
-
-function png(...parts: Uint8Array[]): Uint8Array {
-  return Uint8Array.from([...signature, ...parts.flatMap((part) => [...part])]);
-}
-
-function ihdr(width: number, height: number, depth: number, colorType: number, interlace = 0) {
-  return chunk("IHDR", header(width, height, depth, colorType, interlace));
-}
-
-function header(width: number, height: number, depth: number, colorType: number, interlace = 0) {
-  return [...uint32(width), ...uint32(height), depth, colorType, 0, 0, interlace];
-}
-
-function idat(rows: ArrayLike<number>): Uint8Array {
-  return chunk("IDAT", deflateSync(Uint8Array.from(rows)));
-}
-
-function chunk(type: string, data: ArrayLike<number> = []): Uint8Array {
-  const body = Uint8Array.from([...text(type), ...Array.from(data)]);
-  return Uint8Array.from([...uint32(data.length), ...body, ...uint32(crc32(body))]);
-}
-
-function uint32(value: number): number[] {
-  return [value >>> 24, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
-}
 
 function text(value: string): number[] {
   return [...Buffer.from(value)];
