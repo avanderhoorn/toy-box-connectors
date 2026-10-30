@@ -39,7 +39,8 @@ of lostintangent/toy-box. Paths are relative to that repo unless they start with
    `immediate: true` (`index.ts#wakeChannelAgent`). If the session is running, `SessionStream.deliver`
    submits the wake into the current turn instead of queueing it (`sessionStream.ts:157-159`).
    Immediate messages bypass coalescing. The bridge should therefore **debounce routine runs**, so a
-   burst of Slack messages produces one nudge.
+   burst of Slack messages produces one nudge. The Copilot CLI can still hold a wake that lands in
+   a turn's last model request until the lead's background work finishes (§10).
 6. **The routine prompt is our strongest per-wake lever, and the channel purpose is our strongest
    standing lever.** The routine prompt (≤2,000 chars) reaches the lead verbatim on every wake. The
    purpose (≤12,000 chars) sits in every agent's system prompt on every execution. The lead's role
@@ -470,6 +471,8 @@ Claude applies it at the next model step with `next` priority. The exceptions:
 - When the session isn't open, the wake starts a new turn.
 - A restart loses the wake.
 - Immediate wakes aren't coalesced, so two quick runs mean two steers.
+- The Copilot CLI may hold one that lands in a turn's last model request until background work
+  finishes, and doesn't coalesce what it holds (§10).
 
 The bridge should debounce. The lead sees exactly:
 
@@ -883,3 +886,109 @@ For e2e this matters:
   toy-box-slack. This is a test channel: do not create members or tasks."
 - **Assert the kickoff succeeded.** Check that the lead posted its kickoff, so an auth failure
   surfaces as an error instead of a silent no-op.
+
+## 10. Held wakes while a background agent runs (t67, 2026-10-30)
+
+Sources:
+- Toy Box `8cafc93`, running as `./toy-box --port 3100`, built at 20:29 on Oct 29.
+- Copilot CLI 1.0.105 and `@github/copilot-sdk` 1.0.27.
+- The lead's `events.jsonl`.
+- The bridge's `apps/toy-box-dev/bridge.db` (`wakes`), read-only.
+
+### What happened
+
+None of the three wakes was lost. **The Copilot CLI held them in its own queued lane** until the
+send that was open at the time closed. It then delivered them in FIFO order, one per send close:
+
+| Wake | Sent | Delivered (`user.message`) | Native `delivery` |
+|---|---|---|---|
+| Routine run 1 | 04:33:43.79 | 04:51:55.513 (line 79367) | `queued` |
+| Owner seq 756 | 04:35:58.47 | 04:53:56.793 (line 79441) | `queued` |
+| Routine run 2 (retry) | 04:36:43.80 | 04:54:47.243 (line 79498) | `queued` |
+
+### It was the CLI's queue, not Toy Box's
+
+- **Toy Box handed each wake to the CLI straight away.** Every channel wake is
+  `deliverSessionMessage(…, { immediate: true })` (`channels/server/index.ts#wakeChannelAgent`).
+  `SessionStream.deliver` sends an immediate message straight to the provider unless another one is
+  mid-submit (`sessions/server/runtime/sessionStream.ts:157-166`).
+- **The Copilot adapter passes `mode: "immediate"` to `native.send`**
+  (`providers/server/copilot/connection.ts:67-86`). The SDK's `send` resolves as soon as
+  `session.send` returns a messageId (`copilot-sdk/dist/session.js#sendMessage`). That's why the
+  bridge's runs got their 2xx in milliseconds.
+- **Toy Box's own queue couldn't have held them.**
+  - It would have merged the two identical routine prompts (`systemMessageCoalesceKey` is
+    `channel_routine:${prompt}`, `sessions/model/systemMessages.ts`). They weren't merged.
+  - In `background` status it drains on every provider event (`sessionStream.ts:394`), and
+    subagent events streamed the whole time.
+  - It drains only on `session.idle` while running. Yet seq 756 landed 47 ms after a turn end inside
+    one CLI interaction, with no idle between them.
+- **`delivery: "queued"` is the CLI's own lane label.** The others are `steering` (an interjection
+  into a live turn) and `idle` (a send that starts a new turn).
+
+### Why routine run 1 wasn't steered at 04:33:43.79 (inference from SDK schema docs, not native code)
+
+- **Steering only lands between model steps.** Turn 35's model request was already in flight
+  (04:33:40.61 to 04:33:44.51) and ended with text and no tool call, so there was no next step to
+  interject into. `SessionQueueSnapshot.steeringMessages` describes these as *"Immediate steering
+  messages waiting for an active turn"*. `MessageOptions.responseSchema` says immediate steering
+  is *"promoted to a follow-up after the model request finishes"*.
+- **Contrast:** seq 754's wake at 04:26:48.564 arrived while tool calls kept turn 4 going, and it
+  steered in (`delivery: "steering"`, line 77931).
+
+### Why it waited until 04:51:55 and missed the 04:40:23 turn (inference, same basis)
+
+- **The queued lane waits for background work.** The SDK exposes a native "deferred-idle drain"
+  keyed on `activeBackgroundWork` (`QueueBeginDeferredIdleDrainRequest`,
+  `QueueFinishDeferredIdleDrainResult.action`: `none | processQueue | emitSessionIdle`). The
+  background subagent ran until 04:40:23.
+- **The 04:40:23 turn wasn't a drain.** It was the CLI consuming its own `agent_idle`
+  `system.notification`, and it stayed in the same send (`originatingMessageId` 6d6421e6). The
+  queued lane drained only when that send closed at 04:51:55.47.
+- **System wakes are invisible in `pendingItems`.** Toy Box sends wakes with `source: "system"`,
+  and `queue.pendingItems` *"omits internal system items"*. Only the internal `queue.snapshot`
+  shows them.
+
+### Why routine run 2 and seq 756 queued too
+
+- **They arrived with no live main turn and a non-empty queued lane**, so they went in behind run
+  1. The native queue doesn't coalesce, so the bridge's retry became a duplicate turn at 04:54:47.
+- **An empty lane behaves differently.** Earlier immediate wakes during the same subagent
+  (04:15:37, 04:22:19, 04:25:11, 04:26:09) each started a turn at once with `delivery: "idle"`.
+- **The trigger** is one wake that lands during a turn's last model request while a background
+  agent is still running. Every later wake queues behind it until that background work and the
+  CLI's follow-up turn finish.
+
+### What presence and the API showed
+
+- **The session went to `background`.** At 04:33:44.5 root `assistant.idle` projected
+  `{status: "background"}` (`copilot/projector.ts:196-197`), and Toy Box set the session to
+  `background` (`workspace/server/state/index.ts:68-77`, which emits `session.background`).
+- **Channel presence counts only `running` as working** (`channels/server/stream.ts:161`,
+  `server/tools.ts:473`, `server/api.ts:41`). The lead's waiting status, set at 04:33:40.6, was
+  cleared 3 s later by run 1 (`wakeChannelAgent`). So from 04:33:44.5 to 04:40:23, channel presence
+  and the catalog's `working` list both showed the lead as **idle**.
+- **`GET /api/workspace` (SSE) is the only loopback signal of the real state.** It emits
+  `session.running`, `session.background` and `session.idle` with the lead's session ID
+  (`workspace/model/events.ts:29`). It's at most once, with no replay. No public API exposes either
+  queue.
+
+### Fixes
+
+- **Toy Box (smallest, needs a spike).** In `connectCopilotSession`, track sent messages whose
+  `user.message` echo hasn't arrived (`pendingInputs` already maps messageId to clientId). On a root
+  `assistant.idle`, withdraw each with
+  `native.rpc.queue.withdrawMessage({ messageId, expectedPrompt })`. If `removed`, send it again.
+  With no live turn and an empty lane, that starts a turn at once, like the `idle` deliveries above.
+  - Unverified: whether `withdrawMessage` accepts `source: "system"` messages.
+  - Report the CLI behavior upstream either way. A promoted steering message shouldn't wait on
+    background work when the main loop is idle.
+- **Bridge, meanwhile.**
+  - A 2xx run means "the CLI has it", not "it landed". Its retries are duplicates, not recoveries.
+  - Follow `/api/workspace` for the lead's session.
+  - Retry only when the lead's session reaches `session.idle` (or `unread`) after the wake with no
+    inbox call since. That's the point where a wake is truly lost.
+  - Never retry while the session is `running` or `background`. Re-subscribe and treat the state as
+    unknown after reconnecting.
+- **Lead behavior.** Don't finish a turn while a background subagent is still running, or use a
+  synchronous task or a member instead. Otherwise every wake can wait out that subagent.
