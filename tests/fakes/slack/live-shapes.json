@@ -3,7 +3,7 @@
     "date": "2026-10-28",
     "source": "Dedicated free test workspace and test app, Socket Mode and Web API",
     "projection": "Observed protocol and reconciliation keys and types only. Rendering, bot profiles and user-controlled payload details are omitted.",
-    "files": "historyFile, fileInfo and share come from a PNG shared in the same workspace on 2026-10-30"
+    "files": "historyFile, fileInfo and share come from a PNG shared in the same workspace on 2026-10-30, and file_deleted from a PNG the test app uploaded, showed and deleted there on 2026-10-31"
   },
   "hello": {
     "type": "string",

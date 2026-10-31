@@ -5,6 +5,8 @@ import { z } from "zod";
 import { startFakeSlack } from "./index";
 import shapes from "./live-shapes.json";
 
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
 function atPath(value: unknown, path: string): unknown {
   for (const field of path.split("."))
     value = z.record(z.string(), z.unknown()).parse(value)[field];
@@ -114,12 +116,24 @@ test("a shared file matches its captured live shapes in history and files.info",
   onTestFinished(() => fake.stop());
   const web = new WebClient(fake.botToken, clientOptions(fake.url));
   const channel = fake.addChannel({ name: "general" });
-  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  const file = fake.addFile(png, { user: "UALICE", name: "screenshot.png", mimetype: "image/png" });
+  const file = fake.addFile(PNG, { user: "UALICE", name: "screenshot.png", mimetype: "image/png" });
   fake.setMessage(channel, { ts: "1.000001", user: "UALICE", files: [file] });
   const history = await web.conversations.history({ channel });
   expectShape(history.messages?.[0]?.files?.[0], shapes.historyFile);
   const info = await web.files.info({ file: file.id });
   expectShape(info, shapes.fileInfo);
   expectShape(info.file?.shares?.public?.[channel]?.[0], shapes.share);
+});
+
+test("a file the bot deleted answers file_deleted to another delete and to files.info, as captured", async () => {
+  const fake = startFakeSlack();
+  onTestFinished(() => fake.stop());
+  const web = new WebClient(fake.botToken, clientOptions(fake.url));
+  const user = fake.identity.botUserId;
+  const file = fake.addFile(PNG, { user, name: "image-1.png", mimetype: "image/png" });
+  await web.files.delete({ file: file.id });
+  // A delete the bridge owes for a file Slack already deleted ends on this answer.
+  const deleted = { data: { error: "file_deleted" } };
+  await expect(web.files.delete({ file: file.id })).rejects.toMatchObject(deleted);
+  await expect(web.files.info({ file: file.id })).rejects.toMatchObject(deleted);
 });
