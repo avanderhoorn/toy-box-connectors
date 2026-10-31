@@ -1,3 +1,8 @@
+## 📅 v0.5.1 (10/31/26)
+
+- A command refuses an option or argument it doesn't take, and names it, rather than running without it. Before, `post --threads r14` and `post r14` posted at the top of the channel, and `link --request all` linked in mention mode
+- Updating is all it takes, without restarting `serve`
+
 ## 📅 v0.5.0 (10/31/26)
 
 - The lead can show up to three PNG images below a reply, release note or post, such as a chart it made, each with alt text that says what it shows. The bridge uploads only each image's pixels, keeps no copy, and deletes an image from Slack when its post doesn't go out

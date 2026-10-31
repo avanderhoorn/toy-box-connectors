@@ -1,6 +1,6 @@
 {
   "name": "@avanderhoorn/toy-box-slack",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Let a Toy Box channel's lead watch and answer a Slack channel",
   "repository": {
     "type": "git",
