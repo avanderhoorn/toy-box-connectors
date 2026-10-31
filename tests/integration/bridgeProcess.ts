@@ -146,18 +146,19 @@ export function runAtTerminal(home: string, args: string[], env: Record<string, 
 
 /**
  * Runs `toy-box-slack <args>` the way a lead does, with `env` and `PATH` as its whole environment,
- * and a home folder of its own unless `env` names one. It reads `stdin`, or nothing as in an agent's
- * shell. Resolves once it exits, with what it printed.
+ * and a home folder of its own unless `env` names one. It reads `stdin`, which is nothing as in an
+ * agent's shell unless given, and may be a stream that never ends. Resolves once it exits, with
+ * what it printed.
  */
 export async function runToyBoxSlack(
   args: string[],
   env: Record<string, string> = {},
-  stdin?: string,
+  stdin?: string | ReadableStream,
 ) {
   const child = Bun.spawn([...CLI, ...args], {
     cwd: REPOSITORY,
     env: { PATH: process.env.PATH, HOME: createTestFolder(), ...env },
-    stdin: stdin === undefined ? "ignore" : new Blob([stdin]),
+    stdin: typeof stdin === "string" ? new Blob([stdin]) : (stdin ?? "ignore"),
     stdout: "pipe",
     stderr: "pipe",
   });

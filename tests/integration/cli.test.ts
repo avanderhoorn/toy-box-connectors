@@ -98,37 +98,60 @@ test("reply sends only the options it was given, so a bridge of another release 
   expect(inputs).toEqual([{ request: "r1", text: "Fixed.\n" }]);
 });
 
-test("refuses an option the command doesn't take, before it reads a file or the bridge hears of it", async () => {
+test("refuses an option or argument the command doesn't take, before it reads a file or the bridge hears of it", async () => {
   const folder = createTestFolder();
   const inputs = answeringBridge(folder);
   const lead = { TOY_BOX_SLACK_HOME: folder, COPILOT_AGENT_SESSION_ID: "toybox-link" };
-
-  expect(await runToyBoxSlack(["post", "--threads", "r14"], lead, "Shipped.\n")).toEqual({
+  const refused = (name: string, taken: string) => ({
     exitCode: 1,
     stdout: "",
-    stderr:
-      "`post` didn't run. It doesn't take --threads. Run `toy-box-slack post --help` to see what it takes.\n",
+    stderr: `\`${name}\` didn't run. It doesn't take ${taken}. Run \`toy-box-slack ${name} --help\` to see what it takes.\n`,
   });
+
+  // The stdin stays open, so a refusal that waited for the text would hang.
+  expect(await runToyBoxSlack(["post", "--threads", "r14"], lead, new ReadableStream())).toEqual(
+    refused("post", "--threads"),
+  );
+  const image = join(folder, "chart.png");
   expect(
     await runToyBoxSlack(
-      ["reply", "r1", "--image", join(folder, "chart.png"), "--alt", "A chart", "--imgae", "x"],
+      ["reply", "r1", "--image", image, "--alt", "A chart", "--imgae", "x"],
       lead,
       "Here.\n",
     ),
-  ).toMatchObject({
-    stderr: `\`reply\` didn't run. It doesn't take --imgae. Run \`toy-box-slack reply --help\` to see what it takes.\n`,
-  });
+  ).toEqual(refused("reply", "--imgae"));
   // Each shows once however often it repeats, and a positional is no option, nor is a camelCase
   // spelling `--help` doesn't show.
   expect(
-    await runToyBoxSlack(["reply", "--request", "r1", "--imgae", "x", "--request", "r2"], lead),
-  ).toMatchObject({
-    stderr: `\`reply\` didn't run. It doesn't take --request or --imgae. Run \`toy-box-slack reply --help\` to see what it takes.\n`,
-  });
-  expect(await runToyBoxSlack(["link", "--slackChannel", "C1"], lead)).toMatchObject({
-    stderr: `\`link\` didn't run. It doesn't take --slackChannel. Run \`toy-box-slack link --help\` to see what it takes.\n`,
-  });
+    await runToyBoxSlack(
+      ["reply", "--request", "r1", "--imgae", "x", "--request", "r2", "-t"],
+      lead,
+    ),
+  ).toEqual(refused("reply", "--request, --imgae, or -t"));
+  expect(await runToyBoxSlack(["link", "--slackChannel", "C1"], lead)).toEqual(
+    refused("link", "--slackChannel"),
+  );
+  // An argument past the ones it takes is named, since it was meant for something else.
+  expect(await runToyBoxSlack(["post", "r14"], lead, "Shipped.\n")).toEqual(
+    refused("post", "`r14`"),
+  );
+  expect(await runToyBoxSlack(["retract", "o31", "o32", "o33"], lead)).toEqual(
+    refused("retract", "`o32` or `o33`"),
+  );
   expect(inputs).toEqual([]);
+});
+
+test("allow takes the options it has and every user left, as the owner at a terminal", async () => {
+  const folder = createTestFolder();
+  const inputs = answeringBridge(folder);
+
+  const answer = await runToyBoxSlack(
+    ["allow", "--channel", "toybox-link", "--json", "U0ALICE", "U0BOB"],
+    { TOY_BOX_SLACK_HOME: folder },
+  );
+
+  expect(answer.exitCode).toBe(0);
+  expect(inputs).toEqual([{ users: ["U0ALICE", "U0BOB"] }]);
 });
 
 test("reply refuses an --image it can't read or that's over 5 MiB, without calling the bridge", async () => {

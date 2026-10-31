@@ -118,12 +118,18 @@ function socketCommand(name: string, spec: CommandSpec): CommandDef {
         allowPositionals: true,
         tokens: true,
       });
-      // A positional is no option, and neither is a spelling `--help` doesn't show.
+      // A positional is no option, and neither is a spelling `--help` doesn't show. Options come
+      // first, since an argument beside one was likely meant as its value.
       const unknown = new Set(
         tokens.flatMap((token) =>
           token.kind === "option" && !Object.hasOwn(options, token.name) ? [token.rawName] : [],
         ),
       );
+      const last = spec.positionals?.at(-1);
+      const room = last && takesList(spec.input.shape[last]!) ? Infinity : spec.positionals?.length;
+      const extra = tokens
+        .flatMap((token) => (token.kind === "positional" ? [`\`${token.value}\``] : []))
+        .slice(room ?? 0);
       const input: Record<string, unknown> = Object.fromEntries(
         fields.flatMap(([field, schema]) => {
           const option = optionName(field);
@@ -136,8 +142,9 @@ function socketCommand(name: string, spec: CommandSpec): CommandDef {
           return [[field, [values[option]].flat().map((value) => (value === true ? "" : value))]];
         }),
       );
-      const problems = unknown.size
-        ? [`It doesn't take ${orList([...unknown])}.`]
+      const unwanted = unknown.size ? [...unknown] : extra;
+      const problems = unwanted.length
+        ? [`It doesn't take ${orList(unwanted)}.`]
         : await readPaths(spec, input);
       // A terminal isn't kept waiting for text, since only a lead may post.
       if (
