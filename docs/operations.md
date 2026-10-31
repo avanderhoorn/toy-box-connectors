@@ -15,7 +15,8 @@ The lead runs `toy-box-slack status`. At a terminal, add
 Status shows the allowlist by name and member ID, pending requests, wake
 failures and unconfirmed posts. It names each link's Slack and Toy Box channels.
 A Slack channel Slack can't name within two seconds goes by the name its link
-last stored, and a channel with no name to show goes by its ID. Use `--json` for structured output.
+last stored, and a channel with no name to show goes by its ID. Use `--json`
+for structured output.
 
 After reconnecting, a minute of throttled events or an unreadable delivery,
 the bridge catches up from channel history and recently active threads.
