@@ -11,7 +11,7 @@ import type { ChannelLink } from "./database";
 /** A link as the owner approves it. */
 type ApprovedLink = Pick<
   ChannelLink,
-  "toyBoxChannelId" | "slackChannelId" | "requestMode" | "observe" | "approved"
+  "toyBoxChannelId" | "slackChannelId" | "slackChannelName" | "requestMode" | "observe" | "approved"
 >;
 
 /** Makes the link active as the owner approved it, keeping the allowlist and the rest it had. */
@@ -26,6 +26,7 @@ export async function approveLink(
       id: crypto.randomUUID(),
       toybox_channel_id: link.toyBoxChannelId,
       slack_channel_id: link.slackChannelId,
+      slack_channel_name: link.slackChannelName,
       request_mode: link.requestMode,
       observe: link.observe,
       status: "active",
@@ -35,6 +36,7 @@ export async function approveLink(
       updated_at: now,
     })}
     ON CONFLICT (toybox_channel_id) DO UPDATE SET
+      slack_channel_name = excluded.slack_channel_name,
       request_mode = excluded.request_mode, observe = excluded.observe, status = 'active',
       status_reason = NULL, approved_audience = excluded.approved_audience,
       updated_at = excluded.updated_at

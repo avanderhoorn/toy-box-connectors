@@ -155,6 +155,24 @@ test("stops waiting for a name two seconds after asking, showing the channel by 
   expect((await shown).text).toContain("\n\n## #C-link and Toy Box channel ");
 });
 
+test("shows the channel by the name the link stored when Slack doesn't name it in time", async () => {
+  const { app, toyBox, channelId } = await startNamedLink();
+  await app.database.write(
+    (transaction) => transaction`UPDATE links SET slack_channel_name = 'stored-name'`,
+  );
+  const status = statusCommand({
+    nameApps: false,
+    toyBoxOrigin: new URL(toyBox.url),
+    nameTimeoutMs: 20,
+  });
+  const silent: BotClient = { ...app.bot, call: () => new Promise(() => {}) };
+
+  const { result, text } = await status([{ ...app, bot: silent }], { channelId, at: 1_000 });
+
+  expect((result as Status).links[0]).toMatchObject({ slackChannel: "#stored-name" });
+  expect(text).toContain("\n\n## #stored-name and Toy Box channel ");
+});
+
 test.each<[string, BotClient["call"]]>([
   ["never answers", () => new Promise(() => {})],
   ["sends what the bridge can't read", () => Promise.reject(new Error("No channel ID."))],

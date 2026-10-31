@@ -55,8 +55,10 @@ export type StatusCommandOptions = {
   timings?: WakeTimings;
 };
 
-/** A link's status before its channels are named. */
-type UnnamedLink = Omit<LinkStatus, "toyBoxChannel" | "slackChannel">;
+/** A link's status before its channels are named, with the Slack channel's last stored name. */
+type UnnamedLink = Omit<LinkStatus, "toyBoxChannel" | "slackChannel"> & {
+  slackChannelName: string | null;
+};
 
 /** An app's status before its links' channels are named. */
 type UnnamedStatus = { app: StatusSource; slack: SlackState; links: UnnamedLink[] };
@@ -67,7 +69,7 @@ type LinkStatusRead = Pick<CommandContext, "channelId" | "at"> &
 type StoredLink = Pick<
   LinkStatus,
   "toyBoxChannelId" | "slackChannelId" | "status" | "statusReason" | "requestMode" | "observe"
-> & { id: string };
+> & { id: string; slackChannelName: string | null };
 
 /** An unconfirmed post, with where it went so status can link to it. */
 type UnconfirmedRow = Omit<UnconfirmedPost, "permalink"> & {
@@ -102,7 +104,8 @@ export function statusCommand({
 
 /**
  * Each app's status with its links' channels named, asking for every name at once. Slack is asked
- * only while the app is connected, as its outbox posts only then.
+ * only while the app is connected, as its outbox posts only then. A Slack channel Slack doesn't
+ * name in time goes by the name the link stored, else by its ID.
  */
 async function nameChannels(
   read: readonly UnnamedStatus[],
@@ -119,25 +122,28 @@ async function nameChannels(
     return await Promise.all(
       read.map(async ({ app, slack, links }) => {
         const bot = slack.connection === "connected" ? app.bot : null;
-        const named = links.map(async ({ toyBoxChannelId, slackChannelId, ...link }) => {
-          const [toyBox, facts] = await Promise.all([
-            inTime(readToyBoxChannel(toyBoxOrigin, toyBoxChannelId)),
-            bot &&
-              inTime(
-                bot.call("conversations.info", (client) =>
-                  fetchChannelFacts(client, slackChannelId),
+        const named = links.map(
+          async ({ toyBoxChannelId, slackChannelId, slackChannelName, ...link }) => {
+            const [toyBox, facts] = await Promise.all([
+              inTime(readToyBoxChannel(toyBoxOrigin, toyBoxChannelId)),
+              bot &&
+                inTime(
+                  bot.call("conversations.info", (client) =>
+                    fetchChannelFacts(client, slackChannelId),
+                  ),
                 ),
-              ),
-          ]);
-          const slackName = facts?.kind === "ok" ? facts.result?.name : null;
-          return {
-            toyBoxChannelId,
-            toyBoxChannel: toyBoxChannelName(toyBox?.name, toyBoxChannelId),
-            slackChannelId,
-            slackChannel: channelName(slackName, slackChannelId),
-            ...link,
-          };
-        });
+            ]);
+            const slackName =
+              (facts?.kind === "ok" ? facts.result?.name : null) ?? slackChannelName;
+            return {
+              toyBoxChannelId,
+              toyBoxChannel: toyBoxChannelName(toyBox?.name, toyBoxChannelId),
+              slackChannelId,
+              slackChannel: channelName(slackName, slackChannelId),
+              ...link,
+            };
+          },
+        );
         return { app: app.name, slack, links: await Promise.all(named) };
       }),
     );
@@ -154,7 +160,7 @@ async function readLinkStatuses(
   const only = channelId === null ? null : (await readCallerLink(sql, channelId)).id;
   const stored = await sql<StoredLink[]>`
     SELECT id, toybox_channel_id AS toyBoxChannelId, slack_channel_id AS slackChannelId,
-      status, status_reason AS statusReason, request_mode AS requestMode, observe
+      slack_channel_name AS slackChannelName, status, status_reason AS statusReason, request_mode AS requestMode, observe
     FROM links WHERE ${only} IS NULL OR id = ${only}
     ORDER BY created_at
   `;

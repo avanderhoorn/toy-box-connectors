@@ -7,7 +7,7 @@
 // runs in its own `BEGIN IMMEDIATE` transaction.
 
 import { addMessageFiles, initializeActivitySchema } from "@activity/server/schema";
-import { initializeLinkSchema } from "@links/server/schema";
+import { addLinkChannelName, initializeLinkSchema } from "@links/server/schema";
 import { addOutboxImages, allowOutboxPosts, initializeOutboxSchema } from "@outbox/server/schema";
 import { initializeRequestSchema } from "@requests/server/schema";
 import { initializeSlackApiSchema } from "@slackapi/server/schema";
@@ -78,7 +78,10 @@ const schemaVersion = 5;
 const migrations: Record<number, (transaction: Bun.SQL) => Promise<void>> = {
   2: allowOutboxPosts,
   3: addMessageFiles,
-  4: addOutboxImages,
+  4: async (transaction) => {
+    await addOutboxImages(transaction);
+    await addLinkChannelName(transaction);
+  },
 };
 
 async function initializeSchema(sql: Bun.SQL, path: string): Promise<void> {

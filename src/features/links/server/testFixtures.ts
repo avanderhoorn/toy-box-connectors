@@ -18,6 +18,7 @@ export function createStoredLink(
   columns: {
     toybox_channel_id?: string;
     slack_channel_id?: string;
+    slack_channel_name?: string | null;
     status?: "active" | "paused" | "suspended";
     status_reason?: string | null;
     request_mode?: "mention" | "all";

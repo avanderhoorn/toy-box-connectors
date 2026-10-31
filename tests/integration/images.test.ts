@@ -58,7 +58,7 @@ test("reply, post and publish show the images the lead names below the text, in 
     ),
   ).toEqual({
     exitCode: 0,
-    stdout: `Queued o2 with 1 image in #C-link, mentioning ${ALICE}.\n`,
+    stdout: `Queued o2 with 1 image in #release-eng, mentioning ${ALICE}.\n`,
     stderr: "",
   });
   expect(
@@ -70,7 +70,7 @@ test("reply, post and publish show the images the lead names below the text, in 
   ).toEqual({
     exitCode: 0,
     stdout: expect.stringMatching(
-      /^Queued o3 with 1 image in #C-link for the run of "Release notes" scheduled .+\.\n$/,
+      /^Queued o3 with 1 image in #release-eng for the run of "Release notes" scheduled .+\.\n$/,
     ),
     stderr: "",
   });

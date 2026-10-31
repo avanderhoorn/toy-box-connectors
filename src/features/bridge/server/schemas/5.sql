@@ -30,7 +30,8 @@ CREATE TABLE links (
   approved_audience   TEXT NOT NULL CHECK (json_valid(approved_audience)),
   linked_at_ts        TEXT NOT NULL,
   created_at          INTEGER NOT NULL,
-  updated_at          INTEGER NOT NULL
+  updated_at          INTEGER NOT NULL,
+  slack_channel_name  TEXT
 );
 
 CREATE TABLE allowlist (

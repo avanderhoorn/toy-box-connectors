@@ -22,6 +22,7 @@ import { suspensions } from "@links/model/status";
 import {
   allowPerson,
   denyPeople,
+  nameLinkChannel,
   readChannelLink,
   readToyBoxLink,
   type ChannelLink,
@@ -37,7 +38,7 @@ import { fetchChannelFacts } from "@slackapi/server/channels";
 import { readInstallation } from "@slackapi/server/installation";
 import { fetchSlackPerson, readPersonIds, writeSlackPerson } from "@slackapi/server/users";
 import { readToyBoxChannel } from "@toybox/server/api";
-import { callerChannel, readCallerLink, type CallerLink } from "./link";
+import { callerChannel, linkChannelName, readCallerLink, type CallerLink } from "./link";
 import type { CommandContext, CommandHandler } from "./serve";
 
 export type SetupCommandOptions = {
@@ -114,7 +115,8 @@ export function allowCommand(options: SetupCommandOptions): CommandHandler<"allo
       if (problem) throw new CommandRefusedError(admissionRefusal(shown(person, userId), problem));
       if (person) people.set(person.id, person);
     }
-    // The channel's name only labels the answer, which goes by its ID when Slack doesn't say.
+    // The channel's name only labels the answer, which goes by the name it last had, or its ID,
+    // when Slack doesn't say.
     const facts = await slack.call("conversations.info", (client) =>
       fetchChannelFacts(client, slackChannelId),
     );
@@ -128,10 +130,14 @@ export function allowCommand(options: SetupCommandOptions): CommandHandler<"allo
       }
       // Unless the link moved to another channel while Slack was asked.
       const named = link.slackChannelId === slackChannelId ? name : null;
+      if (named) await nameLinkChannel(transaction, link.id, named, at);
       const allowed = [...people.values()].map((person) => shown(person, person.id));
       return {
         result: { added: added.map((person) => person.id) },
-        text: presentAllowed(allowed, channelName(named, link.slackChannelId)),
+        text: presentAllowed(
+          allowed,
+          linkChannelName({ ...link, slackChannelName: named ?? link.slackChannelName }),
+        ),
       };
     });
   };
@@ -194,7 +200,7 @@ async function linkChannel(
     refuseMoved(link);
     if (link && link.slackChannelId !== slackChannelId) {
       throw new CommandRefusedError(
-        `This Toy Box channel is linked to ${channelName(null, link.slackChannelId)}. Run \`toy-box-slack unlink\` before you link it to another channel.`,
+        `This Toy Box channel is linked to ${linkChannelName(link)}. Run \`toy-box-slack unlink\` before you link it to another channel.`,
       );
     }
     if (!link && (await readChannelLink(transaction, slackChannelId))) {
@@ -208,7 +214,12 @@ async function linkChannel(
     const observe = wanted.observe ?? link?.observe ?? "requesters";
     const settings = { requestMode, observe };
     const held = link ? await dropHeld(transaction, link, approved, channel, at) : null;
-    await approveLink(transaction, { toyBoxChannelId, slackChannelId, ...settings, approved }, at);
+    const slackChannelName = facts?.name ?? null;
+    await approveLink(
+      transaction,
+      { toyBoxChannelId, slackChannelId, slackChannelName, ...settings, approved },
+      at,
+    );
     const linked = presentLink(toyBox, channel, approved, settings, app);
     return {
       result: {
@@ -254,7 +265,7 @@ async function dropHeld(
 function refuseMoved(link: ChannelLink | null): void {
   if (link?.statusReason !== "channel_id_changed") return;
   const { because, fix } = suspensions.channel_id_changed;
-  const channel = channelName(null, link.slackChannelId);
+  const channel = linkChannelName(link);
   throw new CommandRefusedError(`The link to ${channel} is suspended ${because}. ${fix}`);
 }
 

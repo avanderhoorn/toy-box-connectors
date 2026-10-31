@@ -9,6 +9,8 @@ export type ChannelLink = {
   id: string;
   toyBoxChannelId: string;
   slackChannelId: string;
+  /** The channel's name as Slack last described it, or null before it has. */
+  slackChannelName: string | null;
   status: "active" | "paused" | "suspended";
   /** Why the bridge suspended the link, while it's suspended. */
   statusReason: SuspendReason | null;
@@ -37,8 +39,8 @@ async function readLink(
   channelId: string,
 ): Promise<ChannelLink | null> {
   const [link] = await sql<(Omit<ChannelLink, "approved" | "allowlist"> & { approved: string })[]>`
-    SELECT id, toybox_channel_id AS toyBoxChannelId, slack_channel_id AS slackChannelId, status,
-      status_reason AS statusReason, request_mode AS requestMode, observe,
+    SELECT id, toybox_channel_id AS toyBoxChannelId, slack_channel_id AS slackChannelId,
+      slack_channel_name AS slackChannelName, status, status_reason AS statusReason, request_mode AS requestMode, observe,
       linked_at_ts AS linkedAtTs, approved_audience AS approved
     FROM links WHERE ${sql(column)} = ${channelId}
   `;
@@ -51,6 +53,19 @@ async function readLink(
     approved: JSON.parse(link.approved) as Audience,
     allowlist: new Set(allowed.map((entry) => entry.user_id)),
   };
+}
+
+/** Records the name Slack now gives the link's channel. */
+export async function nameLinkChannel(
+  transaction: Bun.SQL,
+  linkId: string,
+  name: string,
+  now: number,
+): Promise<void> {
+  await transaction`
+    UPDATE links SET slack_channel_name = ${name}, updated_at = ${now}
+    WHERE id = ${linkId} AND slack_channel_name IS NOT ${name}
+  `;
 }
 
 /** Lets the person `userId` make the link's lead act. */

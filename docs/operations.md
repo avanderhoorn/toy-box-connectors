@@ -14,7 +14,8 @@ The lead runs `toy-box-slack status`. At a terminal, add
 `--channel <toybox-channel-id>` to inspect one link, or omit it to list links.
 Status shows the allowlist by name and member ID, pending requests, wake
 failures and unconfirmed posts. It names each link's Slack and Toy Box channels,
-or shows a channel by its ID when Slack or Toy Box can't name it within two
+or shows a Slack channel by the name the link last stored, and a channel with
+no name to show by its ID, when Slack or Toy Box can't name it within two
 seconds. Use `--json` for structured output.
 
 After reconnecting, a minute of throttled events or an unreadable delivery,

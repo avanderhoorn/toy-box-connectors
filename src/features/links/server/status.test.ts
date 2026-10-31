@@ -9,12 +9,23 @@ test("approving a link again makes it active with the new audience and settings"
   const database = await openTestDatabase();
   await createStoredLink(database, "link", { status: "suspended", status_reason: "bot_removed" });
   const approved = { ...privateAudience(), kind: "public" } as const;
-  const link = { toyBoxChannelId: "toybox-link", slackChannelId: "C-link", approved };
+  const link = {
+    toyBoxChannelId: "toybox-link",
+    slackChannelId: "C-link",
+    slackChannelName: "toy-box",
+    approved,
+  };
   const settings = { requestMode: "all", observe: "channel" } as const;
   await database.write((transaction) => approveLink(transaction, { ...link, ...settings }, 60_000));
 
   const stored = await database.read((sql) => readChannelLink(sql, "C-link"));
-  expect(stored).toMatchObject({ id: "link", status: "active", ...settings, approved });
+  expect(stored).toMatchObject({
+    id: "link",
+    slackChannelName: "toy-box",
+    status: "active",
+    ...settings,
+    approved,
+  });
 });
 
 test("a link whose Slack channel has a new ID stays suspended for that until unlink", async () => {

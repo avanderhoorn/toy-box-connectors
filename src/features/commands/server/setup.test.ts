@@ -141,12 +141,12 @@ test("names the app it runs in, once the bridge hosts several, when that app isn
 
 /** Link commands that reach Slack and a Toy Box with one channel the stored link doesn't name. */
 async function linking() {
-  const { database, bot } = await createOutboxWorld();
+  const { database, slack, bot } = await createOutboxWorld();
   const toyBox = startFakeToyBox();
   onTestFinished(() => toyBox.stop());
   const channelId = toyBox.addChannel();
   const options: SetupCommandOptions = { database, bot, toyBoxOrigin: new URL(toyBox.url) };
-  return { database, channelId, options };
+  return { database, slack, channelId, options };
 }
 
 /** Allow for the stored link, reaching a Slack where Ada and Bo are full members. */
@@ -166,7 +166,7 @@ async function allowing() {
     });
   }
   const allow = allowCommand({ ...offline(database), bot });
-  return { slack, allow: (...users: string[]) => allow({ users }, OWNER) };
+  return { database, slack, allow: (...users: string[]) => allow({ users }, OWNER) };
 }
 
 test("allow names whom it allowed, and the channel as Slack names it", async () => {
@@ -190,6 +190,18 @@ test("allow goes ahead when Slack doesn't say the channel's name, naming the cha
     result: { added: ["U-ada"] },
     text: "Ada (U-ada) can ask the lead to act from #C-link now.",
   });
+});
+
+test("allow keeps the channel's name, and names it by the one it kept when Slack doesn't say", async () => {
+  const { database, slack, allow } = await allowing();
+  const stored = () => database.read((sql) => sql`SELECT slack_channel_name AS name FROM links`);
+
+  await allow("U-ada");
+  expect(await stored()).toEqual([{ name: "fake-channel" }]);
+
+  slack.addChannel({ id: "C-link", name: "renamed" });
+  slack.failNext("conversations.info", { error: "internal_error" });
+  expect((await allow("U-bo")).text).toContain("from #fake-channel now");
 });
 
 test("a Slack channel linked to another Toy Box channel is refused, saying another app can link it", async () => {
@@ -332,6 +344,31 @@ test("resume fails the post a suspended link held once Slack shows its channel a
     "The link was suspended after the lead wrote o3, its post at the top of the channel, so it won't post. Ask the lead again if you still want it.",
   );
   expect(await read(post.id)).toMatchObject({ state: "failed", error: "link_stopped" });
+});
+
+test("link stores the channel's name as Slack gives it", async () => {
+  const { database, link } = await resuming();
+
+  await link("mention");
+
+  expect(await database.read((sql) => sql`SELECT slack_channel_name AS name FROM links`)).toEqual([
+    { name: "fake-channel" },
+  ]);
+});
+
+test("link names the channel its Toy Box channel is already linked to by the name it stored", async () => {
+  const { database, slack, channelId, options } = await linking();
+  await database.write(
+    (transaction) =>
+      transaction`UPDATE links SET toybox_channel_id = ${channelId}, slack_channel_name = 'stored-name'`,
+  );
+  slack.addChannel({ id: "C-other", is_private: true, shared_team_ids: ["T-home"] });
+
+  const answer = linkCommand(options)({ slackChannel: "C-other" }, { channelId, at: 1_000 });
+
+  expect(await refusal(answer)).toBe(
+    "This Toy Box channel is linked to #stored-name. Run `toy-box-slack unlink` before you link it to another channel.",
+  );
 });
 
 test("link leaves what an active link holds queued as it changes its settings, posts too", async () => {

@@ -112,6 +112,18 @@ test.each([
   expect(world.slack.calls.some((call) => call.method === "chat.postMessage")).toBe(false);
 });
 
+test("a post's send-time read renames the link's channel when Slack has", async () => {
+  const world = await createOutboxWorld();
+  const item = await world.queue();
+  world.slack.addChannel({ id: "C-link", name: "renamed" });
+
+  expect((await world.post(item.id)).kind).toBe("settled");
+
+  expect(
+    await world.database.read((sql) => sql`SELECT slack_channel_name AS name FROM links`),
+  ).toEqual([{ name: "renamed" }]);
+});
+
 test("a post goes out at the top of the channel, or in the thread its request or post names", async () => {
   const world = await createOutboxWorld();
   // r2 opened with a follow-up in a thread, so a post in its thread goes under the thread's root.

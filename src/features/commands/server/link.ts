@@ -11,6 +11,13 @@ export type CallerLink = ChannelLink & {
 /** What a refusal over a request suggests next. */
 export const SEE_INBOX = "Run `toy-box-slack inbox` to see what waits on you.";
 
+/** The link's Slack channel as #name, or by its ID until Slack has described it. */
+export function linkChannelName(
+  link: Pick<ChannelLink, "slackChannelName" | "slackChannelId">,
+): string {
+  return channelName(link.slackChannelName, link.slackChannelId);
+}
+
 /** The caller's Toy Box channel, refusing a terminal that didn't name one. */
 export function callerChannel(channelId: string | null): string {
   if (channelId === null) {
@@ -25,7 +32,7 @@ export async function readCallerLink(sql: Bun.SQL, channelId: string | null): Pr
   if (!link) {
     throw new CommandRefusedError(`Toy Box channel ${channelId} isn't linked to Slack.`);
   }
-  return { ...link, channel: channelName(null, link.slackChannelId) };
+  return { ...link, channel: linkChannelName(link) };
 }
 
 /**

@@ -60,6 +60,21 @@ test("shows changed requests first, up to its limit, and marks only those it sho
   expect(acknowledged).toEqual([[askedAt(3).sourceTs], [askedAt(2).sourceTs]]);
 });
 
+test.each([
+  ["names the Slack channel Slack last gave the link", "toy-box", "#toy-box"],
+  ["names a link made before it stored a name by the channel's ID", null, "#C-link"],
+])("%s", async (_, name, shown) => {
+  const database = await openTestDatabase();
+  await createStoredLink(database, "link", { slack_channel_name: name });
+  await createStoredRequest(database, askedAt(1));
+  const inbox = inboxCommand({ database, workspaceUrl: () => null });
+
+  const { result, text } = await inbox({ limit: 10 }, { ...LEAD, at: 1_000 });
+
+  expect(result).toMatchObject({ channel: shown });
+  expect(text).toContain(`1 request in ${shown} waits on you.`);
+});
+
 test("says why each request's reply didn't post", async () => {
   const database = await openTestDatabase();
   await createStoredLink(database);
