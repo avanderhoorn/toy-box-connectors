@@ -103,6 +103,9 @@ test("lists the posts Slack never confirmed, linking each to its request or thre
 
 test("names each link's channels as Slack and Toy Box call them, beside their IDs", async () => {
   const { app, toyBox, channelId } = await startNamedLink();
+  await app.database.write(
+    (transaction) => transaction`UPDATE links SET slack_channel_name = 'stale-name'`,
+  );
   const status = statusCommand({ nameApps: false, toyBoxOrigin: new URL(toyBox.url) });
 
   const { result, text } = await status([app], { channelId, at: 1_000 });

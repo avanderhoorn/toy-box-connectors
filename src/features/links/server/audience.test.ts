@@ -24,9 +24,11 @@ test("a fresh read that names the channel anew renames the link's channel, even 
   const database = await openTestDatabase();
   await createStoredInstallation(database);
   await createStoredLink(database, "link", { slack_channel_name: "old-name" });
+  await createStoredLink(database, "other", { slack_channel_name: "other-name" });
   const read = (facts: ChannelFacts | null) =>
     database.write((transaction) => judgeChannelLink(transaction, "C-link", facts, 60_000));
-  const stored = () => database.read((sql) => sql`SELECT slack_channel_name AS name FROM links`);
+  const stored = () =>
+    database.read((sql) => sql`SELECT slack_channel_name AS name FROM links WHERE id = 'link'`);
 
   await read(channelFacts({ name: "new-name" }));
   expect(await stored()).toEqual([{ name: "new-name" }]);
@@ -36,4 +38,10 @@ test("a fresh read that names the channel anew renames the link's channel, even 
 
   await read(channelFacts({ name: "wider-name", kind: "public" }));
   expect(await stored()).toEqual([{ name: "wider-name" }]);
+
+  expect(
+    await database.read(
+      (sql) => sql`SELECT slack_channel_name AS name FROM links WHERE id = 'other'`,
+    ),
+  ).toEqual([{ name: "other-name" }]);
 });

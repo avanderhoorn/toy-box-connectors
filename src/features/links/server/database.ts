@@ -40,7 +40,8 @@ async function readLink(
 ): Promise<ChannelLink | null> {
   const [link] = await sql<(Omit<ChannelLink, "approved" | "allowlist"> & { approved: string })[]>`
     SELECT id, toybox_channel_id AS toyBoxChannelId, slack_channel_id AS slackChannelId,
-      slack_channel_name AS slackChannelName, status, status_reason AS statusReason, request_mode AS requestMode, observe,
+      slack_channel_name AS slackChannelName, status, status_reason AS statusReason,
+      request_mode AS requestMode, observe,
       linked_at_ts AS linkedAtTs, approved_audience AS approved
     FROM links WHERE ${sql(column)} = ${channelId}
   `;

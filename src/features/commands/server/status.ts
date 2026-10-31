@@ -160,7 +160,8 @@ async function readLinkStatuses(
   const only = channelId === null ? null : (await readCallerLink(sql, channelId)).id;
   const stored = await sql<StoredLink[]>`
     SELECT id, toybox_channel_id AS toyBoxChannelId, slack_channel_id AS slackChannelId,
-      slack_channel_name AS slackChannelName, status, status_reason AS statusReason, request_mode AS requestMode, observe
+      slack_channel_name AS slackChannelName, status, status_reason AS statusReason,
+      request_mode AS requestMode, observe
     FROM links WHERE ${only} IS NULL OR id = ${only}
     ORDER BY created_at
   `;
