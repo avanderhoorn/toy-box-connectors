@@ -185,29 +185,6 @@ describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slac
   );
 
   scenario(
-    "Alice's ask for this week's build times chart gets it shown below the answer in her thread",
-    async () => {
-      const [askedTs] = timestamps(1, Date.now());
-      writeFileSync(join(toyBox.work, "build-times.png"), CHART);
-      const ask = `<@${BOT}> can you share this week's build times chart here? It's build-times.png in your folder.`;
-      await channel.turn(() => link.post(said(ALICE, askedTs, ask)));
-
-      await waitFor(() => expect(seenInSlack(link.slack, askedTs).replies).toBe(1));
-      const [answer] = link.slack
-        .getMessages("C0LINK")
-        .filter((message) => message.thread_ts === askedTs && message.user === BOT);
-      expect(answer.blocks).toMatchObject([{ type: "markdown" }, { type: "image" }]);
-      // The bridge uploads only an image's pixels, so Slack shows the chart rebuilt.
-      const [, image] = answer.blocks as [unknown, { slack_file: { id: string } }];
-      expect(await rebuildPng(CHART)).toEqual({
-        kind: "png",
-        png: { width: 480, height: 270, bytes: link.slack.getFileBytes(image.slack_file.id)! },
-      });
-    },
-    { turns: 1 },
-  );
-
-  scenario(
     "release notes post once in the channel when their routine runs twice",
     async () => {
       // The routine publishes only what git says shipped since its previous run.
@@ -278,6 +255,30 @@ describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slac
       );
 
       expect(notifiedBy(link.slack, await postedSince(link, since))).toEqual([ALICE]);
+    },
+    { turns: 1 },
+  );
+
+  scenario(
+    "the owner's ask to post this week's build times chart in Slack shows it below the post",
+    async () => {
+      writeFileSync(join(toyBox.work, "build-times.png"), CHART);
+      const since = Date.now();
+      await channel.turn(() =>
+        channel.say(
+          "Post this week's build times chart in Slack. It's build-times.png in your folder.",
+        ),
+      );
+
+      const slackTs = await postedSince(link, since);
+      const post = link.slack.getMessages("C0LINK").find((message) => message.ts === slackTs)!;
+      expect(post.blocks).toMatchObject([{ type: "markdown" }, { type: "image" }]);
+      // The bridge uploads only an image's pixels, so Slack shows the chart rebuilt.
+      const [, image] = post.blocks as [unknown, { slack_file: { id: string } }];
+      expect(await rebuildPng(CHART)).toEqual({
+        kind: "png",
+        png: { width: 480, height: 270, bytes: link.slack.getFileBytes(image.slack_file.id)! },
+      });
     },
     { turns: 1 },
   );
