@@ -110,20 +110,23 @@ test("refuses an option the command doesn't take, before it reads a file or the 
       "`post` didn't run. It doesn't take --threads. Run `toy-box-slack post --help` to see what it takes.\n",
   });
   expect(
-    await runToyBoxSlack(["reply", "r1", "--imgae", join(folder, "chart.png")], lead, "Here.\n"),
+    await runToyBoxSlack(
+      ["reply", "r1", "--image", join(folder, "chart.png"), "--alt", "A chart", "--imgae", "x"],
+      lead,
+      "Here.\n",
+    ),
   ).toMatchObject({
     stderr: `\`reply\` didn't run. It doesn't take --imgae. Run \`toy-box-slack reply --help\` to see what it takes.\n`,
   });
   // Each shows once however often it repeats, and a positional is no option, nor is a camelCase
   // spelling `--help` doesn't show.
   expect(
-    await runToyBoxSlack(
-      ["reply", "--request", "r1", "--slackChannel", "C1", "--request", "r2"],
-      lead,
-      "Hi.\n",
-    ),
+    await runToyBoxSlack(["reply", "--request", "r1", "--imgae", "x", "--request", "r2"], lead),
   ).toMatchObject({
-    stderr: `\`reply\` didn't run. It doesn't take --request or --slackChannel. Run \`toy-box-slack reply --help\` to see what it takes.\n`,
+    stderr: `\`reply\` didn't run. It doesn't take --request or --imgae. Run \`toy-box-slack reply --help\` to see what it takes.\n`,
+  });
+  expect(await runToyBoxSlack(["link", "--slackChannel", "C1"], lead)).toMatchObject({
+    stderr: `\`link\` didn't run. It doesn't take --slackChannel. Run \`toy-box-slack link --help\` to see what it takes.\n`,
   });
   expect(inputs).toEqual([]);
 });
