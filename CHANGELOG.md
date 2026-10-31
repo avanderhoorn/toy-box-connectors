@@ -1,3 +1,11 @@
+## 📅 v0.5.0 (10/31/26)
+
+- The lead can show up to three PNG images below a reply, release note or post, such as a chart it made, each with alt text that says what it shows. The bridge uploads only each image's pixels, keeps no copy, and deletes an image from Slack when its post doesn't go out
+- `retract` deletes a post's images along with it
+- Inbox and the lead's other commands name the linked Slack channel as #name rather than by its ID. A link from before the update gets its name the first time the lead posts there
+- For the lead to show images, add the `files:write` bot scope to each app in its **App Manifest** settings, with `files:read` if it doesn't have it yet, and reinstall it as Slack prompts. Until an app has both, a post with an image is refused with a reason that says which to add, and posts without images work as before
+- Restarting `serve` after updating is all the bridge needs, and leads keep the routines they have. Until you restart, the 0.4.0 bridge still runs the lead's commands, except those that show images. The first start upgrades bridge.db, which 0.4.0 can't open afterward
+
 ## 📅 v0.4.0 (10/30/26)
 
 - `toy-box-slack file` lets the lead read the text files and PNG or JPEG screenshots that people on the allowlist share, when an answer depends on them. Inbox and activity list each message's files, and say why the lead can't read one, such as a PDF
