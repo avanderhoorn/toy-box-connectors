@@ -4,7 +4,7 @@
 // holds what each shows. The bridge owes Slack a delete in `file_deletions` of each file it
 // uploaded that no message should show, until Slack confirms it gone. A command owes the deletes of
 // the files it uploads until it queues their item, an item that won't go out owes its files'
-// deletes, and retract owes the deletes it can't confirm once the post's message is gone.
+// deletes, and so does a retracted post.
 
 /** A delete the bridge owes Slack. */
 export type OwedDeletion = { fileId: string; attempts: number; createdAt: number };

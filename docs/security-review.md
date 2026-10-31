@@ -173,8 +173,8 @@ images the lead made for the answer is a prompt rule. Each image's alt text,
 which Slack shows above it, gets the same secret check as the text. The bridge
 sends an image's bytes only to `https://files.slack.com`, without the token,
 and the file stays private to the bot until the post shows it. The bridge owes
-Slack a delete of any file no post shows, such as one whose post was refused or
-failed, and retries it for 30 days. Retract deletes a post's images with it.
+Slack a delete of any file no post shows, such as one whose post was refused,
+failed or was retracted, and retries it for 30 days.
 
 A shared file is untrusted too. Its text reaches the lead fenced under a label
 naming who shared and uploaded it, with control characters replaced and mentions

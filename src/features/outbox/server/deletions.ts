@@ -5,13 +5,6 @@ import { log as bridgeLog, type Log } from "@/shared/log";
 import { nextDeletion } from "../model/delivery";
 import { deferDeletion, forgetDeletion, type OwedDeletion } from "./files";
 
-/** Asks Slack to delete a file the bot uploaded. */
-export async function deleteFile(bot: BotClient, fileId: string): Promise<Deletion> {
-  return judgeDeletion(
-    await bot.call("files.delete", (client) => client.files.delete({ file: fileId })),
-  );
-}
-
 export function createFileDeletion(
   database: BridgeDatabase,
   bot: BotClient,
@@ -19,7 +12,9 @@ export function createFileDeletion(
 ) {
   /** Tries a delete the bridge owes, and owes it again later while Slack keeps the file. */
   async function settle(owed: OwedDeletion): Promise<Deletion> {
-    const deletion = await deleteFile(bot, owed.fileId);
+    const deletion = judgeDeletion(
+      await bot.call("files.delete", (client) => client.files.delete({ file: owed.fileId })),
+    );
     const next =
       deletion.kind === "kept" ? nextDeletion(owed.createdAt, owed.attempts, now()) : null;
     if (deletion.kind === "kept" && next === null)

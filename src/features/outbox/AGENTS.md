@@ -92,9 +92,8 @@ title with only its size.
 The bridge owes Slack a delete in `file_deletions` of each file no message should show, from the
 moment Slack names it. A command's files are owed due five minutes later, long after it must have
 ended, and queueing clears them, so only a crash leaves them for the worker. Any failure before that
-owes them due at once, and so does an item that fails, since its post won't show them. The worker
-tries the deletes due each pass, stopping at the first Slack keeps, and waits longer each time, from
-a minute to an hour, for 30 days. Retract deletes a post's images after its message. While Slack
-keeps one, the item keeps its state, and that file and the rest are owed, so retracting again
-finishes. `outbox_files` goes with its item, while `file_deletions` names no link, so it outlives
-unlink.
+owes them due at once. So does an item that fails, since its post won't show them, and so does
+retract once Slack confirms the post's message is gone, in the write that marks it retracted. The
+worker tries the deletes due each pass, stopping at the first Slack keeps, and waits longer each
+time, from a minute to an hour, for 30 days. `outbox_files` goes with its item, while
+`file_deletions` names no link, so it outlives unlink.

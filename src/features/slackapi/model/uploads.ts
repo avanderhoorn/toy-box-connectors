@@ -17,8 +17,8 @@ export type UploadTicket = { kind: "ticket"; fileId: string; url: string } | Ref
 export type Completion = { kind: "completed" } | Refused;
 /** Whether Slack has processed an uploaded image, so a message can show it. */
 export type Processing = { kind: "ready" } | { kind: "processing" } | Refused;
-/** Whether Slack deleted a file. A reason follows "couldn't be deleted since". */
-export type Deletion = { kind: "deleted" } | { kind: "kept"; reason: string };
+/** Whether Slack deleted a file. */
+export type Deletion = { kind: "deleted" } | { kind: "kept" };
 type Refused = { kind: "refused"; reason: string };
 
 const ticketSchema = z.object({
@@ -59,9 +59,7 @@ export function judgeProcessing(call: SlackCall<unknown>): Processing {
 /** Whether files.delete's answer says the file is gone, as it is when Slack already deleted it. */
 export function judgeDeletion(call: SlackCall<unknown>): Deletion {
   const gone = call.kind === "error" && ["file_not_found", "file_deleted"].includes(call.error);
-  return call.kind === "ok" || gone
-    ? { kind: "deleted" }
-    : { kind: "kept", reason: failureReason(call, "files:write") };
+  return { kind: call.kind === "ok" || gone ? "deleted" : "kept" };
 }
 
 function failureReason(call: Exclude<SlackCall<unknown>, { kind: "ok" }>, scope: string): string {

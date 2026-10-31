@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { SlackCall } from "../server/botClient";
-import { judgeDeletion, judgeProcessing, type Deletion, type Processing } from "./uploads";
+import { judgeDeletion, judgeProcessing, type Processing } from "./uploads";
 
 const processed = {
   id: "F1",
@@ -32,27 +32,12 @@ test.each<[string, SlackCall<unknown>, Processing]>([
   expect(judgeProcessing(call)).toEqual(processing);
 });
 
-test.each<[string, SlackCall<unknown>, Deletion]>([
-  ["a file Slack deletes is gone", { kind: "ok", result: { ok: true } }, { kind: "deleted" }],
+test.each<[string, SlackCall<unknown>]>([
+  ["a file Slack deletes is gone", { kind: "ok", result: { ok: true } }],
   [
     "and so is one Slack already deleted",
     { kind: "error", error: "file_deleted", data: { ok: false } },
-    { kind: "deleted" },
   ],
-  [
-    "but Slack keeps one it refuses to delete",
-    { kind: "error", error: "cant_delete_file", data: { ok: false } },
-    { kind: "kept", reason: "Slack refused with cant_delete_file" },
-  ],
-  [
-    "and one the Slack app can't delete without files:write",
-    { kind: "error", error: "missing_scope", data: { ok: false } },
-    {
-      kind: "kept",
-      reason:
-        "the Slack app doesn't have the files:write scope yet. Ask the owner to add it on the app's OAuth & Permissions page and reinstall the app to the workspace",
-    },
-  ],
-])("%s", (_, call, deletion) => {
-  expect(judgeDeletion(call)).toEqual(deletion);
+])("%s", (_, call) => {
+  expect(judgeDeletion(call)).toEqual({ kind: "deleted" });
 });

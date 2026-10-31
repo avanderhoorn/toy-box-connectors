@@ -3,13 +3,12 @@ import type { BotClient } from "@slackapi/server/botClient";
 import { readInstallation } from "@slackapi/server/installation";
 import { deleteReceipt } from "../model/delivery";
 import { OutboxRefusedError, readOutboxItem } from "./database";
-import { deleteFile } from "./deletions";
-import { oweFileDeletes, readItemFiles } from "./files";
+import { oweItemFiles } from "./files";
 
 /**
- * Deletes a proved post's message, then each of its images, since Slack keeps a file after the
- * message that showed it is gone. Repeat deletion targets the same post, so retracting again is
- * safe, and it never frees its request or publication key.
+ * Deletes a proved post's message, then owes the deletes of its images, since Slack keeps a file
+ * after the message that showed it is gone. Repeat deletion targets the same post, so retracting
+ * again is safe, and it never frees its request or publication key.
  */
 export async function retractPost(
   database: BridgeDatabase,
@@ -45,21 +44,12 @@ export async function retractPost(
       `Deletion is unconfirmed (${problem}). Retrying this same post is safe.`,
     );
   }
-  const fileIds = await database.read((sql) => readItemFiles(sql, item.id));
-  for (const [index, fileId] of fileIds.entries()) {
-    const deletion = await deleteFile(bot, fileId);
-    if (deletion.kind === "deleted") continue;
-    // The bridge deletes what it owes even if the lead never retracts the post again.
-    await database.write((tx) => oweFileDeletes(tx, fileIds.slice(index), now, now));
-    throw new OutboxRefusedError(
-      `Its message is gone, but image ${index + 1} couldn't be deleted since ${deletion.reason}. Retrying this same post is safe.`,
-    );
-  }
   return database.write(async (tx) => {
     await tx`
       UPDATE outbox SET state = 'retracted', next_attempt_at = NULL, updated_at = ${now}
       WHERE id = ${item.id} AND slack_ts = ${item.slackTs} AND state IN ('sent', 'delivery_unknown')
     `;
+    await oweItemFiles(tx, item.id, now);
     return readOutboxItem(tx, item.id);
   });
 }

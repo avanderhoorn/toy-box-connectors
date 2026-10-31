@@ -145,14 +145,12 @@ once it goes out. A command starts no Slack work on its images after 30
 seconds, so it answers within the minute the CLI waits, and it refuses rather
 than post without an image Slack hasn't taken.
 
-A file no post shows, such as one whose post was refused or failed, or one a
-crash left before its post was queued, is owed a delete. The bridge keeps trying
-it, waiting longer each time up to an hour apart, for 30 days. Retract deletes a
-post's images after its message. When Slack keeps one, retract says so and owes
-the deletes it couldn't confirm, and running it again finishes. Unlink leaves
-the deletes the bridge owes, since they belong to no link, while uninstalling
-the app forgets them, so the files they name stay in Slack, though no message
-shows them.
+A file no post shows, such as one whose post was refused, failed or was
+retracted, or one a crash left before its post was queued, is owed a delete.
+The bridge keeps trying it, waiting longer each time up to an hour apart, for
+30 days. Unlink leaves the deletes the bridge owes, since they belong to no
+link, while uninstalling the app forgets them, so the files they name stay in
+Slack, though no message shows them.
 
 ## Deletion and limits
 
