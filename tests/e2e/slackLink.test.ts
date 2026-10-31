@@ -6,9 +6,10 @@
 // timeout outlasts the harness's deadlines, so a failure names what it waited for.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { rebuildPng } from "@files/model/png";
 import type { FakeSlack } from "../fakes/slack";
 import { ALICE, BOT, MALLORY, said, timestamps } from "../integration/connectedBridge";
 import { waitFor } from "../integration/waitFor";
@@ -39,6 +40,7 @@ const PURPOSE = `Answer the release team's questions from Slack, publish release
 const SCREENSHOT = readFileSync(join(import.meta.dir, "..", "fixtures", "build-error.png"));
 /** The runner the screenshot's error names, drawn in its pixels and written nowhere else. */
 const SCREENSHOT_RUNNER = "OSPREY-93";
+const CHART = readFileSync(join(import.meta.dir, "..", "fixtures", "build-times.png"));
 
 describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slack", () => {
   let toyBox: IsolatedToyBox;
@@ -178,6 +180,29 @@ describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slac
         .filter((message) => message.thread_ts === askedTs && message.user === BOT);
       expect(answer.text).toContain("PELICAN-48");
       expect(answer.text).toContain(SCREENSHOT_RUNNER);
+    },
+    { turns: 1 },
+  );
+
+  scenario(
+    "Alice's ask for this week's build times chart gets it shown below the answer in her thread",
+    async () => {
+      const [askedTs] = timestamps(1, Date.now());
+      writeFileSync(join(toyBox.work, "build-times.png"), CHART);
+      const ask = `<@${BOT}> can you share this week's build times chart here? It's build-times.png in your folder.`;
+      await channel.turn(() => link.post(said(ALICE, askedTs, ask)));
+
+      await waitFor(() => expect(seenInSlack(link.slack, askedTs).replies).toBe(1));
+      const [answer] = link.slack
+        .getMessages("C0LINK")
+        .filter((message) => message.thread_ts === askedTs && message.user === BOT);
+      expect(answer.blocks).toMatchObject([{ type: "markdown" }, { type: "image" }]);
+      // The bridge uploads only an image's pixels, so Slack shows the chart rebuilt.
+      const [, image] = answer.blocks as [unknown, { slack_file: { id: string } }];
+      expect(await rebuildPng(CHART)).toEqual({
+        kind: "png",
+        png: { width: 480, height: 270, bytes: link.slack.getFileBytes(image.slack_file.id)! },
+      });
     },
     { turns: 1 },
   );
