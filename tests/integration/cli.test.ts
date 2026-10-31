@@ -3,6 +3,7 @@
 import { expect, onTestFinished, test } from "bun:test";
 import { existsSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { commandSocketPath } from "@bridge/server/socket";
 import { createTestFolder } from "@bridge/server/testFixtures";
 import { MAX_IMAGE_BYTES } from "@commands/model";
 import { runToyBoxSlack, started } from "./bridgeProcess";
@@ -73,7 +74,7 @@ test("reply sends only the options it was given, so a bridge of another release 
   const folder = createTestFolder();
   const inputs: unknown[] = [];
   const bridge = Bun.serve({
-    unix: join(folder, "bridge.sock"),
+    unix: commandSocketPath(folder),
     async fetch(request) {
       inputs.push(((await request.json()) as { input: unknown }).input);
       return Response.json({ result: {}, text: "Queued." });
