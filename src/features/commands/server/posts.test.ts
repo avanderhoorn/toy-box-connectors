@@ -9,6 +9,7 @@ import { readDueDeletions } from "@outbox/server/files";
 import { createOutboxWorld, createStoredOutboxItem } from "@outbox/server/testFixtures";
 import type { Request } from "@requests/model/lifecycle";
 import { createStoredRequest } from "@requests/server/testFixtures";
+import type { BotClient } from "@slackapi/server/botClient";
 import { postCommand, publishCommand, replyCommand, retractCommand } from "./posts";
 import type { FakeSlack } from "../../../../tests/fakes/slack";
 import { refusal } from "./testFixtures";
@@ -319,6 +320,41 @@ test.each<{
     );
     expect(await world.database.read((sql) => sql`SELECT number FROM outbox`)).toEqual([]);
     expect(await world.owed()).toHaveLength(row.owed);
+  },
+);
+
+test.each([
+  { slow: "files.completeUploadExternal", refused: 2 },
+  { slow: "files.getUploadURLExternal", refused: 1 },
+  { slow: "upload", refused: 1 },
+])(
+  "reply starts nothing after $slow brings it to its 30-second deadline, refusing image $refused",
+  async ({ slow, refused }) => {
+    const world = await createOutboxWorld();
+    const steps: string[] = [];
+    /** Notes a step Slack finished, reaching the deadline at once if it's the slow one. */
+    const finished = <Result>(step: string, result: Result) => {
+      steps.push(step);
+      if (step === slow) world.advance(30_000);
+      return result;
+    };
+    const bot: BotClient = {
+      ...world.bot,
+      async call(method, run) {
+        return finished(method, await world.bot.call(method, run));
+      },
+      async upload(file) {
+        return finished("upload", await world.bot.upload(file));
+      },
+    };
+    const reply = replyCommand({ database: world.database, bot, timings: { now: world.now } });
+
+    const image = [blankPng(2, 2), blankPng(3, 3)];
+    const input = { request: 1, text: "It's **fixed**.", image, alt: ["Before", "After"] };
+    expect(await refusal(reply(input, { ...LEAD, at: world.now() }))).toBe(
+      `r1 wasn't answered. Image ${refused} couldn't be uploaded since Slack took too long, so try again shortly. Run \`toy-box-slack inbox\` to see what waits on you.`,
+    );
+    expect(steps.at(-1)).toBe(slow);
   },
 );
 
