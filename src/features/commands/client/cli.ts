@@ -118,15 +118,15 @@ function socketCommand(name: string, spec: CommandSpec): CommandDef {
         allowPositionals: true,
       });
       const input: Record<string, unknown> = Object.fromEntries(
-        fields.map(([field, schema]) => {
+        fields.flatMap(([field, schema]) => {
           const option = optionName(field);
           const position = spec.positionals?.indexOf(field) ?? -1;
-          if (!takesList(schema)) return [field, read[option]];
-          if (position >= 0) return [field, read._.slice(position)];
-          return [
-            field,
-            [values[option] ?? []].flat().map((value) => (value === true ? "" : value)),
-          ];
+          if (!takesList(schema)) return [[field, read[option]]];
+          if (position >= 0) return [[field, read._.slice(position)]];
+          // Left out like any option not given, so a bridge of another release isn't sent one it
+          // doesn't take.
+          if (values[option] === undefined) return [];
+          return [[field, [values[option]].flat().map((value) => (value === true ? "" : value))]];
         }),
       );
       const problems = await readPaths(spec, input);
@@ -157,6 +157,7 @@ function takesList(schema: z.ZodType): boolean {
 async function readPaths(spec: CommandSpec, input: Record<string, unknown>): Promise<string[]> {
   const problems: string[] = [];
   for (const [field, most] of Object.entries(spec.paths ?? {})) {
+    if (input[field] === undefined) continue;
     const contents: string[] = [];
     for (const path of input[field] as string[]) {
       const bytes = await readStart(path, most + 1);

@@ -7,7 +7,13 @@
 // before it are done.
 
 import type { z } from "zod";
-import { commands, inputProblem, type CommandName, type CommandSpec } from "@commands/model";
+import {
+  commands,
+  inputProblem,
+  optionName,
+  type CommandName,
+  type CommandSpec,
+} from "@commands/model";
 import { resolveCaller } from "@commands/model/callers";
 import {
   COMMANDS_PATH,
@@ -23,6 +29,19 @@ import type { StatusCommand, StatusSource } from "./status";
 
 const ANOTHER_RELEASE =
   "That happens when the CLI runs another release of toy-box-slack, which restarting the bridge fixes.";
+
+/**
+ * Says an option the command doesn't take came from another release, or null when no option was
+ * unknown. A renamed option also shows up as a missing one, so it names only the unknown.
+ */
+function unknownOptions(name: string, error: z.ZodError): string | null {
+  const unknown = error.issues.flatMap((issue) =>
+    issue.code === "unrecognized_keys" ? issue.keys.map((key) => `--${optionName(key)}`) : [],
+  );
+  if (unknown.length === 0) return null;
+  const shown = new Intl.ListFormat("en", { type: "disjunction" }).format(unknown);
+  return `The bridge's \`${name}\` doesn't take ${shown}, so it didn't run. ${ANOTHER_RELEASE}`;
+}
 
 const LINKING = new Set<CommandName>(["link", "resume"]);
 
@@ -103,7 +122,10 @@ export function serveCommands({
       if (resolved.kind === "refused") return answerError(403, resolved.message);
       const input = spec.input.safeParse(call.input);
       if (!input.success) {
-        return answerError(422, inputProblem(name, spec, call.input, input.error));
+        return answerError(
+          422,
+          unknownOptions(name, input.error) ?? inputProblem(name, spec, call.input, input.error),
+        );
       }
       const { channelId } = resolved;
       const route = routeCommand({

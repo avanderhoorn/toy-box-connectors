@@ -69,6 +69,28 @@ test("reply reads its text from stdin, and says to write it there when there's n
   });
 }, 15_000);
 
+test("reply sends only the options it was given, so a bridge of another release isn't sent one it doesn't take", async () => {
+  const folder = createTestFolder();
+  const inputs: unknown[] = [];
+  const bridge = Bun.serve({
+    unix: join(folder, "bridge.sock"),
+    async fetch(request) {
+      inputs.push(((await request.json()) as { input: unknown }).input);
+      return Response.json({ result: {}, text: "Queued." });
+    },
+  });
+  onTestFinished(() => bridge.stop(true));
+
+  const answer = await runToyBoxSlack(
+    ["reply", "r1"],
+    { TOY_BOX_SLACK_HOME: folder, COPILOT_AGENT_SESSION_ID: "toybox-link" },
+    "Fixed.\n",
+  );
+
+  expect(answer.exitCode).toBe(0);
+  expect(inputs).toEqual([{ request: "r1", text: "Fixed.\n" }]);
+});
+
 test("reply refuses an --image it can't read or that's over 5 MiB, without calling the bridge", async () => {
   const folder = createTestFolder();
   const missing = join(folder, "chart.png");

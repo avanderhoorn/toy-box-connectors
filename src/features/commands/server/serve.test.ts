@@ -109,6 +109,23 @@ test.each<[string, string, unknown, number, Answer]>([
     },
   ],
   [
+    "says an option it doesn't take came from another release, and names no other problem",
+    "reply",
+    { caller: LEAD, input: { request: "r1", body: "Hi", sticker: ["x"] } },
+    422,
+    {
+      error:
+        "The bridge's `reply` doesn't take --body or --sticker, so it didn't run. That happens when the CLI runs another release of toy-box-slack, which restarting the bridge fixes.",
+    },
+  ],
+  [
+    "names an unknown option as the CLI spells it",
+    "reply",
+    { caller: LEAD, input: { request: "r1", text: "Hi", imageUrl: "x" } },
+    422,
+    { error: expect.stringContaining("doesn't take --image-url, so it didn't run.") },
+  ],
+  [
     "refuses a call it can't read without running it",
     "status",
     { caller: { ...LEAD, role: "lead" }, input: {} },
