@@ -11,6 +11,7 @@ import {
   commands,
   inputProblem,
   optionName,
+  orList,
   type CommandName,
   type CommandSpec,
 } from "@commands/model";
@@ -39,8 +40,7 @@ function unknownOptions(name: string, error: z.ZodError): string | null {
     issue.code === "unrecognized_keys" ? issue.keys.map((key) => `--${optionName(key)}`) : [],
   );
   if (unknown.length === 0) return null;
-  const shown = new Intl.ListFormat("en", { type: "disjunction" }).format(unknown);
-  return `The bridge's \`${name}\` doesn't take ${shown}, so it didn't run. ${ANOTHER_RELEASE}`;
+  return `The bridge's \`${name}\` doesn't take ${orList(unknown)}, so it didn't run. ${ANOTHER_RELEASE}`;
 }
 
 const LINKING = new Set<CommandName>(["link", "resume"]);

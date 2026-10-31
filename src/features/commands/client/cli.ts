@@ -10,7 +10,7 @@ import { defineCommand, type ArgsDef, type CommandDef } from "citty";
 import { z } from "zod";
 import { resolveDataFolder } from "@bridge/server/dataFolder";
 import { commandSocketPath } from "@bridge/server/socket";
-import { commands, didntRun, optionName, type CommandSpec } from "@commands/model";
+import { commands, didntRun, optionName, orList, type CommandSpec } from "@commands/model";
 import { resolveSessionId } from "@commands/model/callers";
 import {
   COMMAND_TIMEOUT,
@@ -111,12 +111,19 @@ function socketCommand(name: string, spec: CommandSpec): CommandDef {
     async run({ args: read, rawArgs }) {
       // citty gives a positional only its first argument, and an option only its last, so a list
       // takes the arguments left, or reads every time its option repeats.
-      const { values } = parseArgs({
+      const { values, tokens } = parseArgs({
         args: rawArgs,
         options,
         strict: false,
         allowPositionals: true,
+        tokens: true,
       });
+      // A positional is no option, and neither is a spelling `--help` doesn't show.
+      const unknown = new Set(
+        tokens.flatMap((token) =>
+          token.kind === "option" && !Object.hasOwn(options, token.name) ? [token.rawName] : [],
+        ),
+      );
       const input: Record<string, unknown> = Object.fromEntries(
         fields.flatMap(([field, schema]) => {
           const option = optionName(field);
@@ -129,9 +136,16 @@ function socketCommand(name: string, spec: CommandSpec): CommandDef {
           return [[field, [values[option]].flat().map((value) => (value === true ? "" : value))]];
         }),
       );
-      const problems = await readPaths(spec, input);
+      const problems = unknown.size
+        ? [`It doesn't take ${orList([...unknown])}.`]
+        : await readPaths(spec, input);
       // A terminal isn't kept waiting for text, since only a lead may post.
-      if (Object.hasOwn(input, "text") && input.text === undefined && !process.stdin.isTTY) {
+      if (
+        !problems.length &&
+        Object.hasOwn(input, "text") &&
+        input.text === undefined &&
+        !process.stdin.isTTY
+      ) {
         input.text = await Bun.stdin.text();
       }
       const channelId = typeof read.channel === "string" ? read.channel : null;

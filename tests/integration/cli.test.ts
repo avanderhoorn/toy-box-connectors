@@ -70,8 +70,8 @@ test("reply reads its text from stdin, and says to write it there when there's n
   });
 }, 15_000);
 
-test("reply sends only the options it was given, so a bridge of another release isn't sent one it doesn't take", async () => {
-  const folder = createTestFolder();
+/** A bridge on `folder`'s socket that answers every call, and the inputs it was called with. */
+function answeringBridge(folder: string): unknown[] {
   const inputs: unknown[] = [];
   const bridge = Bun.serve({
     unix: commandSocketPath(folder),
@@ -81,6 +81,12 @@ test("reply sends only the options it was given, so a bridge of another release 
     },
   });
   onTestFinished(() => bridge.stop(true));
+  return inputs;
+}
+
+test("reply sends only the options it was given, so a bridge of another release isn't sent one it doesn't take", async () => {
+  const folder = createTestFolder();
+  const inputs = answeringBridge(folder);
 
   const answer = await runToyBoxSlack(
     ["reply", "r1"],
@@ -90,6 +96,36 @@ test("reply sends only the options it was given, so a bridge of another release 
 
   expect(answer.exitCode).toBe(0);
   expect(inputs).toEqual([{ request: "r1", text: "Fixed.\n" }]);
+});
+
+test("refuses an option the command doesn't take, before it reads a file or the bridge hears of it", async () => {
+  const folder = createTestFolder();
+  const inputs = answeringBridge(folder);
+  const lead = { TOY_BOX_SLACK_HOME: folder, COPILOT_AGENT_SESSION_ID: "toybox-link" };
+
+  expect(await runToyBoxSlack(["post", "--threads", "r14"], lead, "Shipped.\n")).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr:
+      "`post` didn't run. It doesn't take --threads. Run `toy-box-slack post --help` to see what it takes.\n",
+  });
+  expect(
+    await runToyBoxSlack(["reply", "r1", "--imgae", join(folder, "chart.png")], lead, "Here.\n"),
+  ).toMatchObject({
+    stderr: `\`reply\` didn't run. It doesn't take --imgae. Run \`toy-box-slack reply --help\` to see what it takes.\n`,
+  });
+  // Each shows once however often it repeats, and a positional is no option, nor is a camelCase
+  // spelling `--help` doesn't show.
+  expect(
+    await runToyBoxSlack(
+      ["reply", "--request", "r1", "--slackChannel", "C1", "--request", "r2"],
+      lead,
+      "Hi.\n",
+    ),
+  ).toMatchObject({
+    stderr: `\`reply\` didn't run. It doesn't take --request or --slackChannel. Run \`toy-box-slack reply --help\` to see what it takes.\n`,
+  });
+  expect(inputs).toEqual([]);
 });
 
 test("reply refuses an --image it can't read or that's over 5 MiB, without calling the bridge", async () => {

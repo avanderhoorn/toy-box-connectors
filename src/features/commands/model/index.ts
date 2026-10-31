@@ -302,6 +302,11 @@ export function optionName(field: string): string {
   return field.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 
+/** Names options, such as "--a, --b, or --c". */
+export function orList(options: readonly string[]): string {
+  return new Intl.ListFormat("en", { type: "disjunction" }).format(options);
+}
+
 /** What's wrong with `input` for `name`, naming each option or argument the way the CLI does. */
 export function inputProblem(
   name: string,
