@@ -186,9 +186,8 @@ Deleting or restoring an older database can also lose post reservations.
 Check Slack before resuming publications after any state reset.
 
 Cleanup runs at startup and hourly. It removes messages whose latest posted
-or edited version is over 30 days old, including markers and tombstones, and
-every change record but each remaining message's latest. The files
-a message lists go with it. A finished request goes once none of its
+or edited version is over 30 days old, including markers and tombstones. The
+files a message lists go with it. A finished request goes once none of its
 messages remain, with the outbox items of its reply and the posts in
 its thread, so those can't be retracted after that, and a follow-up
 in its thread needs a new mention. A post forgets its text at the first

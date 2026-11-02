@@ -34,7 +34,7 @@ test("one pass forgets a month-old question with its request and reply, and who 
 
   expect(await countRows(database)).toMatchObject({
     messages: 0,
-    changes: 0,
+    ledger_seq: 0,
     requests: 0,
     request_messages: 0,
     users: 0,

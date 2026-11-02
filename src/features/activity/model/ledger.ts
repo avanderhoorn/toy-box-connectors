@@ -83,7 +83,7 @@ export type StoredMessage = { version: SlackTs; deleted: boolean; contentHash: s
 /** A version of a message to merge. `contentHash` is null when the ledger keeps only a marker. */
 export type IncomingMessage = { version: SlackTs; contentHash: string | null };
 
-/** How a merge changes the ledger. `change` is the change record it appends, if any. */
+/** How a merge changes the ledger. A merge with a `change` takes the ledger's next number. */
 export type MergeDecision =
   | { kind: "insert"; change: "new" | "deleted" }
   | { kind: "update"; change: "edited" | "deleted" | null }

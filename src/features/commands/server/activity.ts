@@ -31,14 +31,13 @@ export function activityCommand({
       // A message shows once, as its latest change left it. One the bridge keeps no text for never
       // shows, and mark-read passes it with the rest.
       const unread = await transaction<ChangedMessage[]>`
-        SELECT c.seq, m.ts, coalesce(m.thread_ts, m.ts) AS rootTs, m.user_id AS userId,
-          m.author_role AS role, m.edited_ts IS NOT NULL AS edited, m.text
-        FROM changes c
-        JOIN messages m ON m.channel_id = c.channel_id AND m.ts = c.ts AND m.updated_seq = c.seq
-        LEFT JOIN cursors r ON r.link_id = ${link.id}
-        WHERE c.channel_id = ${link.slackChannelId} AND c.seq > coalesce(r.through_seq, 0)
-          AND m.text IS NOT NULL
-        ORDER BY c.seq
+        SELECT updated_seq AS seq, ts, coalesce(thread_ts, ts) AS rootTs, user_id AS userId,
+          author_role AS role, edited_ts IS NOT NULL AS edited, text
+        FROM messages
+        WHERE channel_id = ${link.slackChannelId} AND text IS NOT NULL AND updated_seq > coalesce(
+          (SELECT through_seq FROM cursors WHERE link_id = ${link.id}), 0
+        )
+        ORDER BY updated_seq
       `;
       const page = unread.slice(0, limit);
       const through = page.at(-1)?.seq ?? null;

@@ -6,7 +6,11 @@
 // statement, reads included, goes through one serial queue, and every write
 // runs in its own `BEGIN IMMEDIATE` transaction.
 
-import { addMessageFiles, initializeActivitySchema } from "@activity/server/schema";
+import {
+  addMessageFiles,
+  initializeActivitySchema,
+  numberLedgerChanges,
+} from "@activity/server/schema";
 import { addLinkChannelName, initializeLinkSchema } from "@links/server/schema";
 import { addOutboxImages, allowOutboxPosts, initializeOutboxSchema } from "@outbox/server/schema";
 import { initializeRequestSchema } from "@requests/server/schema";
@@ -93,7 +97,10 @@ const bridgeSchema: Schema = {
       await addOutboxImages(transaction);
       await addLinkChannelName(transaction);
     },
-    5: forgetAuthFailure,
+    5: async (transaction) => {
+      await forgetAuthFailure(transaction);
+      await numberLedgerChanges(transaction);
+    },
   },
 };
 

@@ -18,7 +18,7 @@ import { compareTs, type SlackTs } from "@slackapi/model/ts";
 //
 // Live events and catch-up store messages through these functions, in the transaction that records
 // what they read, so replaying an envelope or a history page converges to the same rows. A merge
-// that changes what a message says appends a change, and the row keeps that change's seq.
+// that changes what a message says takes the ledger's next number, and the row keeps it.
 
 /** What storing one version of a message did. */
 export type StoredVersion = {
@@ -133,14 +133,14 @@ export async function readOwnTextBefore(
 
 /**
  * Forgets every message last changed longer ago than the ledger keeps one, a tombstone too, since
- * Slack never shows a deleted message again. Then it forgets every change no message points at,
- * which activity never reads, so the digest reads as it did.
+ * Slack never shows a deleted message again. Then it empties `ledger_seq`, whose numbers SQLite
+ * remembers without its rows.
  */
 export async function forgetOldActivity(transaction: Bun.SQL, now: number): Promise<void> {
   // SQLite casts a ts to its whole seconds.
   const before = Math.floor((now - RETENTION_MS) / 1000);
   await transaction`DELETE FROM messages WHERE CAST(version AS INTEGER) < ${before}`;
-  await transaction`DELETE FROM changes WHERE seq NOT IN (SELECT updated_seq FROM messages)`;
+  await transaction`DELETE FROM ledger_seq`;
 }
 
 async function readMessage(
@@ -167,9 +167,7 @@ async function writeMessage(
   columns: Record<string, string | number | null>,
 ): Promise<void> {
   const row = { ...columns };
-  if (decision.change !== null) {
-    row.updated_seq = await appendChange(transaction, channelId, ts, decision.change);
-  }
+  if (decision.change !== null) row.updated_seq = await takeSeq(transaction);
   if (decision.kind === "insert") {
     await transaction`INSERT INTO messages ${transaction({ channel_id: channelId, ts, ...row })}`;
   } else {
@@ -179,18 +177,11 @@ async function writeMessage(
   }
 }
 
-async function appendChange(
-  transaction: Bun.SQL,
-  channelId: string,
-  ts: SlackTs,
-  kind: NonNullable<Applied["change"]>,
-): Promise<number> {
-  const [change] = await transaction<{ seq: number }[]>`
-    INSERT INTO changes (channel_id, ts, kind)
-    VALUES (${channelId}, ${ts}, ${kind})
-    RETURNING seq
+async function takeSeq(transaction: Bun.SQL): Promise<number> {
+  const [taken] = await transaction<{ seq: number }[]>`
+    INSERT INTO ledger_seq DEFAULT VALUES RETURNING seq
   `;
-  return change!.seq;
+  return taken!.seq;
 }
 
 /**
@@ -290,11 +281,10 @@ function sharedFile({ id, ts, sharerId, fileId, whole, ...columns }: SharedFileR
   };
 }
 
-/** Deletes the messages, their files and the changes the ledger kept from a link's channel. */
+/** Deletes the messages the ledger kept from a link's channel, and their files. */
 export async function deleteLinkActivity(
   transaction: Bun.SQL,
   link: { slackChannelId: string },
 ): Promise<void> {
-  await transaction`DELETE FROM changes WHERE channel_id = ${link.slackChannelId}`;
   await transaction`DELETE FROM messages WHERE channel_id = ${link.slackChannelId}`;
 }

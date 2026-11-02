@@ -1,9 +1,11 @@
 import { describe, expect, onTestFinished, test } from "bun:test";
 import { basename, join } from "node:path";
+import { createStoredMessage } from "@activity/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { queuePublication } from "@outbox/server/database";
 import { createStoredOutboxItem } from "@outbox/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
+import { askMessage } from "@slackapi/model/testFixtures";
 import { readInstallation } from "@slackapi/server/installation";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { BridgeDatabase, initializeSchema, openBridgeDatabase, type Schema } from "./database";
@@ -114,6 +116,34 @@ describe("openBridgeDatabase", () => {
     const next = await database.write((transaction) => queuePublication(transaction, slot, 3));
     expect(next.number).toBe(4);
   });
+
+  test.each(recordedVersions.filter((version) => version < 6))(
+    "numbers a version %d ledger's next change after every cursor",
+    async (version) => {
+      const path = join(createTestFolder(), "bridge.db");
+      await createRecordedDatabase(path, version);
+      const made = new BridgeDatabase(new Bun.SQL({ adapter: "sqlite", filename: path }));
+      await createStoredLink(made);
+      await made.write(async (transaction) => {
+        for (const ts of ["1700000100.000100", "1700000200.000100", "1700000300.000100"]) {
+          await transaction`INSERT INTO changes (channel_id, ts, kind) VALUES ('C-link', ${ts}, 'new')`;
+        }
+        // The newest change is gone, but the lead read through it.
+        await transaction`DELETE FROM changes WHERE seq = 3`;
+        await transaction`
+          INSERT INTO cursors (link_id, through_seq, served_through_seq) VALUES ('link', 3, 3)
+        `;
+      });
+      await made.close();
+
+      const database = await open(path);
+      await createStoredMessage(database, askMessage("1700000400.000100"));
+
+      expect(await database.read((sql) => sql`SELECT updated_seq FROM messages`)).toEqual([
+        { updated_seq: 4 },
+      ]);
+    },
+  );
 
   test.each([
     ["auth_failed", "active"],

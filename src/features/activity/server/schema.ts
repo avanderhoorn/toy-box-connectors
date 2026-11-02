@@ -22,6 +22,8 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       CHECK (text IS NOT NULL OR (user_id IS NULL AND mentions_bot = 0)),
       CHECK (text IS NULL OR (deleted = 0 AND author_role <> 'other'))
     );
+    -- Activity reads a channel's messages after a cursor without rescanning the ledger.
+    CREATE INDEX messages_seq ON messages(channel_id, updated_seq);
 
     -- Each file a message shares while the ledger keeps its text, as Slack last described it, with
     -- no address or bytes. A partial file has only its ID, since only files.info has the rest. The
@@ -45,14 +47,9 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       ))
     );
 
-    -- AUTOINCREMENT never hands a seq out again, even once its change is gone, so every new change
-    -- comes after every cursor.
-    CREATE TABLE changes (
-      seq        INTEGER PRIMARY KEY AUTOINCREMENT,
-      channel_id TEXT NOT NULL,
-      ts         TEXT NOT NULL,
-      kind       TEXT NOT NULL CHECK (kind IN ('new', 'edited', 'deleted'))
-    );
+    -- Hands out the ledger's numbers. AUTOINCREMENT never hands one out again, even once its row is
+    -- gone, so every new change comes after every cursor.
+    CREATE TABLE ledger_seq (seq INTEGER PRIMARY KEY AUTOINCREMENT);
 
     -- mark-read never moves the digest cursor past what activity served.
     CREATE TABLE cursors (
@@ -71,6 +68,21 @@ export async function initializeActivitySchema(db: Bun.SQL): Promise<void> {
       starts_at INTEGER NOT NULL,
       ends_at   INTEGER NOT NULL
     );
+  `);
+}
+
+/**
+ * Takes version 5's ledger, which recorded each change's channel, message and kind, to version 6's,
+ * which only numbers them, and indexes messages by their numbers instead. Renaming the table
+ * carries its numbering with it.
+ */
+export async function numberLedgerChanges(db: Bun.SQL): Promise<void> {
+  await db.unsafe(`
+    ALTER TABLE changes RENAME TO ledger_seq;
+    ALTER TABLE ledger_seq DROP COLUMN channel_id;
+    ALTER TABLE ledger_seq DROP COLUMN ts;
+    ALTER TABLE ledger_seq DROP COLUMN kind;
+    CREATE INDEX messages_seq ON messages(channel_id, updated_seq);
   `);
 }
 

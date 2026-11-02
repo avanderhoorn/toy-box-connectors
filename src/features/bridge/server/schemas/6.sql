@@ -61,6 +61,8 @@ CREATE TABLE messages (
   CHECK (text IS NULL OR (deleted = 0 AND author_role <> 'other'))
 );
 
+CREATE INDEX messages_seq ON messages(channel_id, updated_seq);
+
 CREATE TABLE message_files (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   channel_id  TEXT NOT NULL,
@@ -80,12 +82,7 @@ CREATE TABLE message_files (
   ))
 );
 
-CREATE TABLE changes (
-  seq        INTEGER PRIMARY KEY AUTOINCREMENT,
-  channel_id TEXT NOT NULL,
-  ts         TEXT NOT NULL,
-  kind       TEXT NOT NULL CHECK (kind IN ('new', 'edited', 'deleted'))
-);
+CREATE TABLE ledger_seq (seq INTEGER PRIMARY KEY AUTOINCREMENT);
 
 CREATE TABLE cursors (
   link_id            TEXT PRIMARY KEY REFERENCES links(id) ON DELETE CASCADE,

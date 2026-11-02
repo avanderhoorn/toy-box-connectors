@@ -23,7 +23,6 @@ function storeDeleteOf(database: BridgeDatabase, message: SlackMessage) {
 function readLedger(database: BridgeDatabase) {
   return database.read(async (sql) => ({
     messages: await sql`SELECT ts, text, deleted, updated_seq FROM messages ORDER BY ts`,
-    changes: await sql`SELECT seq, ts, kind FROM changes ORDER BY seq`,
     files: await sql`SELECT id, ts, file_id, whole FROM message_files ORDER BY id`,
   }));
 }
@@ -42,11 +41,6 @@ test("a delete forgets a message's text and files for good, even when it arrives
     messages: [
       { ts: ask.ts, text: null, deleted: 1, updated_seq: 2 },
       { ts: early.ts, text: null, deleted: 1, updated_seq: 3 },
-    ],
-    changes: [
-      { seq: 1, ts: ask.ts, kind: "new" },
-      { seq: 2, ts: ask.ts, kind: "deleted" },
-      { seq: 3, ts: early.ts, kind: "deleted" },
     ],
     files: [],
   });
@@ -113,19 +107,18 @@ test("the ledger forgets a message and its files 30 days after its latest versio
   expect(ledger.files).toEqual([{ id: 2, ts: edited.ts, file_id: "F2", whole: 1 }]);
 });
 
-test("only the change a kept message points at stays, and no seq is handed out again", async () => {
+test("no number is handed out again, even once the ledger forgets every message", async () => {
   const database = await openLedger();
   const edited = editMessage(ask, "1700000300.000100", "<@U-bot> can you look at prod?");
   for (const message of [askMessage("1700000050.000100"), ask, edited]) {
     await createStoredMessage(database, message);
   }
-  const now = 1_700_000_200_000 + RETENTION_MS;
+  const now = 1_700_000_400_000 + RETENTION_MS;
   await database.write((transaction) => forgetOldActivity(transaction, now));
-  expect((await readLedger(database)).changes).toEqual([{ seq: 3, ts: ask.ts, kind: "edited" }]);
+  const next = askMessage("1705000000.000100");
+  await createStoredMessage(database, next);
 
-  await database.write((transaction) => forgetOldActivity(transaction, now + RETENTION_MS));
-  await createStoredMessage(database, askMessage("1705000000.000100"));
-  expect((await readLedger(database)).changes).toEqual([
-    { seq: 4, ts: "1705000000.000100", kind: "new" },
+  expect((await readLedger(database)).messages).toEqual([
+    { ts: next.ts, text: next.text, deleted: 0, updated_seq: 4 },
   ]);
 });

@@ -56,13 +56,13 @@ type and size, with why they can't be read.
 
 ## Copies and consent
 
-| Destination                           | Data and purpose                                                                                                                                                                                                                                                                                                                                |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `~/.toy-box-slack` by default         | `bridge.db` and its WAL hold retained message text and change records, requests, names and IDs, link settings, allowlists, wake runs and queued output, and each shared file's name, type, size and uploader, but never its contents. Credentials are separate. An image the lead reads waits ten minutes in `viewing` for the lead to view it. |
-| Local Toy Box                         | CLI output enters the lead's session transcript. Copilot keeps every image the lead views in its session history, as it keeps the Slack text and file text the lead reads. The lead may post digests or create workspace files. The bridge never posts into Toy Box.                                                                            |
-| Copilot and the chosen model provider | Whatever Slack text, shared files and tool output the lead reads can enter model requests, images included. Copilot-only does not specify processing region, retention or contractual training restrictions.                                                                                                                                    |
-| Slack                                 | Thread answers, posts and publications, with the images the lead shows in them, and eyes reactions. No progress notes or answer edits.                                                                                                                                                                                                          |
-| Host backups and diagnostics          | Snapshots, copied reports and support bundles can become additional copies. Approve access and retention before enabling them.                                                                                                                                                                                                                  |
+| Destination                           | Data and purpose                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `~/.toy-box-slack` by default         | `bridge.db` and its WAL hold retained message text, requests, names and IDs, link settings, allowlists, wake runs and queued output, and each shared file's name, type, size and uploader, but never its contents. Credentials are separate. An image the lead reads waits ten minutes in `viewing` for the lead to view it. |
+| Local Toy Box                         | CLI output enters the lead's session transcript. Copilot keeps every image the lead views in its session history, as it keeps the Slack text and file text the lead reads. The lead may post digests or create workspace files. The bridge never posts into Toy Box.                                                         |
+| Copilot and the chosen model provider | Whatever Slack text, shared files and tool output the lead reads can enter model requests, images included. Copilot-only does not specify processing region, retention or contractual training restrictions.                                                                                                                 |
+| Slack                                 | Thread answers, posts and publications, with the images the lead shows in them, and eyes reactions. No progress notes or answer edits.                                                                                                                                                                                       |
+| Host backups and diagnostics          | Snapshots, copied reports and support bundles can become additional copies. Approve access and retention before enabling them.                                                                                                                                                                                               |
 
 Name the actual Copilot account and plan, permitted models and providers,
 subprocessors, processing regions, retention and support access before approval.
@@ -193,8 +193,8 @@ timestamps, states and hashes that posting once and numbering need.
 - `messages` rows go once their latest posted or edited version is over 30
   days old, including markers and tombstones. A marker or tombstone keeps its
   author's role but not their user ID.
-- `changes` keeps only each remaining message's latest change, which holds
-  identifiers, a timestamp and a kind.
+- `ledger_seq` holds only the numbers the ledger hands out, and each cleanup
+  empties it.
 - `message_files` describes each file a message shares, by its Slack ID, name,
   type, mode, size and uploader, with no address or contents. A message's rows
   go with it, and as soon as the ledger keeps only a marker or tombstone of it.

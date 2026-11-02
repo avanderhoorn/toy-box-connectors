@@ -168,7 +168,8 @@ test("unlink deletes what the bridge kept for its link, and nothing of another l
 
   await unlinkCommand(offline(database))({}, { channelId: "toybox-gone", at: 1_000 });
 
-  expect(await countRows(database)).toEqual(before);
+  // The ledger's numbers hold nothing of the link's, so they wait for retention.
+  expect(await countRows(database)).toEqual({ ...before, ledger_seq: before.ledger_seq! + 1 });
 });
 
 test("unlink still deletes the images its link's queued replies would have shown", async () => {
