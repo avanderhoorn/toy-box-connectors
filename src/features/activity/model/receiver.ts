@@ -5,24 +5,13 @@ import type { ChannelChange, SlackEvent } from "@slackapi/model/events";
 // Receiving from Slack.
 //
 // Slack redelivers an envelope it didn't see acked, so a delivery is acked only once everything it
-// changes has committed, and only while Slack still waits for the ack. Taking a redelivery changes
-// nothing, because the ledger merges each version of a message once and a link is suspended once.
+// changes has committed. Taking a redelivery changes nothing, because the ledger merges each version
+// of a message once and a link is suspended once.
 // Besides messages, a delivery can say that a channel can't be used as the owner approved it, which
 // suspends the links on it before anything relies on it again.
 
-/**
- * How long after a delivery arrives it may still be acked. Slack waits three seconds, and the rest
- * is the ack's way back.
- */
-export const ACK_DEADLINE_MS = 2_500;
-
 /** A frame Slack wants handled. Hello and disconnect only concern the connection. */
 export type SlackDelivery = Exclude<SocketFrame, { kind: "hello" } | { kind: "disconnect" }>;
-
-/** Whether a delivery that arrived at `arrivedAt` and committed at `committedAt` may be acked. */
-export function acksInTime(arrivedAt: number, committedAt: number): boolean {
-  return committedAt - arrivedAt <= ACK_DEADLINE_MS;
-}
 
 /** What an event means for the links on a channel, besides any message it stores. */
 export type LifecycleAction =

@@ -169,7 +169,7 @@ export function startSlackSupervisor(
           default:
             // Slack says hello first, so a frame before it is left for Slack to send again.
             if (hello === undefined) return;
-            receiver.receive(frame, arrivedAt, (envelopeId) => current.ack(envelopeId)).catch(fail);
+            receiver.receive(frame, (envelopeId) => current.ack(envelopeId)).catch(fail);
         }
       },
     });

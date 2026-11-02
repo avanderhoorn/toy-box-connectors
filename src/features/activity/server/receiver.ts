@@ -1,4 +1,4 @@
-import { acksInTime, lifecycleAction, type SlackDelivery } from "@activity/model/receiver";
+import { lifecycleAction, type SlackDelivery } from "@activity/model/receiver";
 import { log as bridgeLog, type Log } from "@/shared/log";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
 import type { BridgeDatabase } from "@bridge/server/database";
@@ -14,8 +14,8 @@ import { ingestMessageEvent } from "./ingest";
 // The receiver.
 //
 // Deliveries are handled one at a time in the order they arrived. Each one commits everything it
-// changes in one transaction, and only then is its envelope acked, and only while Slack still
-// waits, so a delivery is never acked unless it's stored. A delivery that fails to commit isn't
+// changes in one transaction, and only then is its envelope acked, however long that took, so a
+// delivery is never acked unless it's stored. A delivery that fails to commit isn't
 // acked, and nothing after it is handled, so Slack sends it again to a bridge that starts afresh.
 // A hello takes its place in the same order. It notes that the bridge may have missed anything
 // since the last one, as a minute Slack held events back and a delivery the bridge can't read do,
@@ -23,14 +23,10 @@ import { ingestMessageEvent } from "./ingest";
 
 export interface SlackReceiver {
   /**
-   * Handles a delivery that arrived at `arrivedAt` after every delivery received before it, and
-   * acks its envelope once what it changed has committed in time. `ack` never throws.
+   * Handles a delivery after every delivery received before it, and acks its envelope once what it
+   * changed has committed. `ack` never throws.
    */
-  receive(
-    delivery: SlackDelivery,
-    arrivedAt: number,
-    ack: (envelopeId: string) => void,
-  ): Promise<void>;
+  receive(delivery: SlackDelivery, ack: (envelopeId: string) => void): Promise<void>;
   /** Notes that Slack said hello at `helloAt`, after every delivery received before the hello. */
   connected(helloAt: number): Promise<void>;
   /** Stops once the delivery in hand is handled. */
@@ -71,11 +67,7 @@ export function startSlackReceiver(
   const queue = new SerialTaskQueue();
   let stopped = false;
 
-  async function handle(
-    delivery: SlackDelivery,
-    arrivedAt: number,
-    ack: (envelopeId: string) => void,
-  ) {
+  async function handle(delivery: SlackDelivery, ack: (envelopeId: string) => void) {
     if (stopped) return;
     let taken: Taken;
     try {
@@ -84,10 +76,7 @@ export function startSlackReceiver(
       fail(error);
       return;
     }
-    if (delivery.envelopeId !== null) {
-      if (acksInTime(arrivedAt, now())) ack(delivery.envelopeId);
-      else log("Stored a delivery from Slack too late to ack it, so Slack will resend it.");
-    }
+    if (delivery.envelopeId !== null) ack(delivery.envelopeId);
     if (taken.changed) onChange();
     if (taken.missed) onMissed();
     if (taken.uninstalled) onUninstalled();
@@ -111,7 +100,7 @@ export function startSlackReceiver(
   }
 
   return {
-    receive: (delivery, arrivedAt, ack) => queue.enqueue(() => handle(delivery, arrivedAt, ack)),
+    receive: (delivery, ack) => queue.enqueue(() => handle(delivery, ack)),
     connected: (helloAt) => queue.enqueue(() => hello(helloAt)),
     async stop() {
       stopped = true;

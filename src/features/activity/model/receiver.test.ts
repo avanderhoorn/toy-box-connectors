@@ -2,14 +2,7 @@ import { expect, test } from "bun:test";
 import type { SuspendReason } from "@links/model/status";
 import type { EventCallback } from "@slackapi/model/envelopes";
 import { readSlackEvent } from "@slackapi/model/events";
-import { acksInTime, lifecycleAction, type LifecycleAction } from "./receiver";
-
-test("a delivery is acked only while Slack still waits for it", () => {
-  expect(acksInTime(1_000, 3_500)).toBe(true);
-  expect(acksInTime(1_000, 3_501)).toBe(false);
-  // A clock stepped back while the delivery committed still committed it in time.
-  expect(acksInTime(1_000, 500)).toBe(true);
-});
+import { lifecycleAction, type LifecycleAction } from "./receiver";
 
 const ts = "1700000000.000100";
 const notice = (subtype: string) => ({ type: "message", subtype, user: "U-owner", ts });

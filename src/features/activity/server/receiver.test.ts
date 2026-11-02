@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
 import { expect, onTestFinished, spyOn, test } from "bun:test";
 import { join } from "node:path";
-import { ACK_DEADLINE_MS } from "@activity/model/receiver";
 import { openBridgeDatabase } from "@bridge/server/database";
 import { captureLog, createTestFolder } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
@@ -31,8 +30,8 @@ const asked = {
 };
 
 /**
- * A receiver for the owner's link on C-link, committing 100 ms after a delivery arrives unless the
- * test moves its clock. `events` records each callback, and each ack with what had committed.
+ * A receiver for the owner's link on C-link, committing 100 ms after a delivery arrives. `events`
+ * records each callback, and each ack with what had committed.
  */
 async function openReceiver() {
   const path = join(createTestFolder(), "bridge.db");
@@ -48,23 +47,21 @@ async function openReceiver() {
   const committed = new Database(path, { readonly: true });
   onTestFinished(() => committed.close());
   const events: string[] = [];
-  let lag = 100;
   const receiver = startSlackReceiver(database, {
     onChange: () => events.push("changed"),
     onMissed: () => events.push("missed"),
     onUninstalled: () => events.push("uninstalled"),
     onError: (error) => events.push(`stopped on ${(error as Error).message}`),
-    now: () => arrivedAt + lag,
+    now: () => arrivedAt + 100,
   });
   onTestFinished(() => receiver.stop());
   return {
     database,
     receiver,
     events,
-    lag: (ms: number) => (lag = ms),
     /** Receives `event` in envelope `id`. */
     receive: (id: string, event: object) =>
-      receiver.receive(eventFrame(id, event), arrivedAt, (envelopeId) => {
+      receiver.receive(eventFrame(id, event), (envelopeId) => {
         const { messages, requests } = committed
           .query(
             `SELECT (SELECT count(*) FROM messages) AS messages,
@@ -111,18 +108,27 @@ test("a delivery is acked once everything it changed has committed, and one that
   ]);
 });
 
-test("a delivery stored too late to ack is left for Slack to send again, which changes nothing", async () => {
-  const { receive, events, lag } = await openReceiver();
-  const logged = captureLog();
-  lag(ACK_DEADLINE_MS + 1);
-  await receive("1", asked);
-  lag(100);
-  await receive("2", asked);
+test("deliveries that waited behind a slow commit are each acked once they commit", async () => {
+  const { database, receive, events } = await openReceiver();
+  const write = database.write.bind(database);
+  const slow = Promise.withResolvers<void>();
+  spyOn(database, "write").mockImplementationOnce(async (run) => {
+    await slow.promise;
+    return write(run);
+  });
+  const burst = [receive("1", asked), receive("2", { ...asked, ts: "1700000200.000100" })];
+  await Bun.sleep(10);
+  expect(events).toEqual([]);
 
-  expect(events).toEqual(["changed", "acked env-2 after 1 messages and 1 requests"]);
-  expect(logged()).toContain(
-    "Stored a delivery from Slack too late to ack it, so Slack will resend it.",
-  );
+  slow.resolve();
+  await Promise.all(burst);
+
+  expect(events).toEqual([
+    "acked env-1 after 1 messages and 1 requests",
+    "changed",
+    "acked env-2 after 2 messages and 2 requests",
+    "changed",
+  ]);
 });
 
 test("each hello, a minute Slack held back and what can't be read note a gap to catch up on", async () => {
@@ -130,8 +136,8 @@ test("each hello, a minute Slack held back and what can't be read note a gap to 
   captureLog();
   await receiver.connected(arrivedAt - 60_000);
   await receiver.connected(arrivedAt);
-  await receiver.receive({ kind: "rate_limited", envelopeId: null }, arrivedAt, () => {});
-  await receiver.receive({ kind: "malformed", envelopeId: null, issues: [] }, arrivedAt, () => {});
+  await receiver.receive({ kind: "rate_limited", envelopeId: null }, () => {});
+  await receiver.receive({ kind: "malformed", envelopeId: null, issues: [] }, () => {});
   await receive("1", { ...asked, ts: 1_700_000_100 });
 
   expect(await database.read((sql) => sql`SELECT starts_at, ends_at FROM gaps`)).toEqual([
