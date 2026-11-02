@@ -47,8 +47,11 @@ The bridge recovers interrupted attempts before starting work. The worker shares
 client, waits for verified Slack readiness, and serializes coalesced command pokes and a
 one-second fallback timer. Stop drains the current pass before storage closes. The wake
 scheduler hands it the requests no lead had read once Toy Box runs their wake, and inbox the
-requests it just served after commit. Their best-effort eyes batch has no stored state, and
-moves on when Slack refuses one, such as a second 👀 on a message.
+requests it just served after commit. Their best-effort eyes queue has no stored state, and
+moves on when Slack refuses one, such as a second 👀 on a message. A reply settled as sent,
+by posting or by reconciliation proving it landed, queues 👀 off its request's message behind any
+add, so a reply that posts after an add still ends with none. A refused or unknown reply, a post or
+publication, even in the request's thread, and a dismissed or expired request leave it.
 
 Queueing a reply calls the request model's `beginAnswer` in the same transaction. Proven
 delivery calls `confirmAnswer`. Only a definite refusal can return it to seen and replace

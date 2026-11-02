@@ -71,6 +71,126 @@ test("the timer waits for Slack to post or check unknown delivery, checks it twi
   });
 });
 
+/** A worker over a link and its request, and what Slack shows on the request's message. */
+async function startWatching(asked: Parameters<typeof createOutboxWorld>[0] = {}) {
+  const errors: unknown[] = [];
+  let worker: OutboxWorker | undefined;
+  // Registered before the world's, so the worker stops before the database closes.
+  onTestFinished(async () => {
+    await worker?.stop();
+    expect(errors).toEqual([]);
+  });
+  const world = await createOutboxWorld(asked);
+  let ready = true;
+  const started = startOutboxWorker(world.database, world.bot, {
+    ready: () => ready,
+    onChange: () => {},
+    onError: (error) => errors.push(error),
+    now: world.now,
+  });
+  worker = started;
+  const eyes = () =>
+    world.slack.getMessages("C-link").find((message) => message.ts === world.request.sourceTs)!
+      .reactions;
+  const reactions = () =>
+    world.slack.calls
+      .filter((call) => call.method.startsWith("reactions."))
+      .map((call) => [call.method, call.args]);
+  return {
+    world,
+    worker: started,
+    eyes,
+    reactions,
+    setReady: (value: boolean) => {
+      ready = value;
+    },
+  };
+}
+
+const eyesOn = [{ name: "eyes", count: 1, users: ["U-bot"] }];
+
+test("a reply that posts takes 👀 off the message that asked", async () => {
+  // The request is a reply in a thread, so its message isn't the thread's root.
+  const asked = { rootTs: "1700000100.000100", sourceTs: "1700000100.000200" } as const;
+  const { world, worker, eyes, reactions } = await startWatching(asked);
+  worker.acknowledge([world.request]);
+  await waitFor(() => expect(eyes()).toEqual(eyesOn));
+
+  const reply = await world.queue();
+  await waitFor(async () => expect(await world.read(reply.id)).toMatchObject({ state: "sent" }));
+  await waitFor(() => expect(eyes()).toBeUndefined());
+  expect(reactions()).toEqual([
+    ["reactions.add", { channel: "C-link", timestamp: asked.sourceTs, name: "eyes" }],
+    ["reactions.remove", { channel: "C-link", timestamp: asked.sourceTs, name: "eyes" }],
+  ]);
+});
+
+test("a dismissed request keeps 👀, though a post in its thread goes out", async () => {
+  const { world, worker, eyes, reactions } = await startWatching();
+  worker.acknowledge([world.request]);
+  await waitFor(() => expect(eyes()).toEqual(eyesOn));
+  await world.database.write(
+    (tx) =>
+      tx`UPDATE requests SET state = 'dismissed', closed_reason = 'Not asked.' WHERE id = ${world.request.id}`,
+  );
+
+  const post = await world.queuePost({ request: world.request.id });
+  await waitFor(async () => expect(await world.read(post.id)).toMatchObject({ state: "sent" }));
+  await Bun.sleep(50);
+  expect(post.requestId).toBe(world.request.id);
+  expect(eyes()).toEqual(eyesOn);
+  expect(reactions().map(([method]) => method)).toEqual(["reactions.add"]);
+});
+
+test("a reply whose response was lost keeps 👀 until reconciliation proves it landed", async () => {
+  const { world, worker, eyes } = await startWatching();
+  worker.acknowledge([world.request]);
+  await waitFor(() => expect(eyes()).toEqual(eyesOn));
+  world.slack.failNext("chat.postMessage", { lostResponse: true });
+  const reply = await world.queue();
+  await waitFor(async () =>
+    expect(await world.read(reply.id)).toMatchObject({ state: "delivery_unknown" }),
+  );
+  expect(eyes()).toEqual(eyesOn);
+
+  world.advance(60_000);
+  worker.poke();
+  await waitFor(async () => expect(await world.read(reply.id)).toMatchObject({ state: "sent" }));
+  await waitFor(() => expect(eyes()).toBeUndefined());
+});
+
+test("a reply Slack refuses keeps 👀, since the lead may answer again", async () => {
+  const { world, worker, eyes } = await startWatching();
+  worker.acknowledge([world.request]);
+  await waitFor(() => expect(eyes()).toEqual(eyesOn));
+  world.slack.failNext("chat.postMessage", { error: "msg_too_long" });
+  const reply = await world.queue();
+
+  await waitFor(async () => expect(await world.read(reply.id)).toMatchObject({ state: "failed" }));
+  await Bun.sleep(50);
+  expect(eyes()).toEqual(eyesOn);
+});
+
+test("a 👀 waiting to go on still goes on before its reply's takes it off", async () => {
+  const { world, worker, eyes, reactions, setReady } = await startWatching();
+  setReady(false);
+  await Bun.sleep(20);
+  // The 👀 is owed while Slack isn't ready, as when the bridge is reconnecting.
+  setReady(true);
+  worker.acknowledge([world.request]);
+  setReady(false);
+  const reply = await world.queue();
+  await Bun.sleep(20);
+  expect(reactions()).toEqual([]);
+
+  setReady(true);
+  worker.poke();
+  await waitFor(() => expect(reactions()).toHaveLength(2));
+  expect(reactions().map(([method]) => method)).toEqual(["reactions.add", "reactions.remove"]);
+  expect(await world.read(reply.id)).toMatchObject({ state: "sent" });
+  expect(eyes()).toBeUndefined();
+});
+
 test("stop drains an active send and starts no second link's job or pending poke", async () => {
   let worker: OutboxWorker | undefined;
   const release = Promise.withResolvers<void>();

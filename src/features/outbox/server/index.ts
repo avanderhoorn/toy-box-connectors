@@ -1,14 +1,16 @@
 import type { BridgeDatabase } from "@bridge/server/database";
-import type { StoredRequest } from "@requests/server/database";
+import { readRequest, type StoredRequest } from "@requests/server/database";
 import type { BotClient } from "@slackapi/server/botClient";
 import { log as bridgeLog, type Log } from "@/shared/log";
 import { readDueReconciliations, readReadyOutbox } from "./database";
 import { createFileDeletion } from "./deletions";
 import { readDueDeletions } from "./files";
-import { createPostDelivery } from "./posts";
+import { createPostDelivery, type PostStep } from "./posts";
 import { createReconciliation } from "./reconcile";
 
 type SeenRequest = Pick<StoredRequest, "channelId" | "sourceTs">;
+/** The bot's 👀 on a request's message, put there once a lead is woken and taken off once its answer posts. */
+type Eyes = SeenRequest & { call: "add" | "remove" };
 export interface OutboxWorker {
   poke(): void;
   acknowledge(requests: readonly SeenRequest[]): void;
@@ -36,7 +38,7 @@ export function startOutboxWorker(
   const posts = createPostDelivery(database, bot, { now });
   const checks = createReconciliation(database, bot, { now });
   const deletions = createFileDeletion(database, bot, { now, log });
-  const eyes: SeenRequest[] = [];
+  const eyes: Eyes[] = [];
   let stopped = false;
   let pending = false;
   let running = Promise.resolve();
@@ -61,17 +63,18 @@ export function startOutboxWorker(
     ]);
     for (const item of jobs) {
       if (stopped || !ready()) return;
-      await (item.state === "queued" ? posts.post(item.id) : checks.reconcile(item.id));
+      const step = await (item.state === "queued"
+        ? posts.post(item.id)
+        : checks.reconcile(item.id));
       onChange();
+      const answered = await answeredRequest(step);
+      if (answered) eyes.push({ call: "remove", ...answered });
     }
-    for (const request of eyes.splice(0)) {
+    for (const { call: change, channelId, sourceTs } of eyes.splice(0)) {
       if (stopped || !ready()) return;
-      const call = await bot.call("reactions.add", (client) =>
-        client.reactions.add({
-          channel: request.channelId,
-          timestamp: request.sourceTs,
-          name: "eyes",
-        }),
+      const reaction = { channel: channelId, timestamp: sourceTs, name: "eyes" };
+      const call = await bot.call(`reactions.${change}`, (client) =>
+        client.reactions[change](reaction),
       );
       // An unavailable method should not hold up posts for a best-effort batch.
       if (call.kind !== "ok" && call.kind !== "error") break;
@@ -83,13 +86,22 @@ export function startOutboxWorker(
     }
   }
 
+  /** The request a reply just proved posted answered, if it still exists. */
+  async function answeredRequest(step: PostStep): Promise<SeenRequest | null> {
+    if (step.kind !== "settled") return null;
+    const { kind, state, requestId } = step.item;
+    if (kind !== "reply" || state !== "sent" || requestId === null) return null;
+    return database.read((sql) => readRequest(sql, requestId));
+  }
+
   const timer = setInterval(poke, 1000);
   poke();
   return {
     poke,
     acknowledge(requests) {
       if (stopped || !ready()) return;
-      eyes.push(...requests);
+      for (const { channelId, sourceTs } of requests)
+        eyes.push({ call: "add", channelId, sourceTs });
       poke();
     },
     async stop() {

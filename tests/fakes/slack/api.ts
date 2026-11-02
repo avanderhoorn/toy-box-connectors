@@ -145,6 +145,9 @@ const schemas = {
   "reactions.add": z
     .object({ channel: z.string().min(1), timestamp: ts, name: z.string().min(1) })
     .strict(),
+  "reactions.remove": z
+    .object({ channel: z.string().min(1), timestamp: ts, name: z.string().min(1) })
+    .strict(),
   "files.info": z.object({ file: z.string().min(1) }).strict(),
   "files.getUploadURLExternal": z
     .object({
@@ -516,7 +519,10 @@ export function createFakeSlackApi(options: {
     return Response.json({ ok: true, channel: input.channel, ts: input.ts });
   }
 
-  function reaction(input: z.output<(typeof schemas)["reactions.add"]>): Response {
+  function reaction(
+    input: z.output<(typeof schemas)["reactions.add"]>,
+    change: "add" | "remove",
+  ): Response {
     const problem = writeProblem(input.channel);
     if (problem) return failure(problem);
     const message = messages.get(input.channel)!.get(input.timestamp);
@@ -528,6 +534,14 @@ export function createFakeSlackApi(options: {
       .parse(message.reactions ?? []);
     const current = list.find((entry) => entry.name === input.name);
     const has = current?.users.includes(identity.botUserId);
+    if (change === "remove") {
+      if (!current || !has) return failure("no_reaction");
+      current.users = current.users.filter((user) => user !== identity.botUserId);
+      current.count -= 1;
+      const left = list.filter((entry) => entry.count > 0);
+      message.reactions = left.length > 0 ? left : undefined;
+      return Response.json({ ok: true });
+    }
     if (has) return failure("already_reacted");
     if (current) {
       current.users.push(identity.botUserId);
@@ -866,7 +880,9 @@ export function createFakeSlackApi(options: {
       case "chat.delete":
         return run(schemas[method], remove);
       case "reactions.add":
-        return run(schemas[method], reaction);
+        return run(schemas[method], (input) => reaction(input, "add"));
+      case "reactions.remove":
+        return run(schemas[method], (input) => reaction(input, "remove"));
       case "files.info":
         return run(schemas[method], fileInfo);
       case "files.getUploadURLExternal":

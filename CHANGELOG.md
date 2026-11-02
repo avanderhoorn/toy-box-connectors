@@ -1,5 +1,6 @@
 ## 📅 v0.6.0 (11/2/26)
 
+- The bridge takes 👀 off the message that asked once the lead's answer posts. A request the lead dismisses or doesn't answer keeps it
 - Reinstalling the Slack app after an uninstall no longer means deleting bridge.db. Install it in Slack again, replace its bot token as status says and restart the bridge. The uninstall still forgets every link, so link each channel and allow its people again
 - A restart on the token Slack revoked says the app was uninstalled and how to install it again, as the running bridge does, rather than only asking for a new token
 - `post --mention` takes one member ID and repeats for each person, such as `--mention U0123ABCD --mention U0456EFGH`, as the skill now teaches. A comma list is refused with that example, so change any routine prompt that uses one

@@ -4,6 +4,7 @@ import { openTestDatabase } from "@bridge/server/testFixtures";
 import { blankPng } from "@files/model/testFixtures";
 import { readChannelLink } from "@links/server/database";
 import { createStoredLink } from "@links/server/testFixtures";
+import type { Request } from "@requests/model/lifecycle";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { createBotClient } from "@slackapi/server/botClient";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
@@ -93,7 +94,8 @@ function hash(text: string): string {
   return new Bun.CryptoHasher("sha256").update(text).digest("hex");
 }
 
-export async function createOutboxWorld() {
+/** A link and a seen request in it, which `asked` changes, such as to open it on a reply in a thread. */
+export async function createOutboxWorld(asked: Partial<Request> = {}) {
   let at = 1_700_000_200_000;
   const now = () => at;
   const database = await openTestDatabase();
@@ -119,13 +121,11 @@ export async function createOutboxWorld() {
     state: "seen",
     touchedAt: now(),
     createdAt: now(),
+    ...asked,
   });
-  slack.setMessage("C-link", {
-    type: "message",
-    ts: request.sourceTs,
-    user: "U-owner",
-    text: "Question",
-  });
+  for (const ts of new Set([request.rootTs, request.sourceTs])) {
+    slack.setMessage("C-link", { type: "message", ts, user: "U-owner", text: "Question" });
+  }
   const bot = createBotClient(slack.botToken, {
     slackApiUrl: slack.url,
     timeoutMs: 50,

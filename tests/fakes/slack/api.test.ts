@@ -169,6 +169,15 @@ test("apps share messages but keep membership, authorship, reactions and deletio
   expect(fake.getMessages(channel)[0]!.reactions).toEqual([
     { name: "eyes", count: 2, users: [fake.identity.botUserId, other.identity.botUserId] },
   ]);
+  await second.reactions.remove({ channel, timestamp: first.ts!, name: "eyes" });
+  expect(fake.getMessages(channel)[0]!.reactions).toEqual([
+    { name: "eyes", count: 1, users: [fake.identity.botUserId] },
+  ]);
+  await expect(
+    second.reactions.remove({ channel, timestamp: first.ts!, name: "eyes" }),
+  ).rejects.toMatchObject({ data: { error: "no_reaction" } });
+  await client.reactions.remove({ channel, timestamp: first.ts!, name: "eyes" });
+  expect(fake.getMessages(channel)[0]!.reactions).toBeUndefined();
   await expect(second.chat.delete({ channel, ts: first.ts! })).rejects.toMatchObject({
     data: { error: "cant_delete_message" },
   });
