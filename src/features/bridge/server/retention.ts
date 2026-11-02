@@ -1,13 +1,13 @@
 // Retention.
 //
-// The bridge keeps what was said in Slack, or posted there, for 30 days after it last changed, and
-// a person's name only while a link allows them. Each feature forgets its own, and the bridge runs
-// them together when it starts and hourly after. Only what posting once and numbering need stays
-// longer, and it says nothing: a request that hasn't finished, or whose thread holds a post that
-// may still go out or that Slack never confirmed, a reply's or publication's row, which keeps its
-// slot reserved, and a post's row while Slack never confirmed it or an item is still in its thread.
-// The one exception is an item that may still go out, which keeps what it says. Numbers keep
-// counting regardless, since SQLite's own tables remember them.
+// The bridge keeps what was said in Slack for 30 days after it last changed, what it posts there
+// only while the post may still go out, and a person's name only while a link allows them. Each
+// feature forgets its own, and the bridge runs them together when it starts and hourly after. What
+// posting once and numbering need outlasts the text, and says nothing: a request that hasn't
+// finished, or whose thread holds a post that may still go out or that Slack never confirmed, a
+// reply's or publication's row, which keeps its slot reserved, and a post's row for 30 days after
+// it last changed, and after that while Slack never confirmed it or an item is still in its thread.
+// Numbers keep counting regardless, since SQLite's own tables remember them.
 
 import { forgetOldActivity } from "@activity/server/ledger";
 import { forgetOldPosts } from "@outbox/server/database";

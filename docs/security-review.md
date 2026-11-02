@@ -186,9 +186,9 @@ size `files.info` gave.
 ## Retention and deletion
 
 Cleanup runs at startup and hourly, so the bridge keeps Slack text for at most
-30 days after it last changed. Only a post that may still go out keeps its text
-longer. Rows that outlast their text hold identifiers, timestamps, states and
-hashes that posting once and numbering need.
+30 days after it last changed. A post keeps its text only while it may still go
+out, which can be longer. Rows that outlast their text hold identifiers,
+timestamps, states and hashes that posting once and numbering need.
 
 - `messages` rows go once their latest posted or edited version is over 30
   days old, including markers and tombstones. A marker or tombstone keeps its
@@ -204,12 +204,13 @@ hashes that posting once and numbering need.
   whose reply's delivery is unknown never finishes, so it stays, with no text,
   and a finished one stays while a post in its thread may still go out or its
   delivery is unknown.
-- An `outbox` row forgets its payload 30 days after it last changed, unless it
-  is queued or sending, such as a reply queued while its link is paused. Its
-  number, payload hash, state, destination and Slack `ts` remain, so an unknown
-  post can still be proven and a publication slot stays reserved. What the
-  lead queues with `post` reserves nothing, so its whole row goes then
-  instead, unless Slack never confirmed it or another `outbox` row is still in
+- An `outbox` row forgets its payload at the first cleanup after it leaves
+  queued and sending, and keeps it while it's either, however long, such as a
+  reply queued while its link is paused. Its number, payload hash, state,
+  destination and Slack `ts` remain, so an unknown post can still be proven, a
+  repeat refused and a publication slot stays reserved. What the lead queues
+  with `post` reserves nothing, so its whole row goes 30 days after it last
+  changed, unless Slack never confirmed it or another `outbox` row is still in
   its thread, which the bridge names by the post's number.
 - `outbox_files` names the Slack file of each image an `outbox` row shows, in
   order, and goes with that row.

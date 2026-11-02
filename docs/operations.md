@@ -191,17 +191,17 @@ every change record but each remaining message's latest. The files
 a message lists go with it. A finished request goes once none of its
 messages remain, with the outbox items of its reply and the posts in
 its thread, so those can't be retracted after that, and a follow-up
-in its thread needs a new mention. A post forgets its text 30 days
-after it last changed, unless it may still go out, such as a reply queued
-while its link is paused. Its number, hash and state stay, so an unknown post
-can still be confirmed and a publication slot stays reserved. What the lead
-queued with `post` goes entirely then, unless Slack never confirmed it or the
-bridge still keeps a reply or post in its thread, and after that it can't be
-retracted or named with `post --thread`. A request whose reply's delivery is
-unknown never finishes, so it stays too, and a finished one stays while a post
-in its thread may still go out or its delivery is unknown. A person's name and
-other IDs go within an hour of the `deny` or `unlink` that leaves no link
-allowing them.
+in its thread needs a new mention. A post forgets its text at the first
+cleanup after it can no longer go out, and keeps it as long as it may, such as
+a reply queued while its link is paused. Its number, hash and state stay, so an
+unknown post can still be confirmed and a publication slot stays reserved. What
+the lead queued with `post` goes entirely 30 days after it last changed, unless
+Slack never confirmed it or the bridge still keeps a reply or post in its
+thread, and after that it can't be retracted or named with `post --thread`. A
+request whose reply's delivery is unknown never finishes, so it stays too, and
+a finished one stays while a post in its thread may still go out or its
+delivery is unknown. A person's name and other IDs go within an hour of the
+`deny` or `unlink` that leaves no link allowing them.
 
 Catch-up scans roots at most 30 days old and follows threads with replies
 since the gap. It takes new or edited versions from five minutes before the

@@ -181,25 +181,29 @@ test("a post repeating anything in its place is refused while that may still go 
   expect(await world.queuePost(undefined, update)).toMatchObject({ state: "queued" });
 });
 
-test("a post forgets what it said a month after it last changed, unless it may still go out", async () => {
+test("an item forgets what it said as soon as it can't go out, and keeps its hash", async () => {
   const world = await createOutboxWorld();
-  const reply = await world.queue();
-  const slot = { linkId: "link", series: "release-notes", scheduledAt: world.now(), text: "Notes" };
-  const publication = await world.database.write((tx) => queuePublication(tx, slot, world.now()));
+  const states = ["queued", "sending", "sent", "failed", "delivery_unknown", "retracted"];
+  const items: OutboxItem[] = [];
+  for (const [index, state] of states.entries()) {
+    const slot = { linkId: "link", series: "notes", scheduledAt: index, text: `Notes ${index}` };
+    const item = await world.database.write((tx) => queuePublication(tx, slot, world.now()));
+    await world.database.write(
+      (tx) => tx`UPDATE outbox SET state = ${state} WHERE id = ${item.id}`,
+    );
+    items.push(item);
+  }
   const forgetAfter = async (days: number) => {
     world.advance(days * 86_400_000);
     await world.database.write((tx) => forgetOldPosts(tx, world.now()));
-    return { reply: await world.read(reply.id), publication: await world.read(publication.id) };
+    const stored = await Promise.all(items.map(({ id }) => world.read(id)));
+    return stored.map((item) => [item?.state, item?.payload !== null, item?.payloadHash]);
   };
+  const saying = (...says: boolean[]) =>
+    states.map((state, index) => [state, says[index], items[index]?.payloadHash]);
 
-  // The reply waits over a month, as one queued while its link is paused would, then goes out.
-  expect(await forgetAfter(40)).toMatchObject({
-    reply: { state: "queued", payload: reply.payload },
-  });
-  await world.post(reply.id);
-  expect(await forgetAfter(29)).toMatchObject({ reply: { state: "sent", payload: reply.payload } });
-  expect(await forgetAfter(2)).toMatchObject({
-    reply: { state: "sent", payload: null, payloadHash: reply.payloadHash },
-    publication: { state: "queued", payload: publication.payload },
-  });
+  expect(await forgetAfter(0)).toEqual(saying(true, true, false, false, false, false));
+  // One that may still go out keeps it however long it waits, as one queued while its link is
+  // paused would.
+  expect(await forgetAfter(40)).toEqual(saying(true, true, false, false, false, false));
 });

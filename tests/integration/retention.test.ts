@@ -1,7 +1,6 @@
 // Retention forgets what a post said, never that it was posted, so nothing it forgets posts again.
 
 import { expect, onTestFinished, test } from "bun:test";
-import { RETENTION_MS } from "@activity/model/ledger";
 import { applyRetention } from "@bridge/server/retention";
 import { startOutboxWorker, type OutboxWorker } from "@outbox/server";
 import { queuePublication } from "@outbox/server/database";
@@ -30,8 +29,8 @@ test("a post whose text the bridge forgot still settles, and its slot never post
     expect(await world.read(publication.id)).toMatchObject({ state: "delivery_unknown" }),
   );
 
-  // The bridge was stopped for a month, and forgets before it checks.
-  world.advance(RETENTION_MS + 60_000);
+  // Retention forgets what it said before the worker checks whether it landed.
+  world.advance(60_000);
   await world.database.write((tx) => applyRetention(tx, world.now()));
   expect(await world.read(publication.id)).toMatchObject({ payload: null });
   worker.poke();

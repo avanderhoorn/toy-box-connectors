@@ -362,10 +362,11 @@ export async function recoverOutboxAttempts(tx: Bun.SQL, now: number): Promise<s
 }
 
 /**
- * Forgets what each item said once it can't go out anymore and hasn't changed for as long as the
- * bridge keeps what was said. A reply's or publication's row stays, so nothing it reserved posts
- * again. A post reserves nothing, so its row goes too, unless Slack never confirmed it or an item
- * is still in its thread, which the bridge names by the post's number.
+ * Forgets what each item said once it can't go out anymore, however recently that was, and keeps
+ * its hash, so its delivery can still be proven and a repeat refused. A reply's or publication's
+ * row stays, so nothing it reserved posts again. A post reserves nothing, so its row goes once it
+ * hasn't changed for as long as the bridge keeps what was said, unless Slack never confirmed it or
+ * an item is still in its thread, which the bridge names by the post's number.
  */
 export async function forgetOldPosts(tx: Bun.SQL, now: number): Promise<void> {
   await tx`
@@ -376,9 +377,7 @@ export async function forgetOldPosts(tx: Bun.SQL, now: number): Promise<void> {
       )
   `;
   await tx`
-    UPDATE outbox SET payload = NULL
-    WHERE payload IS NOT NULL AND state NOT IN ('queued', 'sending')
-      AND updated_at < ${now - RETENTION_MS}
+    UPDATE outbox SET payload = NULL WHERE payload IS NOT NULL AND state NOT IN ('queued', 'sending')
   `;
 }
 
