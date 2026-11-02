@@ -16,7 +16,13 @@ import {
   startOutboxAttempt,
   type OutboxItem,
 } from "./database";
-import { createOutboxWorld } from "./testFixtures";
+import { renderOutboxAtSend } from "./schema";
+import {
+  createOutboxWorld,
+  createVersion5Item,
+  version5Payload,
+  version5Post,
+} from "./testFixtures";
 
 test("a pause before queueing refuses the reply", async () => {
   const world = await createOutboxWorld();
@@ -180,6 +186,29 @@ test("a post repeating anything in its place is refused while that may still go 
   await settle(third.id, "retracted");
   expect(await world.queuePost(undefined, update)).toMatchObject({ state: "queued" });
 });
+
+test.each(["queued", "delivery_unknown"])(
+  "a post version 5 left %s still refuses the same post after the update",
+  async (state) => {
+    const world = await createOutboxWorld();
+    await world.database.write(
+      (tx) => tx`INSERT INTO allowlist (link_id, user_id, added_at)
+        VALUES ('link', 'U0ALICE', 0), ('link', 'U0BOB', 0)`,
+    );
+    const top = { kind: "post", request_id: null, thread_ts: null, state };
+    await createVersion5Item(world.database, 1, version5Post.payload, top);
+    await createVersion5Item(world.database, 2, version5Payload("Shipped."), top);
+    await world.database.write(renderOutboxAtSend);
+
+    for (const [index, asked] of [version5Post.asked, { text: "Shipped." }].entries()) {
+      const again = world.database.write(async (tx) => {
+        const link = await readChannelLink(tx, "C-link");
+        return queuePost(tx, { link: link!, ...asked }, world.now());
+      });
+      await expect(again).rejects.toThrow(`o${index + 1} already says this there (${state}).`);
+    }
+  },
+);
 
 test("an item forgets what it said as soon as it can't go out, and keeps its hash", async () => {
   const world = await createOutboxWorld();

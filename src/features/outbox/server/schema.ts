@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
   await db.unsafe(`
     -- An item that may still go out keeps what it says. One that can't may lose it, while a
@@ -111,4 +113,37 @@ export async function addOutboxImages(db: Bun.SQL): Promise<void> {
       created_at INTEGER NOT NULL
     );
   `);
+}
+
+/** What version 5 kept for an item: the message its text rendered to, and each image's alt text. */
+const renderedPayloadSchema = z.object({
+  text: z.string(),
+  blocks: z.tuple([z.object({ text: z.string() })]),
+  images: z.array(z.object({ alt: z.string() })).default([]),
+});
+
+/**
+ * Takes version 5's outbox, whose items kept the message their text rendered to, to version 6's,
+ * which keeps what the lead asked for and renders it as it's sent. Only an item that may still go
+ * out keeps what it says, so only it changes, and it keeps its hash, which names what Slack may
+ * already show. Its text was rendered, and rendering that again changes nothing, so it goes out as
+ * it would have. One this can't read stays as it was, and sending refuses it.
+ */
+export async function renderOutboxAtSend(db: Bun.SQL): Promise<void> {
+  const items = await db<{ id: string; payload: string }[]>`
+    SELECT id, payload FROM outbox WHERE state IN ('queued', 'sending')
+  `;
+  for (const item of items) {
+    const stored = renderedPayloadSchema.safeParse(JSON.parse(item.payload));
+    if (!stored.success) continue;
+    const { text, blocks, images } = stored.data;
+    const block = blocks[0].text;
+    // A post's block opens with a line of the people it mentions, which its text leaves out.
+    const line = block === text ? "" : block.slice(0, -text.length - 2);
+    const mentions = line ? line.split(" ").map((mention) => mention.slice(2, -1)) : [];
+    const named = mentions.map((id) => `<@${id}>`).join(" ");
+    if (block !== (named ? `${named}\n\n${text}` : text)) continue;
+    const payload = JSON.stringify({ text, mentions, images });
+    await db`UPDATE outbox SET payload = ${payload} WHERE id = ${item.id}`;
+  }
 }

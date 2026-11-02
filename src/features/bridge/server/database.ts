@@ -12,7 +12,12 @@ import {
   numberLedgerChanges,
 } from "@activity/server/schema";
 import { addLinkChannelName, initializeLinkSchema } from "@links/server/schema";
-import { addOutboxImages, allowOutboxPosts, initializeOutboxSchema } from "@outbox/server/schema";
+import {
+  addOutboxImages,
+  allowOutboxPosts,
+  initializeOutboxSchema,
+  renderOutboxAtSend,
+} from "@outbox/server/schema";
 import { initializeRequestSchema } from "@requests/server/schema";
 import { forgetAuthFailure, initializeSlackApiSchema } from "@slackapi/server/schema";
 import { initializeWakeSchema } from "@wakes/server/schema";
@@ -100,6 +105,7 @@ const bridgeSchema: Schema = {
     5: async (transaction) => {
       await forgetAuthFailure(transaction);
       await numberLedgerChanges(transaction);
+      await renderOutboxAtSend(transaction);
     },
   },
 };

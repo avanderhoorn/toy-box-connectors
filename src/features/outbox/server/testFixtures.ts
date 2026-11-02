@@ -8,6 +8,7 @@ import { createStoredRequest } from "@requests/server/testFixtures";
 import { createBotClient } from "@slackapi/server/botClient";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../../../../tests/fakes/slack";
+import type { PostImage } from "../model/payload";
 import { renderMarkdown } from "../model/rendering";
 import { queuePost, queueReply, readOutboxItem } from "./database";
 import { attachFiles, readDueDeletions } from "./files";
@@ -21,7 +22,6 @@ export function createStoredOutboxItem(
 ) {
   const rendered = renderMarkdown("An answer.");
   if (rendered.kind !== "rendered") throw new Error("Expected render");
-  const payload = JSON.stringify(rendered.message);
   return database.write(
     (tx) =>
       tx`INSERT INTO outbox ${tx({
@@ -32,14 +32,65 @@ export function createStoredOutboxItem(
         kind: "reply",
         channel_id: "C-link",
         thread_ts: "1700000100.000100",
-        payload,
-        payload_hash: new Bun.CryptoHasher("sha256").update(payload).digest("hex"),
+        payload: JSON.stringify({ text: "An answer.", mentions: [], images: [] }),
+        payload_hash: hash(JSON.stringify(rendered.message)),
         state: "queued",
         created_at: 0,
         updated_at: 0,
         ...columns,
       })}`,
   );
+}
+
+/**
+ * What version 5 kept for an item until it went out, and named it by: the message its text
+ * rendered to, whose block opens with any people it mentions, and what each image shows.
+ */
+export function version5Payload(text: string, block = text, images?: PostImage[]): string {
+  return JSON.stringify({
+    text,
+    blocks: [{ type: "markdown", text: block }],
+    mrkdwn: false,
+    parse: "none",
+    unfurl_links: false,
+    unfurl_media: false,
+    ...(images && { images }),
+  });
+}
+
+/**
+ * A post version 5 queued and what the lead asked it to say: it shows a chart and mentions Bob
+ * before Alice, an order no sort would give them.
+ */
+export const version5Post = {
+  asked: {
+    text: "Shipped **1.2**. Ask <@W0BOB> or @channel.",
+    mentions: ["U0BOB", "U0ALICE"],
+    images: [{ alt: "Build minutes" }],
+  },
+  payload: version5Payload(
+    "Shipped **1.2**. Ask &lt;@W0BOB> or @\u200bchannel.",
+    "<@U0BOB> <@U0ALICE>\n\nShipped **1.2**. Ask &lt;@W0BOB> or @\u200bchannel.",
+    [{ alt: "Build minutes" }],
+  ),
+};
+
+/** Stores an item as version 5 kept it, as `payload`, under the hash of those bytes it gave it. */
+export function createVersion5Item(
+  database: BridgeDatabase,
+  number: number,
+  payload: string,
+  columns: Record<string, string | number | null> = {},
+) {
+  return createStoredOutboxItem(database, number, {
+    payload,
+    payload_hash: hash(payload),
+    ...columns,
+  });
+}
+
+function hash(text: string): string {
+  return new Bun.CryptoHasher("sha256").update(text).digest("hex");
 }
 
 export async function createOutboxWorld() {

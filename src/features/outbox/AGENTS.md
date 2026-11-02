@@ -1,8 +1,8 @@
 # Outbox
 
 The outbox owns threaded replies, periodic publications and the posts the owner asks for in the
-watched Slack channel. Each item has an opaque metadata ID, a never-reused number, an immutable
-attempted payload and its hash, and a delivery state. A reply's request and a publication's
+watched Slack channel. Each item has an opaque metadata ID, a never-reused number, what the lead
+asked it to say, the hash naming it, and a delivery state. A reply's request and a publication's
 `(link, series, scheduled slot)` are unique, so each reserves its purpose. Unknown delivery and
 retraction never release that reservation. A duplicate command refuses with the first item's
 number and state, rather than queueing again. A post reserves nothing, so it refuses as a repeat
@@ -71,10 +71,12 @@ characters rather than split or truncate it.
 `outputProblem` refuses recognizable credentials
 by category without repeating them. It is a guardrail, not complete DLP.
 
-The send boundary accepts only canonical renderer output, rendering the fallback again with
-the people its block's opening line mentions, and rechecks secrets without changing the stored
-bytes. Slack translates Markdown into its own block layout, so delivery proof must
-not compare returned blocks with the outbound snapshot.
+An item's payload keeps what the lead asked it to say: its text, the people it mentions and each
+image's alt text. Queueing renders it to refuse a post that couldn't go out before it waits, and
+names the item by the hash of that render, as every version has, since Slack may already show a
+post under it. Sending renders it again and posts that, so what goes out passes the checks as they
+are when it goes. Slack translates Markdown into its own block layout, so delivery proof must
+not compare returned blocks with what was sent.
 
 ## Images
 

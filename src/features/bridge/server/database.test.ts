@@ -3,7 +3,12 @@ import { basename, join } from "node:path";
 import { createStoredMessage } from "@activity/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { queuePublication } from "@outbox/server/database";
-import { createStoredOutboxItem } from "@outbox/server/testFixtures";
+import {
+  createStoredOutboxItem,
+  createVersion5Item,
+  version5Payload,
+  version5Post,
+} from "@outbox/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { askMessage } from "@slackapi/model/testFixtures";
 import { readInstallation } from "@slackapi/server/installation";
@@ -115,6 +120,42 @@ describe("openBridgeDatabase", () => {
     const slot = { linkId: "link", series: "notes", scheduledAt: 3, text: "Notes" };
     const next = await database.write((transaction) => queuePublication(transaction, slot, 3));
     expect(next.number).toBe(4);
+  });
+
+  test("keeps what a version 5 outbox may still send as the lead asked for it, under the hash it had", async () => {
+    const path = join(createTestFolder(), "bridge.db");
+    await createRecordedDatabase(path, 5);
+    const made = new BridgeDatabase(new Bun.SQL({ adapter: "sqlite", filename: path }));
+    await createStoredLink(made);
+    await createStoredRequest(made);
+    const top = { kind: "post", request_id: null, thread_ts: null };
+    await createVersion5Item(made, 1, version5Post.payload, top);
+    await createVersion5Item(made, 2, version5Payload("An answer."), { state: "sending" });
+    await createVersion5Item(made, 3, version5Payload("Shipped."), { ...top, state: "sent" });
+    // Version 5 sent a block only if it opened with no one but the people its post mentions.
+    await createVersion5Item(made, 4, version5Payload("Shipped.", "<!here>\n\nShipped."), top);
+    const outbox = (sql: Bun.SQL) =>
+      sql`SELECT number, payload, payload_hash FROM outbox ORDER BY number`;
+    const [post, reply, sent, unread] = await made.read(outbox);
+    await made.close();
+
+    const database = await open(path);
+
+    const asked = (text: string, mentions: string[], images: { alt: string }[] = []) =>
+      JSON.stringify({ text, mentions, images });
+    expect(await database.read(outbox)).toEqual([
+      {
+        ...post,
+        payload: asked(
+          JSON.parse(version5Post.payload).text,
+          ["U0BOB", "U0ALICE"],
+          [{ alt: "Build minutes" }],
+        ),
+      },
+      { ...reply, payload: asked("An answer.", []) },
+      sent,
+      unread,
+    ]);
   });
 
   test.each(recordedVersions.filter((version) => version < 6))(

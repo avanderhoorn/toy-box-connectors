@@ -10,9 +10,7 @@ import { readRequest, saveRequest } from "@requests/server/database";
 import type { SlackTs } from "@slackapi/model/ts";
 import { z } from "zod";
 import { nextReconciliation, reconciliationDelays, type OutboxSettlement } from "../model/delivery";
-import type { LeadPayload, PostImage } from "../model/payload";
-import { renderMarkdown } from "../model/rendering";
-import { outputProblem } from "../model/safety";
+import { renderPayload, type LeadPayload, type PostImage } from "../model/payload";
 import { oweItemFiles } from "./files";
 import { findThreadPlace, type PostThread } from "./threads";
 
@@ -87,7 +85,7 @@ export async function queueReply(
   const link = await readChannelLink(tx, request.channelId);
   if (!link || link.id !== request.linkId || link.status !== "active")
     throw new OutboxRefusedError("This request's link isn't active.");
-  const payload = rendered(input.text, [], input.images);
+  const { payload, hash } = rendered(input.text, [], input.images);
   try {
     await saveRequest(tx, beginAnswer(request, now));
   } catch (error) {
@@ -95,7 +93,7 @@ export async function queueReply(
     throw new OutboxRefusedError(error.message);
   }
   return existing
-    ? retryFailed(tx, existing.id, payload, now)
+    ? retryFailed(tx, existing.id, payload, hash, now)
     : insertItem(
         tx,
         {
@@ -108,6 +106,7 @@ export async function queueReply(
           scheduledAt: null,
         },
         payload,
+        hash,
         now,
       );
 }
@@ -144,9 +143,9 @@ export async function queuePublication(
     SELECT slack_channel_id, status FROM links WHERE id = ${input.linkId}
   `;
   if (!link || link.status !== "active") throw new OutboxRefusedError("This link isn't active.");
-  const payload = rendered(input.text, [], input.images);
+  const { payload, hash } = rendered(input.text, [], input.images);
   return existing
-    ? retryFailed(tx, existing.id, payload, now)
+    ? retryFailed(tx, existing.id, payload, hash, now)
     : insertItem(
         tx,
         {
@@ -159,6 +158,7 @@ export async function queuePublication(
           threadTs: null,
         },
         payload,
+        hash,
         now,
       );
 }
@@ -193,14 +193,14 @@ export async function queuePost(
       `${new Intl.ListFormat("en").format(strangers)} ${are} on the allowlist, so a post can't mention them.`,
     );
   }
-  const payload = rendered(input.text, mentions, input.images);
+  const { payload, hash } = rendered(input.text, mentions, input.images);
   const place = thread
     ? await findThreadPlace(tx, link, thread)
     : { threadTs: null, requestId: null };
   if ("refused" in place) throw new OutboxRefusedError(place.refused);
   const [repeat] = await tx<OutboxRow[]>`
     SELECT * FROM outbox WHERE link_id = ${link.id} AND thread_ts IS ${place.threadTs}
-      AND payload_hash = ${hash(payload)} AND (state IN ('queued', 'sending', 'delivery_unknown')
+      AND payload_hash = ${hash} AND (state IN ('queued', 'sending', 'delivery_unknown')
         OR state = 'sent' AND updated_at > ${now - repeatPostMs})
     ORDER BY number DESC LIMIT 1
   `;
@@ -218,6 +218,7 @@ export async function queuePost(
       scheduledAt: null,
     },
     payload,
+    hash,
     now,
   );
 }
@@ -381,33 +382,34 @@ export async function forgetOldPosts(tx: Bun.SQL, now: number): Promise<void> {
   `;
 }
 
-/** What a post says, with what each image it shows below the text shows, when it shows any. */
+/**
+ * What the lead asked an item to say, refused now if it couldn't go out, and the hash naming it.
+ * Every version hashes what that renders to, with each image's alt text when it shows any, so an
+ * item queued before an update keeps the name Slack may show it under, and a repeat still refuses.
+ */
 function rendered(
   text: string,
   mentions: readonly string[] = [],
   images: readonly PostImage[] = [],
-): LeadPayload {
-  const result = renderMarkdown(text, mentions);
+): { payload: LeadPayload; hash: string } {
+  const payload = { text, mentions: [...mentions], images: images.map(({ alt }) => ({ alt })) };
+  const result = renderPayload(payload);
   if (result.kind === "refused") {
     const problem =
-      result.problem === "message_too_long"
-        ? `${result.actual} escaped characters exceeds ${result.limit}. Shorten the text`
-        : result.problem === "empty"
-          ? "Provide nonblank text"
-          : `Remove credentials (${result.problem})`;
+      "image" in result
+        ? `Remove credentials (${result.problem}) from image ${result.image}'s alt text`
+        : result.problem === "message_too_long"
+          ? `${result.actual} escaped characters exceeds ${result.limit}. Shorten the text`
+          : result.problem === "empty"
+            ? "Provide nonblank text"
+            : `Remove credentials (${result.problem})`;
     throw new OutboxRefusedError(`Cannot post: ${problem}.`);
   }
-  for (const [index, { alt }] of images.entries()) {
-    const problem = outputProblem(alt);
-    if (problem)
-      throw new OutboxRefusedError(
-        `Cannot post: Remove credentials (${problem}) from image ${index + 1}'s alt text.`,
-      );
-  }
-  // A post without images keeps the payload, and so the hash, it had before posts showed any.
-  return images.length
-    ? { ...result.message, images: images.map(({ alt }) => ({ alt })) }
-    : result.message;
+  const named = images.length ? { ...result.message, images: payload.images } : result.message;
+  return {
+    payload,
+    hash: new Bun.CryptoHasher("sha256").update(JSON.stringify(named)).digest("hex"),
+  };
 }
 
 /** A reply's outcome answers its request or returns it to the lead. A post in its thread does neither. */
@@ -423,10 +425,11 @@ async function retryFailed(
   tx: Bun.SQL,
   id: string,
   payload: LeadPayload,
+  hash: string,
   now: number,
 ): Promise<OutboxItem> {
   const [row] = await tx<OutboxRow[]>`
-    UPDATE outbox SET state = 'queued', payload = ${JSON.stringify(payload)}, payload_hash = ${hash(payload)},
+    UPDATE outbox SET state = 'queued', payload = ${JSON.stringify(payload)}, payload_hash = ${hash},
       next_attempt_at = NULL, error = NULL, updated_at = ${now} WHERE id = ${id} AND state = 'failed' RETURNING *
   `;
   return outboxItem(row!);
@@ -439,6 +442,7 @@ async function insertItem(
     "linkId" | "requestId" | "kind" | "channelId" | "threadTs" | "series" | "scheduledAt"
   >,
   payload: LeadPayload,
+  hash: string,
   now: number,
 ): Promise<OutboxItem> {
   const [row] = await tx<OutboxRow[]>`
@@ -452,17 +456,13 @@ async function insertItem(
       series: item.series,
       scheduled_at: item.scheduledAt,
       payload: JSON.stringify(payload),
-      payload_hash: hash(payload),
+      payload_hash: hash,
       state: "queued",
       created_at: now,
       updated_at: now,
     })} RETURNING *
   `;
   return outboxItem(row!);
-}
-
-function hash(payload: LeadPayload): string {
-  return new Bun.CryptoHasher("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
 function outboxItem(row: OutboxRow): OutboxItem {

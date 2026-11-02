@@ -1,14 +1,23 @@
 import { expect, test } from "bun:test";
 import { captureLog } from "@bridge/server/testFixtures";
+import { blankPng } from "@files/model/testFixtures";
 import { serveRequest } from "@requests/model/lifecycle";
 import { readRequest, saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { tsAt } from "@slackapi/model/ts";
 import { nonJsonAnswers, unreadableAnswers } from "@slackapi/server/testFixtures";
-import { queuePublication, type OutboxItem } from "./database";
+import { outboxMetadata } from "../model/delivery";
+import { queuePublication, recoverOutboxAttempts, type OutboxItem } from "./database";
+import { attachFiles } from "./files";
 import { createReconciliation } from "./reconcile";
 import { retractPost } from "./retract";
-import { createOutboxWorld } from "./testFixtures";
+import { renderOutboxAtSend } from "./schema";
+import {
+  createOutboxWorld,
+  createVersion5Item,
+  version5Payload,
+  version5Post,
+} from "./testFixtures";
 
 test("one threaded Markdown answer confirms its request, retracts and keeps its reservation", async () => {
   const world = await createOutboxWorld();
@@ -263,4 +272,93 @@ test("a reply whose answer Slack lost keeps its image, since it may have gone ou
   const item = await world.queue("Build minutes.", ["F-1"]);
   expect(await world.post(item.id)).toMatchObject({ item: { state: "delivery_unknown" } });
   expect(await world.owed()).toEqual([]);
+});
+
+test("a post keeps what the lead asked it to say, and goes out as that renders when it's sent", async () => {
+  const world = await createOutboxWorld();
+  const asked = "Ask <@W0BOB> or <!here>, not @channel.";
+  const item = await world.queuePost(undefined, asked);
+  expect(item.payload).toEqual({ text: asked, mentions: [], images: [] });
+
+  expect(await world.post(item.id)).toMatchObject({ item: { state: "sent" } });
+  const text = "Ask &lt;@W0BOB> or &lt;!here>, not @\u200bchannel.";
+  expect(world.slack.calls.at(-1)).toMatchObject({
+    method: "chat.postMessage",
+    args: { text, blocks: JSON.stringify([{ type: "markdown", text }]) },
+  });
+});
+
+test("a post version 5 queued goes out after the update as it would have, under its hash", async () => {
+  const world = await createOutboxWorld();
+  await world.database.write(
+    (tx) => tx`INSERT INTO allowlist (link_id, user_id, added_at)
+      VALUES ('link', 'U0ALICE', 0), ('link', 'U0BOB', 0)`,
+  );
+  world.slack.addFile(blankPng(1, 1), {
+    user: "U-bot",
+    id: "F-1",
+    name: "image-1.png",
+    mimetype: "image/png",
+  });
+  await createVersion5Item(world.database, 1, version5Post.payload, {
+    kind: "post",
+    request_id: null,
+    thread_ts: null,
+  });
+  const queued = await world.read("item-1");
+  await world.database.write(async (tx) => {
+    await attachFiles(tx, "item-1", ["F-1"]);
+    await renderOutboxAtSend(tx);
+  });
+
+  expect(await world.post("item-1")).toMatchObject({ item: { state: "sent" } });
+  const { text, blocks, images } = JSON.parse(version5Post.payload);
+  const [{ alt }] = images;
+  const image = { type: "image", slack_file: { id: "F-1" }, alt_text: alt };
+  expect(world.slack.calls.at(-1)).toMatchObject({
+    method: "chat.postMessage",
+    args: {
+      text,
+      blocks: JSON.stringify([...blocks, { ...image, title: { type: "plain_text", text: alt } }]),
+      mrkdwn: "false",
+      parse: "none",
+      unfurl_links: "false",
+      unfurl_media: "false",
+      metadata: JSON.stringify(outboxMetadata(queued!)),
+    },
+  });
+});
+
+test("a post version 5 was sending when it stopped is found in Slack after the update by its hash", async () => {
+  const world = await createOutboxWorld();
+  await createVersion5Item(world.database, 1, version5Payload("Shipped **1.2**."), {
+    kind: "post",
+    request_id: null,
+    thread_ts: null,
+    state: "sending",
+    attempts: 1,
+    attempt_started_at: world.now(),
+  });
+  const sending = await world.read("item-1");
+  world.slack.setMessage("C-link", {
+    type: "message",
+    team: "T-home",
+    user: "U-bot",
+    bot_id: "B-bot",
+    app_id: "A-app",
+    text: "Shipped **1.2**.",
+    ts: "1700000200.000100",
+    metadata: outboxMetadata(sending!),
+  });
+  await world.database.write(async (tx) => {
+    await renderOutboxAtSend(tx);
+    await recoverOutboxAttempts(tx, world.now());
+  });
+
+  world.advance(60_000);
+  const checks = createReconciliation(world.database, world.bot, { now: world.now });
+  expect(await checks.reconcile("item-1")).toMatchObject({
+    item: { state: "sent", slackTs: "1700000200.000100" },
+  });
+  expect(world.slack.calls.some((call) => call.method === "chat.postMessage")).toBe(false);
 });

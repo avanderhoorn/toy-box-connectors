@@ -1,72 +1,57 @@
 import { expect, test } from "bun:test";
 import { checkLeadPayload } from "./payload";
-import { renderMarkdown } from "./rendering";
 
-function message(
-  text = "Safe **answer**, `Array<string>` and `a && b`, literal &lt;, &#60;@U1&#62;, <@U1> and @channel.",
-  mentions: string[] = [],
-) {
-  const result = renderMarkdown(text, mentions);
-  if (result.kind !== "rendered") throw new Error("Expected rendered text");
-  return result.message;
+const flags = { mrkdwn: false, parse: "none", unfurl_links: false, unfurl_media: false } as const;
+
+function asked(text = "Shipped **1.2**.", mentions: string[] = [], images: { alt: string }[] = []) {
+  return { text, mentions, images };
 }
-test("stored canonical bytes survive JSON and the send check unchanged, naming whom they mention", () => {
-  const original = message();
-  expect(checkLeadPayload(JSON.parse(JSON.stringify(original)))).toEqual({
+
+test("a post goes out as its text renders when it's sent, its block opening with whom it mentions", () => {
+  expect(checkLeadPayload(asked("Shipped **1.2**.", ["U0ALICE", "W0BOB"]))).toEqual({
     kind: "valid",
-    message: original,
-    mentions: [],
-  });
-  const mentioning = message("Shipped.", ["U0ALICE", "W0BOB"]);
-  expect(checkLeadPayload(JSON.parse(JSON.stringify(mentioning)))).toEqual({
-    kind: "valid",
-    message: mentioning,
+    message: {
+      text: "Shipped **1.2**.",
+      blocks: [{ type: "markdown", text: "<@U0ALICE> <@W0BOB>\n\nShipped **1.2**." }],
+      ...flags,
+    },
     mentions: ["U0ALICE", "W0BOB"],
   });
-  expect(checkLeadPayload(message("a".repeat(12_000))).kind).toBe("valid");
-  expect(checkLeadPayload(message("@\u200b\u200bx and @\u200b\u200b\u200beveryone")).kind).toBe(
-    "valid",
-  );
 });
-test("a stored snapshot cannot add controls, change parsing or bypass the limit", () => {
-  const original = message();
-  for (const change of [
-    { parse: "full" },
-    { unfurl_links: true },
-    { link_names: true },
-    { metadata: {} },
-    { text: "different fallback" },
-    { blocks: [] },
-    { blocks: [...original.blocks, ...original.blocks] },
-    { text: "a".repeat(12_001) },
+
+test("text that names people or the channel itself goes out escaped, notifying no one", () => {
+  const text = "Ask &lt;@W0BOB> or &lt;!here>, not @\u200bchannel.";
+  expect(checkLeadPayload(asked("Ask <@W0BOB> or <!here>, not @channel."))).toEqual({
+    kind: "valid",
+    message: { text, blocks: [{ type: "markdown", text }], ...flags },
+    mentions: [],
+  });
+});
+
+test("a stored payload holds only what the lead asked for, never a control, a block or a render", () => {
+  for (const payload of [
+    { ...asked(), parse: "full" },
+    { ...asked(), unfurl_links: true },
+    { ...asked(), link_names: true },
+    { ...asked(), metadata: {} },
+    { ...asked(), blocks: [{ type: "markdown", text: "<!channel>" }] },
+    { ...asked(), mentions: [7] },
+    { text: "Shipped.", images: [] },
+    { text: "Shipped.", mentions: [] },
+    { text: "Shipped.", blocks: [{ type: "markdown", text: "Shipped." }], ...flags },
   ])
-    expect(checkLeadPayload({ ...original, ...change }).kind).toBe("refused");
-  for (const text of ["<!here>", "@channel", "<@U1>", `xoxb-${"a".repeat(32)}`, " \n"]) {
-    expect(checkLeadPayload({ ...original, text, blocks: [{ type: "markdown", text }] }).kind).toBe(
-      "refused",
-    );
-  }
+    expect(checkLeadPayload(payload)).toEqual({ kind: "refused", problem: "invalid_payload" });
 });
-test("a stored snapshot mentions people only on the line the bridge opens its block with", () => {
-  const original = message("Shipped.", ["U0ALICE"]);
-  for (const text of [
-    "<@U0ALICE|alice>\n\nShipped.",
-    "<@U0ALICE>  <@W0BOB>\n\nShipped.",
-    "<@U0ALICE>\nShipped.",
-    "<!here>\n\nShipped.",
-    "<!subteam^S0TEAM>\n\nShipped.",
-    "<@U0ALICE>\n\nShipped. <@W0BOB>",
-    "Shipped.\n\n<@U0ALICE>",
-  ])
-    expect(checkLeadPayload({ ...original, blocks: [{ type: "markdown", text }] }).kind).toBe(
-      "refused",
-    );
-  // Nor in a fallback text the bridge didn't escape, even beside the block it would render.
-  const raw = "<@W0BOB> Shipped.";
-  expect(checkLeadPayload({ ...message(raw, ["U0ALICE"]), text: raw }).kind).toBe("refused");
+
+test("a stored payload is refused at send for what would have refused it in the queue", () => {
+  expect(checkLeadPayload(asked(`Token xoxb-${"a".repeat(32)}`))).toEqual({
+    kind: "refused",
+    problem: "slack_token",
+  });
+  expect(checkLeadPayload(asked(" \n"))).toEqual({ kind: "refused", problem: "empty" });
 });
-test("a stored post shows its images below its text, in order, each headed by its alt text", () => {
-  const original = message("The chart.", ["U0ALICE"]);
+
+test("a post shows its images below its text, in order, each headed by its alt text", () => {
   const image = (file: string, alt: string) =>
     ({
       type: "image",
@@ -74,38 +59,46 @@ test("a stored post shows its images below its text, in order, each headed by it
       alt_text: alt,
       title: { type: "plain_text", text: alt },
     }) as const;
-  const images = [{ alt: "Build minutes per day" }, { alt: "Queue minutes per day" }];
-  const stored = JSON.parse(JSON.stringify({ ...original, images }));
-  expect(checkLeadPayload(stored, ["F1", "F2"])).toEqual({
+  const charts = [{ alt: "Build minutes per day" }, { alt: "Queue minutes per day" }];
+  expect(checkLeadPayload(asked("The chart.", ["U0ALICE"], charts), ["F1", "F2"])).toEqual({
     kind: "valid",
     message: {
-      ...original,
+      text: "The chart.",
       blocks: [
-        ...original.blocks,
+        { type: "markdown", text: "<@U0ALICE>\n\nThe chart." },
         image("F1", "Build minutes per day"),
         image("F2", "Queue minutes per day"),
       ],
+      ...flags,
     },
     mentions: ["U0ALICE"],
   });
 });
-test("a stored post's images match its files, and their alt text passes the text's secret check", () => {
-  const original = message("The chart.");
-  const alt = (text: string) => ({ ...original, images: [{ alt: text }] });
+
+test("a post's images match its files, and their alt text passes the text's secret check", () => {
+  const shown = (...alts: string[]) =>
+    asked(
+      "The chart.",
+      [],
+      alts.map((alt) => ({ alt })),
+    );
   for (const [payload, files] of [
-    [alt("A chart"), []],
-    [original, ["F1"]],
-    [alt("A chart"), ["F1", "F2"]],
-    [{ ...original, images: [] }, []],
-    [{ ...original, images: Array(4).fill({ alt: "A chart" }) }, ["F1", "F2", "F3", "F4"]],
-    [alt(""), ["F1"]],
-    [alt("a".repeat(1001)), ["F1"]],
-    [{ ...original, images: [{ alt: "A chart", file: "F2" }] }, ["F1"]],
+    [shown("A chart"), []],
+    [shown(), ["F1"]],
+    [shown("A chart"), ["F1", "F2"]],
+    [shown("A", "B", "C", "D"), ["F1", "F2", "F3", "F4"]],
+    [shown(""), ["F1"]],
+    [shown("a".repeat(1001)), ["F1"]],
+    [{ ...shown(), images: [{ alt: "A chart", file: "F2" }] }, ["F1"]],
   ] as const)
-    expect(checkLeadPayload(payload, files).kind).toBe("refused");
-  expect(checkLeadPayload(alt("a".repeat(1000)), ["F1"]).kind).toBe("valid");
-  expect(checkLeadPayload(alt(`Token xoxb-${"a".repeat(32)}`), ["F1"])).toEqual({
+    expect(checkLeadPayload(payload, files)).toEqual({
+      kind: "refused",
+      problem: "invalid_payload",
+    });
+  expect(checkLeadPayload(shown("a".repeat(1000)), ["F1"]).kind).toBe("valid");
+  expect(checkLeadPayload(shown("A chart", `Token xoxb-${"a".repeat(32)}`), ["F1", "F2"])).toEqual({
     kind: "refused",
     problem: "slack_token",
+    image: 2,
   });
 });
