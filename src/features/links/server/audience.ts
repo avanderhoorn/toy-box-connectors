@@ -24,7 +24,7 @@ export async function judgeChannelLink(
   const installation = await readInstallation(transaction);
   const link = await readChannelLink(transaction, channelId);
   if (!installation || !link) return null;
-  if (facts?.name) await nameLinkChannel(transaction, link.id, facts.name, now);
+  if (facts?.name) await nameLinkChannel(transaction, link.id, facts.name);
   const verdict = judgeChannel(link.approved, facts, installation);
   if (verdict.kind === "suspended") await suspendLink(transaction, link.id, verdict.reason, now);
   return verdict;

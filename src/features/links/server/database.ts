@@ -56,15 +56,17 @@ async function readLink(
   };
 }
 
-/** Records the name Slack now gives the link's channel. */
+/**
+ * Records the name Slack now gives the link's channel. It leaves `updated_at` alone, since for a
+ * suspended link that's when it was suspended, which decides whether its lead was woken for it.
+ */
 export async function nameLinkChannel(
   transaction: Bun.SQL,
   linkId: string,
   name: string,
-  now: number,
 ): Promise<void> {
   await transaction`
-    UPDATE links SET slack_channel_name = ${name}, updated_at = ${now}
+    UPDATE links SET slack_channel_name = ${name}
     WHERE id = ${linkId} AND slack_channel_name IS NOT ${name}
   `;
 }

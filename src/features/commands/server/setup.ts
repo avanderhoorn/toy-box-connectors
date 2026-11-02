@@ -130,7 +130,7 @@ export function allowCommand(options: SetupCommandOptions): CommandHandler<"allo
       }
       // Unless the link moved to another channel while Slack was asked.
       const named = link.slackChannelId === slackChannelId ? name : null;
-      if (named) await nameLinkChannel(transaction, link.id, named, at);
+      if (named) await nameLinkChannel(transaction, link.id, named);
       const allowed = [...people.values()].map((person) => shown(person, person.id));
       return {
         result: { added: added.map((person) => person.id) },

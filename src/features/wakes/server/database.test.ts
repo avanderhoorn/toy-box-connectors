@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
+import { nameLinkChannel } from "@links/server/database";
+import { suspendLink } from "@links/server/status";
 import { createStoredLink } from "@links/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
+import { decideWake } from "@wakes/model";
 import { pruneWakes, readLinkWakes, recordWake } from "./database";
 
 const HOUR = 60 * 60_000;
@@ -64,6 +67,23 @@ test("a link's wake state is its open and seen requests and its runs, newest fir
       requests: [],
       runs: [],
     },
+  ]);
+});
+
+test("naming a suspended link's channel keeps when it was suspended, so its lead isn't woken again", async () => {
+  const database = await openTestDatabase();
+  await createStoredLink(database);
+  await database.write(async (transaction) => {
+    await suspendLink(transaction, "link", "channel_archived", HOUR);
+    await recordWake(transaction, "link", 2 * HOUR, "ran");
+    await nameLinkChannel(transaction, "link", "renamed");
+  });
+
+  const [link] = await database.read(readLinkWakes);
+  expect(link!.suspendedAt).toBe(HOUR);
+  expect(decideWake(3 * HOUR, link!)).toEqual({ kind: "idle" });
+  expect(await database.read((sql) => sql`SELECT slack_channel_name FROM links`)).toEqual([
+    { slack_channel_name: "renamed" },
   ]);
 });
 
