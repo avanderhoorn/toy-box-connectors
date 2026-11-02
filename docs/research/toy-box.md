@@ -992,3 +992,31 @@ send that was open at the time closed. It then delivered them in FIFO order, one
     unknown after reconnecting.
 - **Lead behavior.** Don't finish a turn while a background subagent is still running, or use a
   synchronous task or a member instead. Otherwise every wake can wait out that subagent.
+
+### Addendum, 2026-10-31: has anything changed?
+
+- **Nothing on the wake path changed.**
+  - The running Toy Box is still the `8cafc93` build. `~/.local/share/toy-box-serve/toy-box` is
+    byte-identical to the checkout binary, restarted Oct 30 15:00.
+  - The CLI is still 1.0.105.
+  - Upstream `79db7bf` (Oct 31) still wakes with `immediate: true` (`wakeChannelAgent`). It renames
+    `wakeDueAgent` to `wakeQuietly`. Its Copilot `abort` now relies on native abort to cancel queued
+    and steering input instead of calling `rpc.queue.clear()`. It has no held-wake fix.
+- **No held wake recurred.**
+  - All six bridge runs still in `wakes` reached their lead within 3.2 s, as `idle` or `steering`.
+    That's four for 20c09e0a, at 10-30 22:38 and 22:39 and 10-31 16:57 and 20:59. The other two
+    were for 659627e6.
+  - The only `queued` channel delivery since §10 was at 10-30 15:22:13. It was **Toy Box's own
+    deferral**: two Trust Engineer posts landed 1 ms apart (seq 824 and 825). The first started a
+    turn, and `SessionStream.deliver` deferred the second to Toy Box's queue because the first was
+    mid-submit. Toy Box drained it 34 ms after that turn ended, 23 s later.
+  - So `queued` labels both the CLI's held lane and Toy Box's non-immediate drain.
+- **Ways a 2xx run can still never reach or move the lead.**
+  1. A process restart while the wake waits in memory. That's either Toy Box's queue (the deferral
+     case above), or the CLI's queued or steering lane. Whether the CLI persists its lane isn't
+     verified.
+  2. A turn that errors or aborts after the wake steered into it.
+  3. The lead reads the wake but doesn't run inbox.
+
+  None of these was observed. A bounded late re-wake covers all three. Re-waking within the
+  hold window only adds a duplicate.
