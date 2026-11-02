@@ -10,7 +10,7 @@ import {
   type WebAPICallResult,
   type WebClientOptions,
 } from "@slack/web-api";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 import { log as bridgeLog, type Log } from "@/shared/log";
 import { issuesOf } from "../model/envelopes";
 import { isAuthFailure, isErrorCode, isRateLimit, isRequestFault } from "../model/errors";
@@ -82,6 +82,8 @@ export function createBotClient(
         }
         const failure = readCallFailure(error);
         if (!failure) throw error;
+        if (failure.kind === "unknown" && failure.detail === "unreadable response")
+          log(`Couldn't read Slack's answer to ${method}: unreadable response.`);
         if (failure.kind === "rate_limited") {
           const until = Math.max(
             cooldowns.get(method) ?? 0,
@@ -159,16 +161,25 @@ export const silentLogger: Logger = {
   getLevel: () => LogLevel.ERROR,
 };
 
+const errorMetadataSchema = z
+  .object({
+    messages: z.array(z.string()).optional(),
+    retryAfter: z.number().nonnegative().optional(),
+  })
+  .optional();
+
 export function readCallFailure(error: unknown): CallFailure | null {
   if (error instanceof WebAPIRateLimitedError)
     return { kind: "rate_limited", retryAfterSeconds: error.retryAfter };
   if (error instanceof WebAPIPlatformError) {
     const code: unknown = error.data.error;
-    if (!isErrorCode(code)) return { kind: "unknown", detail: "unreadable response" };
+    const metadata = errorMetadataSchema.safeParse(error.data.response_metadata);
+    if (!isErrorCode(code) || !metadata.success)
+      return { kind: "unknown", detail: "unreadable response" };
     if (isRateLimit(code))
       return {
         kind: "rate_limited",
-        retryAfterSeconds: error.data.response_metadata?.retryAfter ?? 60,
+        retryAfterSeconds: metadata.data?.retryAfter ?? 60,
       };
     if (isAuthFailure(code)) return { kind: "auth_failed", error: code };
     return { kind: "error", error: code, data: error.data };

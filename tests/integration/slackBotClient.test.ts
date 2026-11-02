@@ -92,6 +92,30 @@ test.each(unreadableAnswers)(
     ).toEqual({ kind: "unknown", detail: "unreadable response" });
   },
 );
+test.each([
+  { messages: [7] },
+  { messages: "The staging password is hunter2" },
+  { retryAfter: "later" },
+  { retryAfter: -1 },
+])("unreadable error metadata is no answer: %j", async (metadata) => {
+  const { slack, bot } = await setup();
+  const logged = captureLog();
+  const channelId = slack.addChannel();
+  const body = JSON.stringify({
+    ok: false,
+    error: "ratelimited",
+    response_metadata: metadata,
+  });
+  slack.failNext("conversations.history", { body });
+  expect(
+    await bot.call("conversations.history", (client) =>
+      fetchHistoryPage(client, { channelId, oldest: "0", cursor: null }),
+    ),
+  ).toEqual({ kind: "unknown", detail: "unreadable response" });
+  expect(logged()).toEqual([
+    "Couldn't read Slack's answer to conversations.history: unreadable response.",
+  ]);
+});
 test("logs the method and what didn't parse in an answer, never what it said", async () => {
   const { slack, bot } = await setup();
   const logged = captureLog();

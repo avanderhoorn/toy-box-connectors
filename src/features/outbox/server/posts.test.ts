@@ -93,7 +93,17 @@ test("accepted then deleted posts remain unknown after two clean misses, and fai
   expect(world.slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
 });
 
-test.each(unreadableAnswers)(
+test.each([
+  ...unreadableAnswers,
+  [
+    "has malformed error metadata",
+    JSON.stringify({
+      ok: false,
+      error: "internal_error",
+      response_metadata: { messages: [7] },
+    }),
+  ],
+])(
   "an answer that %s holds a post back, and one to the post is reconciled, never sent again",
   async (_, body) => {
     const world = await createOutboxWorld();
