@@ -124,11 +124,11 @@ test("link says the channel's audience as Slack describes it as it links", async
 });
 
 test("link won't move a link to another Slack channel until the owner unlinks it", async () => {
-  const { slack, as } = await ownedBridge();
+  const { slack, channelId, as } = await ownedBridge();
   slack.addChannel({ id: "C0OTHER", name: "general" });
   expect(await as("a terminal", "link", { slackChannel: "C0OTHER" })).toMatchObject({
     exitCode: 1,
-    text: "This Toy Box channel is linked to #C0LINK. Run `toy-box-slack unlink` before you link it to another channel.",
+    text: `This Toy Box channel is linked to #C0LINK. Run \`toy-box-slack unlink --channel ${channelId}\` before you link it to another channel.`,
   });
 });
 

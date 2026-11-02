@@ -131,7 +131,7 @@ Publish release notes in Slack: run git log and read the completed tasks now, ev
 
 `toy-box-slack status` shows the link, the allowlist by name and member ID, Slack's connection, the requests, posts Slack hasn't confirmed and the wakes, and says how to fix what's wrong.
 
-- A suspended link answers and posts nothing. The bridge suspends it when something in Slack needs the owner, such as the channel being archived or shared outside the workspace, and wakes you once. Tell the owner what status says, adding `--channel <this channel's ID>` to any command it gives them.
+- A suspended link answers and posts nothing. The bridge suspends it when something in Slack needs the owner, such as the channel being archived or shared outside the workspace, and wakes you once. Tell the owner what status says.
 - A post Slack never confirmed may have landed, so the bridge never sends it again. Tell the owner, with any link status gives for it, so they can check. If an answer didn't reach its person, their follow-up comes back as a new request.
 - If status says no routine runs `toy-box-slack inbox`, create the Slack requests routine again.
 - The bridge never deletes a routine, so after the link is removed, the routines that run toy-box-slack keep waking you. Unless the owner means to link this channel again, delete them with delete_routine.

@@ -23,8 +23,8 @@ import {
 } from "./setup";
 import { refusal } from "./testFixtures";
 
-const MOVED =
-  "The link to #C-link is suspended because Slack gave its channel a new ID. Run `toy-box-slack unlink`, then have the owner link the channel again by its new ID.";
+const moved = (channelId: string) =>
+  `The link to #C-link is suspended because Slack gave its channel a new ID. Run \`toy-box-slack unlink --channel ${channelId}\`, then have the owner link the channel again by its new ID.`;
 
 /** Commands that can't reach Toy Box or Slack, so they show what's decided before either is asked. */
 const offline = (database: BridgeDatabase) => ({
@@ -44,9 +44,9 @@ test("link and resume refuse a link Slack gave a new channel ID, by either ID, b
   const resume = resumeCommand(offline(database));
   const link = linkCommand(offline(database));
 
-  expect(await refusal(resume({}, OWNER))).toBe(MOVED);
-  expect(await refusal(link({ slackChannel: "C-link" }, OWNER))).toBe(MOVED);
-  expect(await refusal(link({ slackChannel: "C-moved" }, OWNER))).toBe(MOVED);
+  expect(await refusal(resume({}, OWNER))).toBe(moved("toybox-link"));
+  expect(await refusal(link({ slackChannel: "C-link" }, OWNER))).toBe(moved("toybox-link"));
+  expect(await refusal(link({ slackChannel: "C-moved" }, OWNER))).toBe(moved("toybox-link"));
 });
 
 test("resume refuses a channel with no link, before it asks Toy Box or Slack", async () => {
@@ -106,7 +106,7 @@ test("a link Slack gives a new channel ID while link asks Slack is refused as it
 
   const answer = linkCommand(options)({ slackChannel: "C-link" }, { channelId, at: 1_000 });
 
-  expect(await refusal(answer)).toBe(MOVED);
+  expect(await refusal(answer)).toBe(moved(channelId));
   expect(await database.read((sql) => sql`SELECT status, status_reason FROM links`)).toEqual([
     { status: "suspended", status_reason: "channel_id_changed" },
   ]);
@@ -123,7 +123,7 @@ test("pause leaves a suspended link as it is, and says why it's suspended and wh
 
   expect(await pauseCommand(offline(database))({}, OWNER)).toEqual({
     result: { status: "suspended" },
-    text: "The link to #C-link is suspended because Slack gave its channel a new ID, so nothing new opens and nothing posts. Run `toy-box-slack unlink`, then have the owner link the channel again by its new ID.",
+    text: "The link to #C-link is suspended because Slack gave its channel a new ID, so nothing new opens and nothing posts. Run `toy-box-slack unlink --channel toybox-link`, then have the owner link the channel again by its new ID.",
   });
   expect(await links()).toEqual(before);
 });
@@ -134,7 +134,7 @@ test("pause answers that a link that was active is paused", async () => {
 
   expect(await pauseCommand(offline(database))({}, OWNER)).toEqual({
     result: { status: "paused" },
-    text: "The link to #C-link is paused, so nothing new opens and nothing posts. Have the owner run `toy-box-slack resume`.",
+    text: "The link to #C-link is paused, so nothing new opens and nothing posts. Have the owner run `toy-box-slack resume --channel toybox-link`.",
   });
 });
 
@@ -418,7 +418,7 @@ test("link names the channel its Toy Box channel is already linked to by the nam
   const answer = linkCommand(options)({ slackChannel: "C-other" }, { channelId, at: 1_000 });
 
   expect(await refusal(answer)).toBe(
-    "This Toy Box channel is linked to #stored-name. Run `toy-box-slack unlink` before you link it to another channel.",
+    `This Toy Box channel is linked to #stored-name. Run \`toy-box-slack unlink --channel ${channelId}\` before you link it to another channel.`,
   );
 });
 

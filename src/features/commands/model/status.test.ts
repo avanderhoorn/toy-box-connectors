@@ -47,6 +47,23 @@ test("Slack is set up once both tokens are, and until then serve asks the owner 
   );
 });
 
+test("each fix a link's status gives names its Toy Box channel, so it runs as printed at a terminal", () => {
+  const line = (changes: Partial<LinkStatus>, starts: string) =>
+    presentStatus({ slack: connected, links: [{ ...link, ...changes }] }, 60_000)
+      .split("\n")
+      .find((shown) => shown.startsWith(starts));
+
+  expect(line({ status: "paused" }, "- Link:")).toBe(
+    "- Link: paused, so nothing new opens and nothing posts. Have the owner run `toy-box-slack resume --channel toybox-link`.",
+  );
+  expect(line({ status: "suspended", statusReason: "bot_removed" }, "- Link:")).toBe(
+    "- Link: suspended because the bot was removed from its Slack channel, so nothing new opens and nothing posts. Invite the bot back to the channel, then have the owner run `toy-box-slack resume --channel toybox-link`.",
+  );
+  expect(line({ lastWake: { at: 0, outcome: "missing" } }, "- Wakes:")).toContain(
+    "Create that routine, or run `toy-box-slack unlink --channel toybox-link` if the channel is gone. Last checked 1 minute ago.",
+  );
+});
+
 test("says whom a link answers, by name and member ID, and when, for one person, several or nobody yet", () => {
   const answers = (changes: Partial<LinkStatus>) =>
     presentStatus({ slack: connected, links: [{ ...link, ...changes }] }, 0)

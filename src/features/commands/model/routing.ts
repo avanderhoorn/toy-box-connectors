@@ -7,6 +7,7 @@
 // app.
 
 import { DEFAULT_APP } from "@bridge/model/apps";
+import { channelCommand } from "@links/model/status";
 import type { CommandName } from "./index";
 
 /** Where a call runs: in one app, in every app, or nowhere, and why. */
@@ -38,10 +39,10 @@ export function routeCommand({
   if (name === "status" && channelId === null) return { kind: "every" };
   if (app === undefined) return { kind: "app", app: linkedThrough ?? DEFAULT_APP };
   if (!hosted.includes(app)) return { kind: "refused", message: notHosted(app, hosted) };
-  if (linkedThrough !== null && linkedThrough !== app) {
+  if (channelId !== null && linkedThrough !== null && linkedThrough !== app) {
     return {
       kind: "refused",
-      message: `This Toy Box channel links through the ${linkedThrough} app. Run \`toy-box-slack unlink\` before you link it through the ${app} app.`,
+      message: `This Toy Box channel links through the ${linkedThrough} app. Run ${channelCommand("unlink", channelId)} before you link it through the ${app} app.`,
     };
   }
   return { kind: "app", app };

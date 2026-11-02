@@ -2,7 +2,7 @@
 // comes with what to do about it. A bridge that hosts several apps shows each one's under its name,
 // and one that hosts only the default app shows it as it did before the bridge hosted several.
 
-import { suspensions, type SuspendReason } from "@links/model/status";
+import { channelCommand, suspensions, type SuspendReason } from "@links/model/status";
 import { missingTokensProblem } from "@slackapi/model/identity";
 import { STALL_AFTER, type WakeDecision, type WakeRun } from "@wakes/model";
 import type { SlackPerson } from "./inbox";
@@ -85,13 +85,13 @@ export type Status = { slack: SlackState; links: LinkStatus[] };
 export type AppStatus = Status & { app: string };
 
 const halted = "so nothing new opens and nothing posts.";
-const resume = "Have the owner run `toy-box-slack resume`.";
 
-const unwoken: Record<Exclude<WakeRun["outcome"], "ran">, string> = {
-  missing:
-    "No routine in this Toy Box channel runs `toy-box-slack inbox`, or the channel was deleted. Create that routine, or run `toy-box-slack unlink` if the channel is gone. Last checked",
-  failed: "Toy Box didn't answer the last wake, so the bridge retries. It last tried",
-  refused: "Toy Box refused the last wake",
+/** Why the last wake didn't run, for the link of the Toy Box channel it's given. */
+const unwoken: Record<Exclude<WakeRun["outcome"], "ran">, (channelId: string) => string> = {
+  missing: (channelId) =>
+    `No routine in this Toy Box channel runs \`toy-box-slack inbox\`, or the channel was deleted. Create that routine, or run ${channelCommand("unlink", channelId)} if the channel is gone. Last checked`,
+  failed: () => "Toy Box didn't answer the last wake, so the bridge retries. It last tried",
+  refused: () => "Toy Box refused the last wake",
 };
 
 /** Status as Markdown, a section for Slack and one for each link. */
@@ -162,17 +162,20 @@ function describeUnconfirmed({
 export function presentLinkState({
   status,
   statusReason,
-}: Pick<LinkStatus, "status" | "statusReason">): string {
+  toyBoxChannelId,
+}: Pick<LinkStatus, "status" | "statusReason" | "toyBoxChannelId">): string {
   if (status === "active") return "active.";
   const suspension = status === "suspended" ? suspensions[statusReason as SuspendReason] : null;
-  if (!suspension) return `${status}, ${halted} ${resume}`;
-  return `suspended ${suspension.because}, ${halted} ${suspension.fix}`;
+  if (!suspension) {
+    return `${status}, ${halted} Have the owner run ${channelCommand("resume", toyBoxChannelId)}.`;
+  }
+  return `suspended ${suspension.because}, ${halted} ${suspension.fix(toyBoxChannelId)}`;
 }
 
-function presentWake({ wake, lastWake }: LinkStatus, at: number): string {
+function presentWake({ toyBoxChannelId, wake, lastWake }: LinkStatus, at: number): string {
   const last =
     lastWake && lastWake.outcome !== "ran"
-      ? ` ${unwoken[lastWake.outcome]} ${ago(at - lastWake.at)}.`
+      ? ` ${unwoken[lastWake.outcome](toyBoxChannelId)} ${ago(at - lastWake.at)}.`
       : "";
   switch (wake.kind) {
     case "wake":

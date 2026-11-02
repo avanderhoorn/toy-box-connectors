@@ -177,7 +177,7 @@ test("links a Toy Box channel through only one app when two links race", async (
     status: 409,
     answer: {
       error:
-        "This Toy Box channel links through the releases app. Run `toy-box-slack unlink` before you link it through the default app.",
+        "This Toy Box channel links through the releases app. Run `toy-box-slack unlink --channel toybox-new` before you link it through the default app.",
     },
   });
   const linked = (name: string) =>

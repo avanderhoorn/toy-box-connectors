@@ -1,11 +1,12 @@
 // A rare event in Slack suspends a link until the owner resumes or unlinks it, and wakes the lead
-// once so it can tell them. Status says why, and what an allowed person asks while it's suspended
-// doesn't reach the lead. What the lead wrote before more people could read the channel never
+// once so it can tell them. Status says why, with a fix that runs as printed at a terminal, and
+// what an allowed person asks while it's suspended doesn't reach the lead. What the lead wrote before more people could read the channel never
 // posts there, and resuming gives the lead back what it answered, to answer again. What the lead
 // posted before the owner paused the link never posts either, though its answers do.
 
 import { expect, test } from "bun:test";
 import { callBridge } from "@commands/client/cli";
+import { runToyBoxSlack } from "./bridgeProcess";
 import { ALICE, BOT, connectedBridge, posted, said, timestamps } from "./connectedBridge";
 import { waitFor } from "./waitFor";
 
@@ -28,6 +29,21 @@ test("when the channel is made public, the bridge suspends the link and wakes th
   expect(await stop()).toEqual({ code: 0, stderr: saying() });
   expect(toyBox.runs).toHaveLength(1);
 });
+
+test("status at a terminal gives a fix that runs there as printed, and a lead that runs it is refused", async () => {
+  const { channelId, home, status, deliver, stop, saying } = await connectedBridge();
+  await deliver(notice("channel_convert_to_public", "made this channel *public*"));
+  const shown = await runToyBoxSlack(["status"], { HOME: home });
+  const fix = /Have the owner run `toy-box-slack ([^`]+)`/.exec(shown.stdout)?.[1].split(" ");
+
+  expect(fix).toEqual(["resume", "--channel", channelId]);
+  expect(
+    await runToyBoxSlack(fix!, { HOME: home, COPILOT_AGENT_SESSION_ID: channelId }),
+  ).toMatchObject({ exitCode: 1, stderr: "Only the owner at a terminal runs `resume`.\n" });
+  expect(await runToyBoxSlack(fix!, { HOME: home })).toMatchObject({ exitCode: 0, stderr: "" });
+  expect(await status(channelId)).toMatchObject({ json: { links: [{ status: "active" }] } });
+  expect(await stop()).toEqual({ code: 0, stderr: saying() });
+}, 15_000);
 
 test("an answer held when the channel is made public never posts there, and once the owner resumes, the lead answers again", async () => {
   const { channelId, home, slack, toyBox, status, inbox, reply, post, stop, saying } =

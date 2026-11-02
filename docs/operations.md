@@ -67,9 +67,11 @@ answers as `link` does, with what the link reaches now.
 The bridge suspends a link itself when Slack reports a change the owner must
 review, such as an archive, a widened audience, bot removal or a new channel
 ID. Like a paused link, it holds posts and opens no new requests, and status
-says why and what ends it. The owner must fix the cause before resuming. A
-new Slack channel ID instead requires unlinking the old link and linking the
-new ID. Do not edit the database to bypass an audience or policy refusal.
+says why and what ends it, with a command that names the link's Toy Box
+channel, so it runs as printed at a terminal. The owner must fix the cause
+before resuming. A new Slack channel ID instead requires unlinking the old
+link and linking the new ID. Do not edit the database to bypass an audience
+or policy refusal.
 
 When more people can read the channel than the owner approved before, as
 after it was made public, resume or link approves that audience and drops

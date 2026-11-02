@@ -18,7 +18,7 @@ import { presentLinkState } from "@commands/model/status";
 import { count } from "@commands/model/wording";
 import { admissionProblem } from "@links/model/admission";
 import { approvableAudience, widening, type Audience } from "@links/model/audience";
-import { suspensions } from "@links/model/status";
+import { channelCommand, suspensions } from "@links/model/status";
 import {
   allowPerson,
   denyPeople,
@@ -207,7 +207,7 @@ async function linkChannel(
     }
     if (link && link.slackChannelId !== slackChannelId) {
       throw new CommandRefusedError(
-        `This Toy Box channel is linked to ${linkChannelName(link)}. Run \`toy-box-slack unlink\` before you link it to another channel.`,
+        `This Toy Box channel is linked to ${linkChannelName(link)}. Run ${channelCommand("unlink", toyBoxChannelId)} before you link it to another channel.`,
       );
     }
     if (!link && (await readChannelLink(transaction, slackChannelId))) {
@@ -273,7 +273,9 @@ function refuseMoved(link: ChannelLink | null): void {
   if (link?.statusReason !== "channel_id_changed") return;
   const { because, fix } = suspensions.channel_id_changed;
   const channel = linkChannelName(link);
-  throw new CommandRefusedError(`The link to ${channel} is suspended ${because}. ${fix}`);
+  throw new CommandRefusedError(
+    `The link to ${channel} is suspended ${because}. ${fix(link.toyBoxChannelId)}`,
+  );
 }
 
 /** The Toy Box channel's name, refusing one that's missing or whose lead isn't on Copilot. */
