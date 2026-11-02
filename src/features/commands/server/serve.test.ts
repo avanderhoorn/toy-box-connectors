@@ -186,7 +186,7 @@ test("links a Toy Box channel through only one app when two links race", async (
   expect(await linked(DEFAULT_APP)).toEqual([]);
 });
 
-test("runs link and resume one at a time, and every other command meanwhile", async () => {
+test("runs links one at a time, and every other command meanwhile", async () => {
   const linking = Promise.withResolvers<void>();
   const held = Promise.withResolvers<void>();
   const started: string[] = [];
@@ -214,13 +214,12 @@ test("runs link and resume one at a time, and every other command meanwhile", as
 
   const link = call("link", { caller: terminal("toybox-link"), input: { slackChannel: "C0NEW" } });
   await linking.promise;
-  const resume = call("resume", { caller: terminal("toybox-other"), input: {} });
+  await call("resume", { caller: terminal("toybox-other"), input: {} });
   await call("pause", { caller: terminal("toybox-other"), input: {} });
-  expect(started).toEqual(["link", "pause"]);
+  expect(started).toEqual(["link", "resume", "pause"]);
 
   held.resolve();
-  await Promise.all([link, resume]);
-  expect(started).toEqual(["link", "pause", "resume"]);
+  await link;
 });
 
 test("logs why a command failed under the app it ran in, and says it may or may not have run", async () => {

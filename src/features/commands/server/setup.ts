@@ -57,7 +57,7 @@ export function linkCommand(options: SetupCommandOptions): CommandHandler<"link"
 export function resumeCommand(options: SetupCommandOptions): CommandHandler<"resume"> {
   return async (_input, context) => {
     const link = await options.database.read((sql) => readCallerLink(sql, context.channelId));
-    return linkChannel(options, context, link.slackChannelId, {});
+    return linkChannel(options, context, link.slackChannelId, {}, link);
   };
 }
 
@@ -174,13 +174,15 @@ export function denyCommand({ database }: SetupCommandOptions): CommandHandler<"
  * When more people can read the channel than the owner approved before, what the link holds
  * queued fails, since the lead wrote it for fewer, and when the link was paused or suspended, its
  * posts do. A link Slack moved is refused before Toy Box or Slack is asked, and again as it
- * writes, since Slack can move it while they're asked.
+ * writes, since Slack can move it while they're asked. Resuming makes only the link it read active
+ * again, so an unlink while Toy Box and Slack are asked wins.
  */
 async function linkChannel(
   options: SetupCommandOptions,
   { channelId, at }: CommandContext,
   slackChannelId: string,
   wanted: Partial<Pick<CallerLink, "requestMode" | "observe">>,
+  resuming: CallerLink | null = null,
 ): Promise<CommandAnswer> {
   const { database, toyBoxOrigin, app = null } = options;
   const toyBoxChannelId = callerChannel(channelId);
@@ -198,6 +200,11 @@ async function linkChannel(
   return database.write(async (transaction) => {
     const link = await readToyBoxLink(transaction, toyBoxChannelId);
     refuseMoved(link);
+    if (resuming && link?.id !== resuming.id) {
+      throw new CommandRefusedError(
+        `The link to ${resuming.channel} was removed, so there's nothing to resume.`,
+      );
+    }
     if (link && link.slackChannelId !== slackChannelId) {
       throw new CommandRefusedError(
         `This Toy Box channel is linked to ${linkChannelName(link)}. Run \`toy-box-slack unlink\` before you link it to another channel.`,

@@ -2,9 +2,9 @@
 // nothing about any channel. Then it parses the input with the command's schema, finds the app the
 // command runs in (see ../model/routing), and runs it there.
 //
-// A Toy Box channel links through at most one app. Link and resume are the only commands that make
-// a link, so they run one at a time across every app, each finding the app it runs in once those
-// before it are done.
+// A Toy Box channel links through at most one app. Link is the only command that makes a link, so
+// links run one at a time across every app, each finding the app it runs in once those before it
+// are done.
 
 import type { z } from "zod";
 import {
@@ -42,8 +42,6 @@ function unknownOptions(name: string, error: z.ZodError): string | null {
   if (unknown.length === 0) return null;
   return `The bridge's \`${name}\` doesn't take ${orList(unknown)}, so it didn't run. ${ANOTHER_RELEASE}`;
 }
-
-const LINKING = new Set<CommandName>(["link", "resume"]);
 
 /** What a command learns about its call besides its input. */
 export type CommandContext = {
@@ -105,7 +103,7 @@ export function serveCommands({
       );
     }
     const serve = () => serveCall(name as CommandName, call.data);
-    return LINKING.has(name as CommandName) ? linking.enqueue(serve) : serve();
+    return name === "link" ? linking.enqueue(serve) : serve();
   };
 
   async function serveCall(name: CommandName, call: CommandCall): Promise<Response> {

@@ -49,6 +49,41 @@ test("link and resume refuse a link Slack gave a new channel ID, by either ID, b
   expect(await refusal(link({ slackChannel: "C-moved" }, OWNER))).toBe(MOVED);
 });
 
+test("resume refuses a channel with no link, before it asks Toy Box or Slack", async () => {
+  const database = await openTestDatabase();
+
+  expect(await refusal(resumeCommand(offline(database))({}, OWNER))).toBe(
+    "Toy Box channel toybox-link isn't linked to Slack.",
+  );
+  expect(await database.read((sql) => sql`SELECT * FROM links`)).toEqual([]);
+});
+
+test("an unlink while resume asks Slack wins, so resume refuses and makes no link", async () => {
+  const { database, bot } = await createOutboxWorld();
+  const toyBox = startFakeToyBox();
+  onTestFinished(() => toyBox.stop());
+  const channelId = toyBox.addChannel();
+  await database.write(
+    (transaction) =>
+      transaction`UPDATE links SET toybox_channel_id = ${channelId}, status = 'paused'`,
+  );
+  const unlink = unlinkCommand(offline(database));
+  const unlinking: BotClient = {
+    ...bot,
+    async call(method, run) {
+      const call = await bot.call(method, run);
+      await unlink({}, { channelId, at: 1_000 });
+      return call;
+    },
+  };
+  const options = { database, bot: unlinking, toyBoxOrigin: new URL(toyBox.url) };
+
+  expect(await refusal(resumeCommand(options)({}, { channelId, at: 1_000 }))).toBe(
+    "The link to #C-link was removed, so there's nothing to resume.",
+  );
+  expect(await database.read((sql) => sql`SELECT * FROM links`)).toEqual([]);
+});
+
 test("a link Slack gives a new channel ID while link asks Slack is refused as it writes", async () => {
   const { database, bot } = await createOutboxWorld();
   const toyBox = startFakeToyBox();
