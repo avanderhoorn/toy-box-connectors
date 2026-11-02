@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from "bun:test";
 import { createStoredMessage } from "@activity/server/testFixtures";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { captureLog, openTestDatabase } from "@bridge/server/testFixtures";
+import { allowPerson } from "@links/server/database";
 import { pauseLink, suspendLink } from "@links/server/status";
 import { countRows, createStoredLink, fillEveryTable } from "@links/server/testFixtures";
 import { queuePublication, queueReply } from "@outbox/server/database";
@@ -9,9 +10,10 @@ import { createOutboxWorld } from "@outbox/server/testFixtures";
 import { readRequest } from "@requests/server/database";
 import { cancelStoredRequest } from "@requests/server/lifecycle";
 import { createStoredRequest } from "@requests/server/testFixtures";
-import { askMessage } from "@slackapi/model/testFixtures";
+import { askMessage, slackPerson } from "@slackapi/model/testFixtures";
 import type { BotClient } from "@slackapi/server/botClient";
 import { unreadableAnswers } from "@slackapi/server/testFixtures";
+import { writeSlackPerson } from "@slackapi/server/users";
 import { startFakeToyBox } from "../../../../tests/fakes/toybox";
 import {
   allowCommand,
@@ -155,6 +157,27 @@ test("deny cancels the requests of the people it removes, so a reply queued for 
     item: { state: "failed", error: "request_no_longer_valid" },
   });
   expect(world.slack.calls.some((call) => call.method === "chat.postMessage")).toBe(false);
+});
+
+test("deny and unlink forget the name of whoever no link allows now, in the write that ends that", async () => {
+  const database = await openTestDatabase();
+  for (const link of ["link", "other"]) await createStoredLink(database, link);
+  await database.write(async (transaction) => {
+    await writeSlackPerson(transaction, slackPerson());
+    await writeSlackPerson(transaction, slackPerson({ id: "U-dan", realName: "Dan Diaz" }));
+    await allowPerson(transaction, "link", "U-carol", 0);
+    await allowPerson(transaction, "link", "U-dan", 0);
+    await allowPerson(transaction, "other", "U-dan", 0);
+  });
+  const named = () => database.read((sql) => sql`SELECT user_id AS id FROM users ORDER BY 1`);
+  const owner = (link: string) => ({ channelId: `toybox-${link}`, at: 1_000 });
+
+  await denyCommand(offline(database))({ users: ["U-carol"] }, owner("link"));
+  expect(await named()).toEqual([{ id: "U-dan" }]);
+  await unlinkCommand(offline(database))({}, owner("link"));
+  expect(await named()).toEqual([{ id: "U-dan" }]);
+  await unlinkCommand(offline(database))({}, owner("other"));
+  expect(await named()).toEqual([]);
 });
 
 test("unlink deletes what the bridge kept for its link, and nothing of another link's", async () => {

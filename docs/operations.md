@@ -199,8 +199,8 @@ Slack never confirmed it or the bridge still keeps a reply or post in its
 thread, and after that it can't be retracted or named with `post --thread`. A
 request whose reply's delivery is unknown never finishes, so it stays too, and
 a finished one stays while a post in its thread may still go out or its
-delivery is unknown. A person's name and other IDs go within an hour of the
-`deny` or `unlink` that leaves no link allowing them.
+delivery is unknown. A person's name and other IDs go with the `deny` or
+`unlink` that leaves no link allowing them.
 
 Catch-up scans roots at most 30 days old and follows threads with replies
 since the gap. It takes new or edited versions from five minutes before the

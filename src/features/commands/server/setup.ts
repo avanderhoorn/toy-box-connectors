@@ -35,7 +35,12 @@ import type { SlackPerson } from "@slackapi/model/users";
 import type { BotClient } from "@slackapi/server/botClient";
 import { fetchChannelFacts } from "@slackapi/server/channels";
 import { readInstallation } from "@slackapi/server/installation";
-import { fetchSlackPerson, readPersonIds, writeSlackPerson } from "@slackapi/server/users";
+import {
+  fetchSlackPerson,
+  forgetUnallowedPeople,
+  readPersonIds,
+  writeSlackPerson,
+} from "@slackapi/server/users";
 import { readToyBoxChannel } from "@toybox/server/api";
 import { callerChannel, linkChannelName, readCallerLink, type CallerLink } from "./link";
 import type { CommandContext, CommandHandler } from "./serve";
@@ -80,8 +85,8 @@ export function pauseCommand({ database }: SetupCommandOptions): CommandHandler<
 }
 
 /**
- * Deletes everything the bridge kept for the link. A queued post fails first, so the bridge still
- * deletes the images it uploaded for it.
+ * Deletes everything the bridge kept for the link, and the names of people no link allows now. A
+ * queued post fails first, so the bridge still deletes the images it uploaded for it.
  */
 export function unlinkCommand({ database }: SetupCommandOptions): CommandHandler<"unlink"> {
   return async (_input, { channelId, at }) => {
@@ -91,6 +96,7 @@ export function unlinkCommand({ database }: SetupCommandOptions): CommandHandler
       await deleteLinkActivity(transaction, link);
       await deleteLinkRequests(transaction, link.id);
       await deleteLink(transaction, link.id);
+      await forgetUnallowedPeople(transaction);
       return link;
     });
     return {
@@ -133,7 +139,10 @@ export function allowCommand(options: SetupCommandOptions): CommandHandler<"allo
   };
 }
 
-/** Cancels whatever the people it removes are still waiting on. */
+/**
+ * Cancels whatever the people it removes are still waiting on, and forgets the names of those no
+ * link allows now.
+ */
 export function denyCommand({ database }: SetupCommandOptions): CommandHandler<"deny"> {
   return async ({ users }, { channelId }) => {
     const { link, cancelled } = await database.write(async (transaction) => {
@@ -142,6 +151,7 @@ export function denyCommand({ database }: SetupCommandOptions): CommandHandler<"
       const ids = await Promise.all(users.map((userId) => readPersonIds(transaction, userId)));
       const denied = new Set(ids.flat());
       await denyPeople(transaction, link.id, [...denied]);
+      await forgetUnallowedPeople(transaction);
       const asked = (await readActiveRequests(transaction, link.id)).filter((request) =>
         denied.has(request.requesterUserId),
       );
