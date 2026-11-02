@@ -8,7 +8,13 @@ import { findRoutine, PUBLISH_COMMAND, REQUESTS_COMMAND } from "@toybox/model";
 
 const repoRoot = join(import.meta.dir, "..");
 
-describe("AGENTS.md guides", () => {
+/** A Markdown link, by its target. */
+const LINK = /\]\(([^)\s]+)/g;
+
+/** A link that leaves the repo, such as `https://slack.com`. */
+const URL_LINK = /^[a-z]+:/;
+
+describe("the guides and docs", () => {
   test("the root guide links every subsystem guide", async () => {
     const rootGuide = await Bun.file(join(repoRoot, "AGENTS.md")).text();
     const guides = [...new Bun.Glob("{cli,src,tests}/**/AGENTS.md").scanSync(repoRoot)];
@@ -17,25 +23,48 @@ describe("AGENTS.md guides", () => {
     expect(guides.filter((guide) => !rootGuide.includes(`(${guide})`))).toEqual([]);
   });
 
-  test("every relative link in a guide resolves", async () => {
-    const guides = [
-      "AGENTS.md",
-      ...new Bun.Glob("{cli,src,tests}/**/AGENTS.md").scanSync(repoRoot),
-    ];
+  test("every relative link resolves, to a heading when it names one", async () => {
+    const read: string[] = [];
     const broken: string[] = [];
 
-    for (const guide of guides) {
-      const text = await Bun.file(join(repoRoot, guide)).text();
-      for (const [, target] of text.matchAll(/\]\(([^)\s]+)\)/g)) {
-        if (/^[a-z]+:|^#/.test(target!)) continue;
-        const path = join(repoRoot, dirname(guide), target!.split("#")[0]!);
-        if (!existsSync(path)) broken.push(`${guide} -> ${target}`);
+    for (const pattern of ["{AGENTS,README}.md", "{cli,src,tests}/**/AGENTS.md", "docs/**/*.md"]) {
+      for (const doc of new Bun.Glob(pattern).scanSync(repoRoot)) {
+        read.push(doc);
+        const text = await Bun.file(join(repoRoot, doc)).text();
+        for (const [, target] of text.matchAll(LINK)) {
+          if (URL_LINK.test(target!)) continue;
+          const [path, anchor] = target!.split("#");
+          const linked = path ? join(dirname(doc), path) : doc;
+          const found = existsSync(join(repoRoot, linked));
+          if (!found || (anchor !== undefined && !(await anchors(linked)).includes(anchor))) {
+            broken.push(`${doc} -> ${target}`);
+          }
+        }
       }
     }
 
+    expect(read).toEqual(expect.arrayContaining(["README.md", "docs/operations.md", "AGENTS.md"]));
     expect(broken).toEqual([]);
   });
+
+  test("the skill links only by URL, since it's installed alone", () => {
+    const links = [...BUNDLED_SKILL.matchAll(LINK)].map(([, target]) => target!);
+
+    expect(links.filter((target) => !URL_LINK.test(target))).toEqual([]);
+  });
 });
+
+/** The anchors GitHub gives the headings of the Markdown file at `path`, outside code blocks. */
+async function anchors(path: string): Promise<string[]> {
+  const text = await Bun.file(join(repoRoot, path)).text();
+  return [...text.replace(/^ *```[\s\S]*?^ *```/gm, "").matchAll(/^#{1,6} (.+)$/gm)].map(
+    ([, heading]) =>
+      heading!
+        .toLowerCase()
+        .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "")
+        .replaceAll(" ", "-"),
+  );
+}
 
 // The skill, the owner's docs and what the bridge and CLI print give commands to run as written, in
 // code spans, whole strings, shell lines and the fixes channelCommand renders, and options alone
