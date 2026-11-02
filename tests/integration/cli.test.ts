@@ -163,6 +163,14 @@ test("refuses an option that takes one value given twice, naming it, before the 
       new ReadableStream(),
     ),
   ).toEqual({ exitCode: 1, stdout: `${JSON.stringify({ error }, null, 2)}\n`, stderr: "" });
+  expect(
+    await runToyBoxSlack(["resume", "--channel", "toybox-a", "--channel", "toybox-b"], lead),
+  ).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr:
+      "`resume` didn't run. --channel: Give it once. Run `toy-box-slack resume --help` to see what it takes.\n",
+  });
   expect(inputs).toEqual([]);
 });
 
