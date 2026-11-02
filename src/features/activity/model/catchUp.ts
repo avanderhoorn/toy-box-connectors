@@ -6,7 +6,8 @@ import { RETENTION_MS } from "./ledger";
 //
 // History shows a message only as it stands, so catch-up finds new messages and edits but never a
 // delete. It reads replies only in threads whose root it reads, no further back than the ledger
-// keeps messages, so a reply on an older root is missed. Both are documented limits.
+// keeps messages, and that have a reply since the gap. So it misses a reply on an older root, and a
+// reply edited during a gap in a thread with no newer reply. Each is a documented limit.
 
 /** How long before a gap catch-up takes changes from, since Slack's clock and ours can differ. */
 const GAP_MARGIN_MS = 5 * 60_000;
