@@ -2,7 +2,7 @@ import { describe, expect, onTestFinished, test } from "bun:test";
 import type { ClaimSlackApp } from "@bridge/model/claims";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { confirmIdentity } from "@bridge/server/identity";
-import { openTestDatabase } from "@bridge/server/testFixtures";
+import { captureLog, openTestDatabase } from "@bridge/server/testFixtures";
 import type { Installation } from "@slackapi/model/installation";
 import { createBotClient } from "@slackapi/server/botClient";
 import { readInstallation } from "@slackapi/server/installation";
@@ -181,8 +181,8 @@ describe("a rejected bot token", () => {
 
 describe("an answer the bridge can't get or read", () => {
   test("decides nothing, saying why and when Slack asked the bridge to wait", async () => {
-    const unreadable = (method: string) =>
-      `Slack answered ${method} with something the bridge can't read`;
+    captureLog();
+    const unreadable = (method: string) => `Slack didn't answer ${method}: unreadable response`;
     for (const [fail, detail, retryAt] of [
       [
         (slack) => slack.failNext("auth.test", { retryAfter: 30 }),
@@ -206,6 +206,7 @@ describe("an answer the bridge can't get or read", () => {
       ],
       [(slack) => slack.setAuthResponse({ team_id: 7 }), unreadable("auth.test"), null],
       [(slack) => slack.setBotResponse({ app_id: null }), unreadable("bots.info"), null],
+      [(slack) => slack.failNext("auth.test", { body: "null" }), unreadable("auth.test"), null],
     ] as const satisfies readonly (readonly [
       (slack: FakeSlack) => void,
       string,

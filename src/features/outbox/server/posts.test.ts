@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
+import { captureLog } from "@bridge/server/testFixtures";
 import { serveRequest } from "@requests/model/lifecycle";
 import { readRequest, saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { tsAt } from "@slackapi/model/ts";
+import { unreadableAnswers } from "@slackapi/server/testFixtures";
 import { queuePublication, type OutboxItem } from "./database";
 import { createReconciliation } from "./reconcile";
 import { retractPost } from "./retract";
@@ -90,6 +92,28 @@ test("accepted then deleted posts remain unknown after two clean misses, and fai
   expect((await world.post(item.id)).kind).toBe("changed");
   expect(world.slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
 });
+
+test.each(unreadableAnswers)(
+  "an answer that %s holds a post back, and one to the post is reconciled, never sent again",
+  async (_, body) => {
+    const world = await createOutboxWorld();
+    captureLog();
+    const item = await world.queuePost();
+    world.slack.failNext("conversations.info", { body });
+    expect(await world.post(item.id)).toEqual({ kind: "waiting", reason: "unknown" });
+    world.advance(30_000);
+    world.slack.failNext("chat.postMessage", { body });
+    expect(await world.post(item.id)).toMatchObject({ item: { state: "delivery_unknown" } });
+    const checks = createReconciliation(world.database, world.bot, { now: world.now });
+    world.advance(60_000);
+    world.slack.failNext("conversations.history", { body });
+    expect(await checks.reconcile(item.id)).toEqual({ kind: "waiting", reason: "unknown" });
+    expect(await world.read(item.id)).toMatchObject({ reconcilePass: 0 });
+    world.advance(60_000);
+    expect(await checks.reconcile(item.id)).toMatchObject({ item: { state: "sent" } });
+    expect(world.slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
+  },
+);
 
 test.each([
   ["deny", { item: { state: "failed", error: "requester_not_allowed" } }],

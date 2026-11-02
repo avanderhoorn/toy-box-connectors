@@ -12,6 +12,18 @@ export function captureConsole(): () => unknown[][] {
 }
 
 /**
+ * Answers the bridge can't read, by what's wrong with them, for Fake Slack to give in place of a
+ * method's own. Every schema the bridge reads an answer with fails a bare ok, and the Slack SDK
+ * fails on the rest before any schema runs.
+ */
+export const unreadableAnswers = [
+  ["fails its schema", JSON.stringify({ ok: true })],
+  ["is JSON null", "null"],
+  ["is a bare string", JSON.stringify("ok")],
+  ["has a null response_metadata", JSON.stringify({ ok: true, response_metadata: null })],
+] as const;
+
+/**
  * Persist the installation the other fixtures belong to: app A-app in team T-home, with our bot
  * U-bot. `columns` replace the fixture's, such as an uninstalled status.
  */

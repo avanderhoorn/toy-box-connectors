@@ -820,6 +820,8 @@ export function createFakeSlackApi(options: {
         if ("error" in injected) return failure(injected.error, injected.messages);
       }
       const response = work(input.data, injected);
+      if (injected && "body" in injected)
+        return new Response(injected.body, { headers: { "content-type": "application/json" } });
       if (injected && "lostResponse" in injected) {
         // Keep the accepted operation, but give the caller no response until its own timeout.
         return new Promise<Response>((resolve) => {

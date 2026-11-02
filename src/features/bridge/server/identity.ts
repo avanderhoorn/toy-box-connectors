@@ -1,5 +1,4 @@
 import type { WebClient } from "@slack/web-api";
-import { z } from "zod";
 import type { ClaimSlackApp } from "@bridge/model/claims";
 import type { BridgeDatabase } from "@bridge/server/database";
 import {
@@ -10,7 +9,7 @@ import {
   type IdentityRefusal,
 } from "@slackapi/model/identity";
 import type { Installation } from "@slackapi/model/installation";
-import type { BotClient, SlackCall } from "@slackapi/server/botClient";
+import type { BotClient } from "@slackapi/server/botClient";
 import { fetchBotInfo, fetchTokenOwner } from "@slackapi/server/identity";
 import {
   reactivateInstallation,
@@ -91,13 +90,7 @@ async function ask<Result>(
   method: string,
   run: (client: WebClient) => Promise<Result>,
 ): Promise<Asked<Result>> {
-  let call: SlackCall<Result>;
-  try {
-    call = await bot.call(method, run);
-  } catch (error) {
-    if (!(error instanceof z.ZodError)) throw error;
-    return unavailable(`Slack answered ${method} with something the bridge can't read`);
-  }
+  const call = await bot.call(method, run);
   switch (call.kind) {
     case "ok":
     case "auth_failed":

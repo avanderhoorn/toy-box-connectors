@@ -1,7 +1,7 @@
 import { expect, onTestFinished, test } from "bun:test";
 import { createStoredMessage } from "@activity/server/testFixtures";
 import type { BridgeDatabase } from "@bridge/server/database";
-import { openTestDatabase } from "@bridge/server/testFixtures";
+import { captureLog, openTestDatabase } from "@bridge/server/testFixtures";
 import { pauseLink, suspendLink } from "@links/server/status";
 import { countRows, createStoredLink, fillEveryTable } from "@links/server/testFixtures";
 import { queuePublication, queueReply } from "@outbox/server/database";
@@ -11,6 +11,7 @@ import { cancelStoredRequest } from "@requests/server/lifecycle";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { askMessage } from "@slackapi/model/testFixtures";
 import type { BotClient } from "@slackapi/server/botClient";
+import { unreadableAnswers } from "@slackapi/server/testFixtures";
 import { startFakeToyBox } from "../../../../tests/fakes/toybox";
 import {
   allowCommand,
@@ -191,6 +192,21 @@ test("allow goes ahead when Slack doesn't say the channel's name, naming the cha
     text: "Ada (U-ada) can ask the lead to act from #C-link now.",
   });
 });
+
+test.each(unreadableAnswers)(
+  "allow refuses, changing nothing, when Slack's answer about a person %s",
+  async (_, body) => {
+    const { database, slack, allow } = await allowing();
+    captureLog();
+    const before = await countRows(database);
+    slack.failNext("users.info", { body });
+
+    expect(await refusal(allow("U-ada"))).toBe(
+      "Slack didn't answer users.info (unknown), so nothing changed. Try again in a minute.",
+    );
+    expect(await countRows(database)).toEqual(before);
+  },
+);
 
 test("allow keeps the channel's name, and names it by the one it kept when Slack doesn't say", async () => {
   const { database, slack, allow } = await allowing();

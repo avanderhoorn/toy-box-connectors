@@ -6,7 +6,6 @@ import { tsAt } from "@slackapi/model/ts";
 import type { BotClient } from "@slackapi/server/botClient";
 import { fetchHistoryPage, fetchThreadPage } from "@slackapi/server/history";
 import { readInstallation } from "@slackapi/server/installation";
-import { ZodError } from "zod";
 import { reconciliationReceipt } from "../model/delivery";
 import { advanceReconciliation, readOutboxItem, settleOutboxAttempt } from "./database";
 import type { PostStep } from "./posts";
@@ -38,22 +37,16 @@ export function createReconciliation(
     let cursor: string | null = null;
     const used = new Set<string>();
     while (true) {
-      let call;
-      try {
-        call = await bot.call(method, (client) =>
-          item.threadTs === null
-            ? fetchHistoryPage(client, {
-                channelId: item.channelId,
-                oldest: tsAt(Math.max(0, item.attemptStartedAt! - 300_000)),
-                latest: tsAt(item.attemptStartedAt! + 300_000),
-                cursor,
-              })
-            : fetchThreadPage(client, { channelId: item.channelId, rootTs: item.threadTs, cursor }),
-        );
-      } catch (error) {
-        if (!(error instanceof ZodError)) throw error;
-        return hold("malformed_history", now() + 60_000);
-      }
+      const call = await bot.call(method, (client) =>
+        item.threadTs === null
+          ? fetchHistoryPage(client, {
+              channelId: item.channelId,
+              oldest: tsAt(Math.max(0, item.attemptStartedAt! - 300_000)),
+              latest: tsAt(item.attemptStartedAt! + 300_000),
+              cursor,
+            })
+          : fetchThreadPage(client, { channelId: item.channelId, rootTs: item.threadTs, cursor }),
+      );
       if (call.kind !== "ok") {
         const reason = call.kind === "error" ? channelFailureReason(call.error) : null;
         if (reason)

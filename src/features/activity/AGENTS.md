@@ -32,3 +32,4 @@ The ledger forgets a message 30 days after its latest version, with the files it
 - The ledger knows who wrote a message only while it keeps what they said.
 - A gap is forgotten only once catch-up has read every linked channel in full, and never one noted after the run began.
 - SDK retries are off. Every Web API call goes through the shared bot client in `src/features/slackapi`, which makes one attempt per call, holds a rate-limited method back for every caller, and leaves what happens next to its caller.
+- An answer the SDK can't read, or one that fails its caller's schema, is `unknown`, as a lost one is, so a read backs off and tries again and a post is reconciled, never sent again. The bot client logs the method and what didn't parse, never what Slack said. Any other error is the bridge's own, and the client throws it on.

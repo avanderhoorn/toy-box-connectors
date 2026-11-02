@@ -5,8 +5,18 @@ import { createStoredMessage } from "@activity/server/testFixtures";
 import { askMessage } from "@slackapi/model/testFixtures";
 import type { SlackTs } from "@slackapi/model/ts";
 import { markConnected } from "@slackapi/server/installation";
+import { unreadableAnswers } from "@slackapi/server/testFixtures";
 import { withDatabase } from "./bridgeProcess";
-import { ALICE, BOT, MALLORY, connectedBridge, posted, said, timestamps } from "./connectedBridge";
+import {
+  ALICE,
+  BOT,
+  MALLORY,
+  PROMPTLY,
+  connectedBridge,
+  posted,
+  said,
+  timestamps,
+} from "./connectedBridge";
 import { waitFor } from "./waitFor";
 
 test("an event counts when Slack delivered it to the bot in its workspace, wherever it happened", async () => {
@@ -144,6 +154,34 @@ test("catching up waits out a rate limit, and stores a channel only once it has 
       "Slack ended the connection with refresh_requested, so the bridge is reconnecting.",
       "Connected to Slack.",
       problem,
+      "Caught up on messages the bridge may have missed.",
+    ),
+  });
+}, 15_000);
+
+test("catching up backs off from answers it can't read, and the bridge keeps running", async () => {
+  const { slack, toyBox, inbox, stop, saying } = await connectedBridge({
+    wakes: { ...PROMPTLY, retry: 50, retryLimit: 50 },
+  });
+  const histories = () => slack.calls.filter(({ method }) => method === "conversations.history");
+  await waitFor(() => expect(histories()).toHaveLength(1));
+  const [missedTs] = timestamps(1);
+  slack.setMessage("C-link", said(ALICE, missedTs, `<@${BOT}> and the release notes?`));
+  for (const [, body] of unreadableAnswers) slack.failNext("conversations.history", { body });
+  slack.disconnect();
+
+  await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
+  expect(await inbox()).toMatchObject({ requests: [{ id: 1, messages: [{ ts: missedTs }] }] });
+  expect(histories()).toHaveLength(2 + unreadableAnswers.length);
+  const unread = "Couldn't read Slack's answer to conversations.history:";
+  expect(await stop()).toEqual({
+    code: 0,
+    stderr: saying(
+      "Slack ended the connection with refresh_requested, so the bridge is reconnecting.",
+      "Connected to Slack.",
+      `${unread} invalid_type at messages.`,
+      "Can't catch up on messages the bridge may have missed. Slack didn't answer conversations.history: unreadable response.",
+      ...unreadableAnswers.slice(1).map(() => `${unread} the Slack SDK failed on it.`),
       "Caught up on messages the bridge may have missed.",
     ),
   });

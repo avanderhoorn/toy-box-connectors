@@ -4,10 +4,9 @@ import { readChannelLink } from "@links/server/database";
 import { suspendChannelLinks } from "@links/server/lifecycle";
 import { channelFailureReason } from "@slackapi/model/errors";
 import type { Installation } from "@slackapi/model/installation";
-import type { BotClient, SlackCall } from "@slackapi/server/botClient";
+import type { BotClient } from "@slackapi/server/botClient";
 import { fetchChannelFacts } from "@slackapi/server/channels";
 import { readInstallation } from "@slackapi/server/installation";
-import { ZodError } from "zod";
 import { outboxMetadata, postSettlement } from "../model/delivery";
 import { checkLeadPayload, type LeadMessage } from "../model/payload";
 import {
@@ -43,15 +42,9 @@ export function createPostDelivery(
     if (!queued || queued.state !== "queued") return { kind: "changed" };
     if (queued.nextAttemptAt !== null && queued.nextAttemptAt > now())
       return { kind: "waiting", reason: "retry_after" };
-    let facts: SlackCall<Awaited<ReturnType<typeof fetchChannelFacts>>>;
-    try {
-      facts = await bot.call("conversations.info", (client) =>
-        fetchChannelFacts(client, queued.channelId),
-      );
-    } catch (error) {
-      if (!(error instanceof ZodError)) throw error;
-      return defer(queued, "invalid_channel_facts", now() + 30_000);
-    }
+    const facts = await bot.call("conversations.info", (client) =>
+      fetchChannelFacts(client, queued.channelId),
+    );
     if (facts.kind !== "ok") {
       const reason = facts.kind === "error" ? channelFailureReason(facts.error) : null;
       if (reason)

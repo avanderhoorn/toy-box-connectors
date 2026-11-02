@@ -26,6 +26,10 @@ missed` in status and logs. Successful recovery clears that problem.
 Catch-up trouble does not hold queued posts. Pause the link if output must
 wait while you investigate.
 
+An answer from Slack the bridge can't read counts as one that never came.
+The log names the call and what didn't parse, never what Slack said. A read
+tries again later, and a post becomes unknown and is checked, never resent.
+
 For digests, the lead runs `activity`, then the exact `mark-read --through N`
 it prints after handling the page. Only the lead can do this. The cursor
 cannot go backward or skip beyond what activity served, and a crash before

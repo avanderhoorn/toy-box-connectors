@@ -1,7 +1,12 @@
 import { expect, onTestFinished, test } from "bun:test";
 import { captureLog, openTestDatabase } from "@bridge/server/testFixtures";
 import { createBotClient } from "@slackapi/server/botClient";
-import { captureConsole, createStoredInstallation } from "@slackapi/server/testFixtures";
+import { fetchHistoryPage } from "@slackapi/server/history";
+import {
+  captureConsole,
+  createStoredInstallation,
+  unreadableAnswers,
+} from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../fakes/slack";
 
 /** How Slack explains blocks it can't accept, which names where they went wrong. */
@@ -78,6 +83,50 @@ test("logs the method and code of a request Slack found fault with, and no other
   slack.failNext("chat.postMessage", { error: "invalid_blocks", messages: [BLOCKS_FAULT] });
   expect(await post()).toMatchObject({ kind: "error", error: "invalid_blocks" });
   expect(logged()).toEqual(["Slack refused chat.postMessage with invalid_blocks."]);
+});
+test.each(unreadableAnswers)(
+  "an answer that %s is no answer, as a lost one is",
+  async (_, body) => {
+    const { slack, bot } = await setup();
+    captureLog();
+    const channelId = slack.addChannel();
+    slack.failNext("conversations.history", { body });
+    expect(
+      await bot.call("conversations.history", (client) =>
+        fetchHistoryPage(client, { channelId, oldest: "0", cursor: null }),
+      ),
+    ).toEqual({ kind: "unknown", detail: "unreadable response" });
+  },
+);
+test("logs the method and what didn't parse in an answer, never what it said", async () => {
+  const { slack, bot } = await setup();
+  const logged = captureLog();
+  const channelId = slack.addChannel();
+  const read = () =>
+    bot.call("conversations.history", (client) =>
+      fetchHistoryPage(client, { channelId, oldest: "0", cursor: null }),
+    );
+  const said = "The staging password is hunter2";
+  slack.failNext("conversations.history", { body: JSON.stringify({ ok: true, messages: said }) });
+  await read();
+  slack.failNext("conversations.history", { body: JSON.stringify(said) });
+  await read();
+  expect(logged()).toEqual([
+    "Couldn't read Slack's answer to conversations.history: invalid_type at messages.",
+    "Couldn't read Slack's answer to conversations.history: the Slack SDK failed on it.",
+  ]);
+});
+test("an error in the bridge's own code is thrown on, unlogged", async () => {
+  const { bot } = await setup();
+  const logged = captureLog();
+  const bug = new TypeError("undefined is not an object");
+  await expect(
+    bot.call("auth.test", async (client) => {
+      await client.auth.test();
+      throw bug;
+    }),
+  ).rejects.toBe(bug);
+  expect(logged()).toEqual([]);
 });
 test("a download Slack sends to sign in is refused, not followed", async () => {
   const { slack, bot } = await setup("xoxb-revoked");

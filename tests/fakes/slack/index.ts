@@ -36,6 +36,8 @@ export type FakeSlackFailure =
   | { retryAfter: number }
   | { status: number }
   | { lostResponse: true }
+  /** Slack keeps the accepted operation, but answers with `body`, as raw text. */
+  | { body: string }
   /** Slack posts a requested thread reply as a new root, and may also lose the response. */
   | { misplacedReply: true; lostResponse?: true };
 
