@@ -128,10 +128,10 @@ describe("openBridgeDatabase", () => {
         for (const ts of ["1700000100.000100", "1700000200.000100", "1700000300.000100"]) {
           await transaction`INSERT INTO changes (channel_id, ts, kind) VALUES ('C-link', ${ts}, 'new')`;
         }
-        // The newest change is gone, but the lead read through it.
+        // The newest change is gone, but the lead was shown it.
         await transaction`DELETE FROM changes WHERE seq = 3`;
         await transaction`
-          INSERT INTO cursors (link_id, through_seq, served_through_seq) VALUES ('link', 3, 3)
+          INSERT INTO cursors (link_id, through_seq, served_through_seq) VALUES ('link', 2, 3)
         `;
       });
       await made.close();
