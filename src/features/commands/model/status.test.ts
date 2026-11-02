@@ -64,6 +64,16 @@ test("each fix a link's status gives names its Toy Box channel, so it runs as pr
   );
 });
 
+test("a wake Toy Box refused says the bridge retries it, and when it last tried", () => {
+  const wake = { kind: "wait", until: 90_000 } as const;
+  const lastWake = { at: 0, outcome: "refused" } as const;
+  const shown = presentStatus({ slack: connected, links: [{ ...link, wake, lastWake }] }, 60_000);
+
+  expect(shown.split("\n").find((line) => line.startsWith("- Wakes:"))).toBe(
+    "- Wakes: next wake in less than a minute. Toy Box refused the last wake, so the bridge retries. It last tried 1 minute ago.",
+  );
+});
+
 test("says whom a link answers, by name and member ID, and when, for one person, several or nobody yet", () => {
   const answers = (changes: Partial<LinkStatus>) =>
     presentStatus({ slack: connected, links: [{ ...link, ...changes }] }, 0)

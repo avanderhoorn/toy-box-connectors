@@ -91,7 +91,7 @@ const unwoken: Record<Exclude<WakeRun["outcome"], "ran">, (channelId: string) =>
   missing: (channelId) =>
     `No routine in this Toy Box channel runs \`toy-box-slack inbox\`, or the channel was deleted. Create that routine, or run ${channelCommand("unlink", channelId)} if the channel is gone. Last checked`,
   failed: () => "Toy Box didn't answer the last wake, so the bridge retries. It last tried",
-  refused: () => "Toy Box refused the last wake",
+  refused: () => "Toy Box refused the last wake, so the bridge retries. It last tried",
 };
 
 /** Status as Markdown, a section for Slack and one for each link. */
@@ -186,7 +186,5 @@ function presentWake({ toyBoxChannelId, wake, lastWake }: LinkStatus, at: number
       return `nothing waits for the lead.${last}`;
     case "stalled":
       return `stalled, since the lead was woken ${count(STALL_AFTER, "time")} without running \`toy-box-slack inbox\`. Wakes wait for something new in Slack.${last}`;
-    case "blocked":
-      return "blocked until a new request, because Toy Box refused the last wake. The bridge's log says why.";
   }
 }

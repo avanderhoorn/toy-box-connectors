@@ -6,9 +6,9 @@
 // them unread is woken again after longer and longer waits, then left alone until something new
 // arrives. A request the lead read and left gets one reminder unless the lead is woken first. A
 // suspended link's requests wait, but its suspension wakes the lead once to tell the owner. A run
-// Toy Box couldn't take retries with backoff, one it refused waits for something new, and no lead
-// is woken more than 12 times an hour. Once Toy Box runs a wake, each request no lead has read yet
-// gets 👀 in Slack, so whoever asked sees within seconds that a lead has it.
+// Toy Box couldn't take or refused is retried with backoff, and no lead is woken more than 12 times
+// an hour. Once Toy Box runs a wake, each request no lead has read yet gets 👀 in Slack, so whoever
+// asked sees within seconds that a lead has it.
 
 import { z } from "zod";
 import type { Request, RequestAttention } from "@requests/model/lifecycle";
@@ -36,13 +36,12 @@ export type LinkWakeState = {
   runs: readonly WakeRun[];
 };
 
-/** What to do about a link's lead now. Stalled and blocked links stay so until something new arrives. */
+/** What to do about a link's lead now. A stalled link stays so until something new arrives. */
 export type WakeDecision =
   | { kind: "wake" }
   | { kind: "wait"; until: number }
   | { kind: "idle" }
-  | { kind: "stalled" }
-  | { kind: "blocked" };
+  | { kind: "stalled" };
 
 const duration = z.number().int().nonnegative();
 
@@ -90,10 +89,6 @@ export function decideWake(
   const pending = requests.filter(isPending).map(({ changedAt }) => changedAt);
   // A suspension is news like a changed request, which the first wake after it covers.
   const changes = link.suspendedAt === null ? pending : [...pending, link.suspendedAt];
-  const [latest] = link.runs;
-  if (latest?.outcome === "refused" && !changes.some((changedAt) => changedAt > latest.at)) {
-    return { kind: "blocked" };
-  }
   const woken = link.runs.flatMap(({ at, outcome }) => (outcome === "ran" ? [at] : []));
   const lastWokenAt = woken[0] ?? -Infinity;
   const fresh = changes.filter((changedAt) => changedAt > lastWokenAt);

@@ -67,16 +67,11 @@ describe("deciding whether to wake a link's lead", () => {
     expect(decide(NOW, [request], [ran(NOW - 10 * MINUTE)])).toEqual({ kind: "idle" });
   });
 
-  test("retries a run Toy Box didn't take, after 15 seconds doubling up to 5 minutes", () => {
+  test("retries a run Toy Box didn't take or refused, after 15 seconds doubling up to 5 minutes", () => {
     expect([1, 2, 3, 6, 20].map((n) => retryDelay(n) / SECOND)).toEqual([15, 30, 60, 300, 300]);
-    const runs = [run(NOW, "missing"), run(NOW - 15 * SECOND, "failed"), ran(NOW - HOUR)];
-    expect(decide(NOW, [open(NOW - MINUTE)], runs)).toEqual(waitUntil(NOW + 30 * SECOND));
-  });
-
-  test("waits for something new after Toy Box refuses a run", () => {
-    const runs = [run(NOW - HOUR, "refused")];
-    expect(decide(NOW, [open(NOW - 2 * HOUR)], runs)).toEqual({ kind: "blocked" });
-    expect(decide(NOW, [open(NOW - 2 * HOUR), open(NOW - MINUTE)], runs)).toEqual({ kind: "wake" });
+    const failed = [run(NOW - 30 * SECOND, "missing"), run(NOW - 45 * SECOND, "failed")];
+    const runs = [run(NOW, "refused"), ...failed, ran(NOW - HOUR)];
+    expect(decide(NOW, [open(NOW - MINUTE)], runs)).toEqual(waitUntil(NOW + MINUTE));
   });
 
   test("wakes a lead at most 12 times an hour", () => {

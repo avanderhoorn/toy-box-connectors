@@ -59,8 +59,8 @@ export async function recordWake(
 }
 
 /**
- * Deletes the runs no decision at `now` reads: those over an hour old, except each link's latest
- * run, which may block it, and its latest landed ones, which a stall counts. A run of failures an
+ * Deletes the runs nothing at `now` reads: those over an hour old, except each link's latest run,
+ * which status shows, and its latest landed ones, which a stall counts. A run of failures an
  * hour long already holds the longest retry wait, so dropping its oldest changes nothing.
  */
 export async function pruneWakes(transaction: Bun.SQL, now: number): Promise<void> {

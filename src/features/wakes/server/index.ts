@@ -41,7 +41,7 @@ const MAX_WAIT = 60_000;
 const unwoken: Record<Exclude<RoutineRunOutcome, "ran">, string> = {
   missing: `no routine in the channel runs \`${REQUESTS_COMMAND}\``,
   failed: "Toy Box didn't run the routine, so the wake will retry",
-  refused: "Toy Box refused to run the routine, so wakes wait for a new request",
+  refused: "Toy Box refused to run the routine, so the wake will retry",
 };
 
 /** Starts deciding at once, and again whenever `reconsider` is called. */

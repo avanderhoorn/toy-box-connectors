@@ -64,7 +64,7 @@ export function latestScheduledRun(schedule: string, now: number): number {
 
 /**
  * What Toy Box did with a routine run. A call that can't connect or times out is `failed`, like a
- * 5xx, and any 4xx but a 404 is `refused`, since asking again would be refused again.
+ * 5xx, and any 4xx but a 404 is `refused`.
  */
 export type RoutineRunOutcome = "ran" | "missing" | "failed" | "refused";
 
