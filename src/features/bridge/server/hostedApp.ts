@@ -93,7 +93,7 @@ export async function openApp(
     const { slackApiUrl, toyBoxOrigin: origin, wakeTimings: timings } = settings;
     let bot: BotClient | null = null;
     if (botToken && appToken) {
-      bot = createBotClient(database, botToken, {
+      bot = createBotClient(botToken, {
         slackApiUrl,
         onAuthFailed: (error) => slack?.botRejected(error),
         log,
@@ -124,7 +124,13 @@ export async function openApp(
       });
     }
     const workspaceUrl = () => slack?.workspaceUrl() ?? null;
-    const setup = { database, bot, toyBoxOrigin: origin, app: nameApps ? app.name : null };
+    const setup = {
+      database,
+      bot,
+      slackState,
+      toyBoxOrigin: origin,
+      app: nameApps ? app.name : null,
+    };
     return {
       name: app.name,
       database,
@@ -151,7 +157,7 @@ export async function openApp(
           outbox,
         }),
         post: postCommand({ database, bot, outbox }),
-        retract: retractCommand({ database, bot }),
+        retract: retractCommand({ database, bot, slackState }),
         link: linkCommand(setup),
         allow: allowCommand(setup),
         deny: denyCommand(setup),

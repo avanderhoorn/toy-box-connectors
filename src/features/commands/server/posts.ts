@@ -10,6 +10,7 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { threadReference } from "@commands/model";
 import { CommandRefusedError } from "@commands/model/protocol";
 import { personName } from "@commands/model/slackText";
+import type { SlackState } from "@commands/model/status";
 import { clockTime, count } from "@commands/model/wording";
 import type { OutboxWorker } from "@outbox/server";
 import {
@@ -173,17 +174,21 @@ export type RetractCommandOptions = {
   database: BridgeDatabase;
   /** Slack's Web API, or null when the bridge has no Slack tokens. */
   bot: BotClient | null;
+  /** Slack's state, which says when Slack rejects a token. */
+  slackState: () => SlackState;
 };
 
 /** Deletes one of the link's confirmed posts from Slack, keeping what it answered used. */
 export function retractCommand({
   database,
   bot,
+  slackState,
 }: RetractCommandOptions): CommandHandler<"retract"> {
   return async ({ post: number }, { channelId, at }) => {
     const link = await database.read((sql) => readCallerLink(sql, channelId));
     const didnt = `o${number} wasn't deleted.`;
-    if (bot === null) throw new CommandRefusedError(`${didnt} Slack isn't active.`);
+    if (bot === null || slackState().connection === "auth_failed")
+      throw new CommandRefusedError(`${didnt} Slack isn't active.`);
     const post = await outboxRefusal(didnt, "", () =>
       retractPost(database, bot, link.id, number, at),
     );

@@ -2,9 +2,18 @@
 
 import { expect, test } from "bun:test";
 import { DEFAULT_APP } from "@bridge/model/apps";
+import { callBridge } from "@commands/client/cli";
 import { rejectedTokensProblem } from "@slackapi/model/identity";
 import { withDatabase } from "./bridgeProcess";
-import { ALICE, BOT, connectedBridge, PROMPTLY, said, timestamps } from "./connectedBridge";
+import {
+  ALICE,
+  BOT,
+  connectedBridge,
+  MALLORY,
+  PROMPTLY,
+  said,
+  timestamps,
+} from "./connectedBridge";
 import { waitFor } from "./waitFor";
 
 test("an answer the lead gives while Slack is down posts once the bridge is back on Slack", async () => {
@@ -38,11 +47,16 @@ test("an answer the lead gives while Slack is down posts once the bridge is back
   });
 }, 15_000);
 
-test("a bot token Slack rejects mid-post keeps the answer queued, and status and the log name the token to replace", async () => {
-  const { slack, dataFolder, inbox, status, reply, post, stop, saying } = await connectedBridge();
+test("a bot token Slack rejects mid-post holds the answer, and retract and setup refuse, while status and the log name the token to replace", async () => {
+  const { slack, dataFolder, channelId, home, inbox, status, reply, post, stop, saying } =
+    await connectedBridge();
+  const lead = { channelId: null, env: { COPILOT_AGENT_SESSION_ID: channelId }, home };
+  const owner = { channelId, env: {}, home };
   const [askedTs] = timestamps(1);
   await post(said(ALICE, askedTs, `<@${BOT}> can you check the deploy?`));
   await inbox();
+  expect(await callBridge("post", { text: "Deploying now." }, lead)).toMatchObject({ exitCode: 0 });
+  await waitFor(() => expect(slack.getMessages("C-link")).toHaveLength(2));
 
   slack.failNext("chat.postMessage", { error: "token_revoked" });
   expect(await reply(1, "The deploy is fine.")).toMatchObject({ exitCode: 0 });
@@ -52,11 +66,24 @@ test("a bot token Slack rejects mid-post keeps the answer queued, and status and
       slack: { connection: "auth_failed", problem },
     }),
   );
+  expect(await callBridge("retract", { post: "o1" }, lead)).toMatchObject({
+    exitCode: 1,
+    text: "o1 wasn't deleted. Slack isn't active.",
+  });
+  expect(await callBridge("allow", { users: [MALLORY] }, owner)).toMatchObject({
+    exitCode: 1,
+    text: "The bridge isn't connected to Slack, so nothing changed. Run `toy-box-slack status` to see why.",
+  });
+  // The outbox looks again each second, and Slack would take the answer now.
+  await Bun.sleep(1_500);
 
   expect(await stop()).toEqual({ code: 0, stderr: saying(problem) });
-  expect(slack.getMessages("C-link")).toHaveLength(1);
+  expect(slack.getMessages("C-link")).toHaveLength(2);
   await withDatabase(dataFolder, async (database) => {
-    expect(await database.read((sql) => sql`SELECT state, error FROM outbox`)).toEqual([
+    expect(
+      await database.read((sql) => sql`SELECT state, error FROM outbox ORDER BY number`),
+    ).toEqual([
+      { state: "sent", error: null },
       { state: "queued", error: "token_revoked" },
     ]);
   });

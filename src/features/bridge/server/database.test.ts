@@ -4,6 +4,8 @@ import { createStoredLink } from "@links/server/testFixtures";
 import { queuePublication } from "@outbox/server/database";
 import { createStoredOutboxItem } from "@outbox/server/testFixtures";
 import { createStoredRequest } from "@requests/server/testFixtures";
+import { readInstallation } from "@slackapi/server/installation";
+import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { BridgeDatabase, initializeSchema, openBridgeDatabase, type Schema } from "./database";
 import { createDatabaseMadeBy, createTestFolder, openTestDatabase } from "./testFixtures";
 
@@ -111,6 +113,22 @@ describe("openBridgeDatabase", () => {
     const slot = { linkId: "link", series: "notes", scheduledAt: 3, text: "Notes" };
     const next = await database.write((transaction) => queuePublication(transaction, slot, 3));
     expect(next.number).toBe(4);
+  });
+
+  test.each([
+    ["auth_failed", "active"],
+    ["uninstalled", "uninstalled"],
+  ])("opens a version 5 installation stored as %s as %s", async (stored, opened) => {
+    const path = join(createTestFolder(), "bridge.db");
+    await createRecordedDatabase(path, 5);
+    const made = new BridgeDatabase(new Bun.SQL({ adapter: "sqlite", filename: path }));
+    await createStoredInstallation(made);
+    await made.write((transaction) => transaction`UPDATE installation SET status = ${stored}`);
+    await made.close();
+
+    const database = await open(path);
+
+    expect(await database.read(readInstallation)).toMatchObject({ status: opened });
   });
 
   test("refuses a bridge.db that a version it can't upgrade made, which only starting over ends", async () => {

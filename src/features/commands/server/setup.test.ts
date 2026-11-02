@@ -21,7 +21,7 @@ import {
   unlinkCommand,
   type SetupCommandOptions,
 } from "./setup";
-import { refusal } from "./testFixtures";
+import { connectedSlack, refusal, rejectedSlack } from "./testFixtures";
 
 const moved = (channelId: string) =>
   `The link to #C-link is suspended because Slack gave its channel a new ID. Run \`toy-box-slack unlink --channel ${channelId}\`, then have the owner link the channel again by its new ID.`;
@@ -30,6 +30,7 @@ const moved = (channelId: string) =>
 const offline = (database: BridgeDatabase) => ({
   database,
   bot: null,
+  slackState: connectedSlack,
   toyBoxOrigin: new URL("http://127.0.0.1"),
 });
 
@@ -76,7 +77,7 @@ test("an unlink while resume asks Slack wins, so resume refuses and makes no lin
       return call;
     },
   };
-  const options = { database, bot: unlinking, toyBoxOrigin: new URL(toyBox.url) };
+  const options = { ...offline(database), bot: unlinking, toyBoxOrigin: new URL(toyBox.url) };
 
   expect(await refusal(resumeCommand(options)({}, { channelId, at: 1_000 }))).toBe(
     "The link to #C-link was removed, so there's nothing to resume.",
@@ -102,7 +103,7 @@ test("a link Slack gives a new channel ID while link asks Slack is refused as it
       return call;
     },
   };
-  const options = { database, bot: moving, toyBoxOrigin: new URL(toyBox.url) };
+  const options = { ...offline(database), bot: moving, toyBoxOrigin: new URL(toyBox.url) };
 
   const answer = linkCommand(options)({ slackChannel: "C-link" }, { channelId, at: 1_000 });
 
@@ -175,13 +176,27 @@ test("names the app it runs in, once the bridge hosts several, when that app isn
   );
 });
 
+test("refuses while Slack rejects a token, before it asks Slack", async () => {
+  const { database, slack, bot } = await createOutboxWorld();
+  const allow = allowCommand({ ...offline(database), bot, slackState: rejectedSlack });
+
+  expect(await refusal(allow({ users: ["U-new"] }, OWNER))).toBe(
+    "The bridge isn't connected to Slack, so nothing changed. Run `toy-box-slack status` to see why.",
+  );
+  expect(slack.calls).toEqual([]);
+});
+
 /** Link commands that reach Slack and a Toy Box with one channel the stored link doesn't name. */
 async function linking() {
   const { database, slack, bot } = await createOutboxWorld();
   const toyBox = startFakeToyBox();
   onTestFinished(() => toyBox.stop());
   const channelId = toyBox.addChannel();
-  const options: SetupCommandOptions = { database, bot, toyBoxOrigin: new URL(toyBox.url) };
+  const options: SetupCommandOptions = {
+    ...offline(database),
+    bot,
+    toyBoxOrigin: new URL(toyBox.url),
+  };
   return { database, slack, channelId, options };
 }
 
@@ -286,7 +301,11 @@ async function resuming() {
   const publication = await database.write((transaction) =>
     queuePublication(transaction, slot, now()),
   );
-  const options: SetupCommandOptions = { database, bot, toyBoxOrigin: new URL(toyBox.url) };
+  const options: SetupCommandOptions = {
+    ...offline(database),
+    bot,
+    toyBoxOrigin: new URL(toyBox.url),
+  };
   const resume = resumeCommand(options);
   const link = linkCommand(options);
   return {

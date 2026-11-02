@@ -15,7 +15,7 @@ import {
   type IdentityRefusal,
 } from "@slackapi/model/identity";
 import { createBotClient } from "@slackapi/server/botClient";
-import { readInstallation, recordInstallation } from "@slackapi/server/installation";
+import { readInstallation } from "@slackapi/server/installation";
 import { defaultWakeTimings, type WakeTimings } from "@wakes/model";
 import { startFakeSlack, type FakeSlack } from "../fakes/slack";
 import { waitFor } from "./waitFor";
@@ -62,7 +62,7 @@ async function linkFakeSlack({ slackNow }: { slackNow?: () => number } = {}) {
   /** Starts a supervisor as the bridge does. */
   function supervise(options: Partial<SlackSupervisorOptions> = {}) {
     const slackApiUrl = options.slackApiUrl ?? fake.url;
-    const bot = createBotClient(database, fake.botToken, {
+    const bot = createBotClient(fake.botToken, {
       slackApiUrl,
       now,
       onAuthFailed: (error) => supervisor.botRejected(error),
@@ -329,7 +329,6 @@ describe("rejected tokens", () => {
   test("a bot token Slack rejects at startup opens no connection, and is named once until a restart", async () => {
     const logged = captureLog();
     const link = await linkFakeSlack();
-    await link.database.write((transaction) => recordInstallation(transaction, link.fake.identity));
     link.fake.failNext("auth.test", { error: "invalid_auth" });
 
     const { supervisor } = link.supervise();
@@ -343,7 +342,6 @@ describe("rejected tokens", () => {
     await supervisor.stop();
     const restarted = link.supervise();
     await waitFor(() => expect(restarted.supervisor.state()).toEqual(connected));
-    expect(await link.database.read(readInstallation)).toMatchObject({ status: "active" });
   });
 
   test("a bot token Slack rejects once connected leaves the connection up, and status replaces both rejected tokens at once", async () => {

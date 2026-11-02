@@ -35,7 +35,7 @@ function confirm(
     claim?: ClaimSlackApp;
   } = {},
 ) {
-  const bot = createBotClient(database, slack.botToken, {
+  const bot = createBotClient(slack.botToken, {
     slackApiUrl: slack.url,
     now: () => NOW,
   });
@@ -202,7 +202,7 @@ describe("reinstalling after an uninstall", () => {
 });
 
 describe("a rejected bot token", () => {
-  test("fails the installation once Slack rejects it, until the tokens confirm again", async () => {
+  test("decides nothing and leaves the installation as it was", async () => {
     for (const method of ["auth.test", "bots.info"]) {
       const slack = fakeSlack();
       const database = await openTestDatabase();
@@ -212,18 +212,6 @@ describe("a rejected bot token", () => {
       expect(await confirm(database, slack)).toEqual({
         kind: "auth_failed",
         error: "token_revoked",
-      });
-      expect(await database.read(readInstallation)).toMatchObject({ status: "auth_failed" });
-
-      expect(await confirm(database, fakeSlack({ teamId: "TOTHER" }))).toMatchObject({
-        kind: "refused",
-        refusal: { reason: "mismatch", field: "teamId" },
-      });
-      expect(await database.read(readInstallation)).toMatchObject({ status: "auth_failed" });
-
-      expect(await confirm(database, slack)).toMatchObject({
-        kind: "confirmed",
-        installation: fakeInstallation,
       });
       expect(await database.read(readInstallation)).toEqual(fakeInstallation);
     }

@@ -1,12 +1,8 @@
 import { expect, onTestFinished, test } from "bun:test";
-import { captureLog, openTestDatabase } from "@bridge/server/testFixtures";
+import { captureLog } from "@bridge/server/testFixtures";
 import { createBotClient } from "@slackapi/server/botClient";
 import { fetchHistoryPage } from "@slackapi/server/history";
-import {
-  captureConsole,
-  createStoredInstallation,
-  unreadableAnswers,
-} from "@slackapi/server/testFixtures";
+import { captureConsole, unreadableAnswers } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../fakes/slack";
 
 /** How Slack explains blocks it can't accept, which names where they went wrong. */
@@ -17,10 +13,8 @@ async function setup(token?: string) {
   const now = () => at;
   const slack = startFakeSlack({ now });
   onTestFinished(() => slack.stop());
-  const database = await openTestDatabase();
-  await createStoredInstallation(database);
   const restart = () =>
-    createBotClient(database, token ?? slack.botToken, {
+    createBotClient(token ?? slack.botToken, {
       slackApiUrl: slack.url,
       timeoutMs: 50,
       now,

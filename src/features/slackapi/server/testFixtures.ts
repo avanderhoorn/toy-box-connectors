@@ -1,5 +1,6 @@
 import { onTestFinished, spyOn } from "bun:test";
 import type { BridgeDatabase } from "@bridge/server/database";
+import type { InstallationStatus } from "@slackapi/model/installation";
 
 /** What Slack's SDKs printed, which goes to the console rather than through `log`. */
 export function captureConsole(): () => unknown[][] {
@@ -31,7 +32,7 @@ export function createStoredInstallation(
   database: BridgeDatabase,
   columns: {
     bot_user_id?: string;
-    status?: "active" | "auth_failed" | "uninstalled";
+    status?: InstallationStatus;
   } = {},
 ) {
   const installation = {

@@ -17,7 +17,7 @@ const authFailures: ReadonlySet<string> = new Set([
   "org_login_required",
 ]);
 
-/** Whether `error` means Slack rejected the bot token, which puts the installation in auth_failed. */
+/** Whether `error` means Slack rejected the token. */
 export function isAuthFailure(error: string): boolean {
   return authFailures.has(error);
 }

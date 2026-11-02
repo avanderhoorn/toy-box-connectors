@@ -13,7 +13,7 @@ import { startSlackForBridge } from "./bridgeProcess";
 import { startLinkedBridge } from "./linkedBridge";
 import { waitFor } from "./waitFor";
 
-test("the timer waits for Slack, checks unknown delivery twice and treats eyes as best-effort", async () => {
+test("the timer waits for Slack to post or check unknown delivery, checks it twice and treats eyes as best-effort", async () => {
   let worker: OutboxWorker | undefined;
   const errors: unknown[] = [];
   onTestFinished(async () => {
@@ -43,6 +43,12 @@ test("the timer waits for Slack, checks unknown delivery twice and treats eyes a
   }
   for (const [index, delay] of [60_000, 240_000].entries()) {
     world.advance(delay);
+    const calls = world.slack.calls.length;
+    ready = false;
+    worker.poke();
+    await Bun.sleep(20);
+    expect(world.slack.calls).toHaveLength(calls);
+    ready = true;
     worker.poke();
     await waitFor(async () =>
       expect(await world.read(item.id)).toMatchObject({ reconcilePass: index + 1 }),

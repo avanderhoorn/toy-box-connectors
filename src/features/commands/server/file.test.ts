@@ -31,7 +31,7 @@ async function createFileWorld() {
       await transaction`INSERT INTO allowlist (link_id, user_id, added_at) VALUES ('link', ${userId}, 0)`;
     }
   });
-  const bot = createBotClient(database, slack.botToken, { slackApiUrl: slack.url });
+  const bot = createBotClient(slack.botToken, { slackApiUrl: slack.url });
   const folder = join(createTestFolder(), "viewing");
   const viewing = openViewingFolder(folder, (error) => {
     throw error;

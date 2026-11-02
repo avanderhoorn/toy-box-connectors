@@ -1,4 +1,3 @@
-import type { BridgeDatabase } from "@bridge/server/database";
 import {
   LogLevel,
   SlackError,
@@ -16,7 +15,6 @@ import { log as bridgeLog, type Log } from "@/shared/log";
 import { issuesOf } from "../model/envelopes";
 import { isAuthFailure, isErrorCode, isRateLimit, isRequestFault } from "../model/errors";
 import { downloadFile, slackFilesOrigin, type Download } from "./download";
-import { markAuthFailed } from "./installation";
 import { uploadFile, type Upload } from "./upload";
 
 export const slackCallTimeoutMs = 10_000;
@@ -47,6 +45,7 @@ export type BotClient = {
 export type BotClientOptions = {
   slackApiUrl?: string;
   timeoutMs?: number;
+  /** Called each time Slack rejects the token, with the error it gave. */
   onAuthFailed?: (error: string) => void;
   now?: () => number;
   /** Where the client says what Slack refused, the bridge's log unless set. */
@@ -59,7 +58,6 @@ export type BotClientOptions = {
  * through it.
  */
 export function createBotClient(
-  database: BridgeDatabase,
   token: string,
   { slackApiUrl, timeoutMs, onAuthFailed, now = Date.now, log = bridgeLog }: BotClientOptions = {},
 ): BotClient {
@@ -92,9 +90,7 @@ export function createBotClient(
           cooldowns.set(method, until);
           return { kind: "rate_limited", until };
         }
-        if (failure.kind === "auth_failed" && (await database.write(markAuthFailed))) {
-          onAuthFailed?.(failure.error);
-        }
+        if (failure.kind === "auth_failed") onAuthFailed?.(failure.error);
         // A request Slack explains what was wrong with is the bridge's mistake, and its caller may
         // keep only the code, so the owner hears of it here.
         if (failure.kind === "error" && isRequestFault(failure.data.response_metadata?.messages))

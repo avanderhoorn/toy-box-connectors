@@ -12,7 +12,7 @@ import { createStoredRequest } from "@requests/server/testFixtures";
 import type { BotClient } from "@slackapi/server/botClient";
 import { postCommand, publishCommand, replyCommand, retractCommand } from "./posts";
 import type { FakeSlack } from "../../../../tests/fakes/slack";
-import { refusal } from "./testFixtures";
+import { connectedSlack, refusal, rejectedSlack } from "./testFixtures";
 
 const LEAD = { channelId: "toybox-link" };
 
@@ -389,10 +389,13 @@ test("retract deletes the lead's post from Slack, says what stays used, and says
   const { id } = await world.queue();
   await world.post(id);
   const lead = { ...LEAD, at: world.now() };
-  const retract = retractCommand({ database: world.database, bot: world.bot });
+  const options = { database: world.database, bot: world.bot, slackState: connectedSlack };
+  const retract = retractCommand(options);
 
-  const offline = retractCommand({ database: world.database, bot: null });
+  const offline = retractCommand({ ...options, bot: null });
   expect(await refusal(offline({ post: 1 }, lead))).toBe("o1 wasn't deleted. Slack isn't active.");
+  const rejected = retractCommand({ ...options, slackState: rejectedSlack });
+  expect(await refusal(rejected({ post: 1 }, lead))).toBe("o1 wasn't deleted. Slack isn't active.");
   expect(await refusal(retract({ post: 2 }, lead))).toBe(
     "o2 wasn't deleted. This is not a known post belonging to this link.",
   );
@@ -410,7 +413,11 @@ test("retract owes a delete of each of a post's images, due at once, once Slack 
   const world = await createOutboxWorld();
   const { id } = await world.queue("Here's the chart.", ["F-1", "F-2"]);
   await world.post(id);
-  const retract = retractCommand({ database: world.database, bot: world.bot });
+  const retract = retractCommand({
+    database: world.database,
+    bot: world.bot,
+    slackState: connectedSlack,
+  });
   const lead = { ...LEAD, at: world.now() };
   // Slack deletes the message but loses its answer, so it may still show the images.
   world.slack.failNext("chat.delete", { lostResponse: true });

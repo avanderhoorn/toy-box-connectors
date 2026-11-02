@@ -75,7 +75,7 @@ export async function createOutboxWorld() {
     user: "U-owner",
     text: "Question",
   });
-  const bot = createBotClient(database, slack.botToken, {
+  const bot = createBotClient(slack.botToken, {
     slackApiUrl: slack.url,
     timeoutMs: 50,
     now,

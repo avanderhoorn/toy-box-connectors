@@ -10,7 +10,7 @@ import { addMessageFiles, initializeActivitySchema } from "@activity/server/sche
 import { addLinkChannelName, initializeLinkSchema } from "@links/server/schema";
 import { addOutboxImages, allowOutboxPosts, initializeOutboxSchema } from "@outbox/server/schema";
 import { initializeRequestSchema } from "@requests/server/schema";
-import { initializeSlackApiSchema } from "@slackapi/server/schema";
+import { forgetAuthFailure, initializeSlackApiSchema } from "@slackapi/server/schema";
 import { initializeWakeSchema } from "@wakes/server/schema";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
 import { BridgeRefusedError } from "./refusal";
@@ -84,7 +84,7 @@ export interface Schema {
 // that any recorded version made. The bridge refuses a `bridge.db` any other version made rather
 // than fail on it later, and one a newer version made needs that version, not a fresh start.
 const bridgeSchema: Schema = {
-  version: 5,
+  version: 6,
   create: createSchema,
   migrations: {
     2: allowOutboxPosts,
@@ -93,6 +93,7 @@ const bridgeSchema: Schema = {
       await addOutboxImages(transaction);
       await addLinkChannelName(transaction);
     },
+    5: forgetAuthFailure,
   },
 };
 

@@ -22,13 +22,6 @@ export async function recordInstallation(tx: Bun.SQL, identity: SlackIdentity): 
   `;
 }
 
-export async function markAuthFailed(tx: Bun.SQL): Promise<boolean> {
-  const rows = await tx`
-    UPDATE installation SET status = 'auth_failed' WHERE status = 'active' RETURNING id
-  `;
-  return rows.length > 0;
-}
-
 export async function readConnectedAt(sql: Bun.SQL): Promise<number | null> {
   const [row] = await sql<{ connected_at: number | null }[]>`SELECT connected_at FROM installation`;
   return row?.connected_at ?? null;

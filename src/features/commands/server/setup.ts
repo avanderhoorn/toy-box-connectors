@@ -14,7 +14,7 @@ import {
   presentStopped,
 } from "@commands/model/setup";
 import { channelName, personName, toyBoxChannelName } from "@commands/model/slackText";
-import { presentLinkState } from "@commands/model/status";
+import { presentLinkState, type SlackState } from "@commands/model/status";
 import { count } from "@commands/model/wording";
 import { admissionProblem } from "@links/model/admission";
 import { approvableAudience, widening, type Audience } from "@links/model/audience";
@@ -44,6 +44,8 @@ import type { CommandContext, CommandHandler } from "./serve";
 export type SetupCommandOptions = {
   database: BridgeDatabase;
   bot: BotClient | null;
+  /** Slack's state, which says when Slack rejects a token. */
+  slackState: () => SlackState;
   toyBoxOrigin: URL;
   /** The app the commands run in, which they name once the bridge hosts several. */
   app?: string | null;
@@ -294,9 +296,9 @@ async function readLinkableChannel(origin: URL, channelId: string): Promise<stri
 }
 
 /** The bot, and the installation it acts in, refusing while the bridge can't ask Slack. */
-async function readSlackHome({ database, bot, app = null }: SetupCommandOptions) {
+async function readSlackHome({ database, bot, slackState, app = null }: SetupCommandOptions) {
   const home = await database.read(readInstallation);
-  if (!bot || home?.status !== "active") {
+  if (!bot || home?.status !== "active" || slackState().connection === "auth_failed") {
     throw new CommandRefusedError(
       `${app ? `The ${app} app` : "The bridge"} isn't connected to Slack, so nothing changed. Run \`toy-box-slack status\` to see why.`,
     );
