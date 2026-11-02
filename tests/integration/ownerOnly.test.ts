@@ -145,7 +145,7 @@ test("allow refuses a guest, and deny takes either of someone's IDs", async () =
   slack.setUser(MALLORY_USER);
   expect(await allow()).toMatchObject({
     exitCode: 0,
-    text: "Mallory (U0MALLORY) can ask the lead to act from #release-eng now.",
+    text: "Mallory (U0MALLORY) can ask the lead to act from #C0LINK now.",
   });
   expect(await link()).toMatchObject({
     allowlist: [LISTED_ALICE, { userId: MALLORY, name: "Mallory" }],

@@ -239,27 +239,27 @@ async function allowing() {
   return { database, slack, allow: (...users: string[]) => allow({ users }, OWNER) };
 }
 
-test("allow names whom it allowed, and the channel as Slack names it", async () => {
-  const { allow } = await allowing();
+test("allow names whom it allowed, and the channel by the name its link stored", async () => {
+  const { database, slack, allow } = await allowing();
+  await database.write((transaction) => transaction`UPDATE links SET slack_channel_name = 'ops'`);
 
   expect(await allow("U-ada")).toEqual({
     result: { added: ["U-ada"] },
-    text: "Ada (U-ada) can ask the lead to act from #fake-channel now.",
+    text: "Ada (U-ada) can ask the lead to act from #ops now.",
   });
   expect(await allow("U-ada", "U-bo")).toEqual({
     result: { added: ["U-bo"] },
-    text: "They can all ask the lead to act from #fake-channel now:\n\n- Ada (U-ada)\n- Bo (U-bo)",
+    text: "They can all ask the lead to act from #ops now:\n\n- Ada (U-ada)\n- Bo (U-bo)",
   });
+  expect(new Set(slack.calls.map(({ method }) => method))).toEqual(new Set(["users.info"]));
 });
 
-test("allow goes ahead when Slack doesn't say the channel's name, naming the channel by its ID", async () => {
-  const { slack, allow } = await allowing();
-  slack.failNext("conversations.info", { error: "internal_error" });
+test("allow refuses a channel with no link before it asks Slack about anyone", async () => {
+  const { database, slack, allow } = await allowing();
+  await database.write((transaction) => transaction`DELETE FROM links`);
 
-  expect(await allow("U-ada")).toEqual({
-    result: { added: ["U-ada"] },
-    text: "Ada (U-ada) can ask the lead to act from #C-link now.",
-  });
+  expect(await refusal(allow("U-ada"))).toBe("Toy Box channel toybox-link isn't linked to Slack.");
+  expect(slack.calls).toEqual([]);
 });
 
 test.each(unreadableAnswers)(
@@ -276,18 +276,6 @@ test.each(unreadableAnswers)(
     expect(await countRows(database)).toEqual(before);
   },
 );
-
-test("allow keeps the channel's name, and names it by the one it kept when Slack doesn't say", async () => {
-  const { database, slack, allow } = await allowing();
-  const stored = () => database.read((sql) => sql`SELECT slack_channel_name AS name FROM links`);
-
-  await allow("U-ada");
-  expect(await stored()).toEqual([{ name: "fake-channel" }]);
-
-  slack.addChannel({ id: "C-link", name: "renamed" });
-  slack.failNext("conversations.info", { error: "internal_error" });
-  expect((await allow("U-bo")).text).toContain("from #fake-channel now");
-});
 
 test("a Slack channel linked to another Toy Box channel is refused, saying another app can link it", async () => {
   const { channelId, options } = await linking();

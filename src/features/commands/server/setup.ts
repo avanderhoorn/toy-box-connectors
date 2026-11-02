@@ -22,7 +22,6 @@ import { channelCommand, suspensions } from "@links/model/status";
 import {
   allowPerson,
   denyPeople,
-  nameLinkChannel,
   readChannelLink,
   readToyBoxLink,
   type ChannelLink,
@@ -101,12 +100,13 @@ export function unlinkCommand({ database }: SetupCommandOptions): CommandHandler
   };
 }
 
-/** Admits only full members, as Slack describes them now, and names the channel as Slack does. */
+/** Admits only full members, as Slack describes them now. */
 export function allowCommand(options: SetupCommandOptions): CommandHandler<"allow"> {
   const { database } = options;
   return async ({ users }, { channelId, at }) => {
     const { slack, home } = await readSlackHome(options);
-    const { slackChannelId } = await database.read((sql) => readCallerLink(sql, channelId));
+    // A channel with no link is refused before Slack is asked about anyone.
+    await database.read((sql) => readCallerLink(sql, channelId));
     // An Enterprise member can be named by either of their IDs, and is allowed once.
     const people = new Map<string, SlackPerson>();
     for (const userId of users) {
@@ -117,12 +117,6 @@ export function allowCommand(options: SetupCommandOptions): CommandHandler<"allo
       if (problem) throw new CommandRefusedError(admissionRefusal(shown(person, userId), problem));
       if (person) people.set(person.id, person);
     }
-    // The channel's name only labels the answer, which goes by the name it last had, or its ID,
-    // when Slack doesn't say.
-    const facts = await slack.call("conversations.info", (client) =>
-      fetchChannelFacts(client, slackChannelId),
-    );
-    const name = facts.kind === "ok" ? facts.result?.name : null;
     return database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
       const added = [...people.values()].filter((person) => !link.allowlist.has(person.id));
@@ -130,16 +124,10 @@ export function allowCommand(options: SetupCommandOptions): CommandHandler<"allo
         await writeSlackPerson(transaction, person);
         await allowPerson(transaction, link.id, person.id, at);
       }
-      // Unless the link moved to another channel while Slack was asked.
-      const named = link.slackChannelId === slackChannelId ? name : null;
-      if (named) await nameLinkChannel(transaction, link.id, named);
       const allowed = [...people.values()].map((person) => shown(person, person.id));
       return {
         result: { added: added.map((person) => person.id) },
-        text: presentAllowed(
-          allowed,
-          linkChannelName({ ...link, slackChannelName: named ?? link.slackChannelName }),
-        ),
+        text: presentAllowed(allowed, link.channel),
       };
     });
   };
