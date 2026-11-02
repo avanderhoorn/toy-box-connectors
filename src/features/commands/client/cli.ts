@@ -23,6 +23,14 @@ import {
 /** How a call went: its exit code, the Markdown to print, and what --json prints instead. */
 export type CallOutcome = { exitCode: 0 | 1 | 2; text: string; json: unknown };
 
+/** What a command line asks of a command, and why the command can't run as given. */
+export type CommandLine = {
+  input: Record<string, unknown>;
+  channelId: string | null;
+  json: boolean;
+  problems: string[];
+};
+
 export type CallOptions = {
   channelId?: string | null;
   env?: Record<string, string | undefined>;
@@ -85,17 +93,8 @@ export async function callBridge(
 }
 
 function socketCommand(name: string, spec: CommandSpec): CommandDef {
-  const fields = Object.entries(spec.input.shape);
-  const lists = new Set(fields.flatMap(([field, schema]) => (takesList(schema) ? [field] : [])));
   const args: ArgsDef = { ...sharedArgs };
-  // Every option reads each time it's given, so a list takes them all, and any other option given
-  // twice is refused rather than keeping one.
-  const options: ParseArgsOptionsConfig = {
-    channel: { type: "string", multiple: true },
-    json: { type: "boolean", multiple: true },
-  };
-  const singles = ["channel", "json"];
-  for (const [field, { description }] of fields) {
+  for (const [field, { description }] of Object.entries(spec.input.shape)) {
     const option = optionName(field);
     if (spec.positionals?.includes(field)) {
       // citty would answer a missing one with its usage, so the bridge refuses it instead, the way
@@ -103,51 +102,13 @@ function socketCommand(name: string, spec: CommandSpec): CommandDef {
       args[option] = { type: "positional", description, required: false };
     } else {
       args[option] = { type: "string", description };
-      options[option] = { type: "string", multiple: true };
-      if (!lists.has(field)) singles.push(option);
     }
   }
   return defineCommand({
     meta: { name, description: spec.description },
     args,
     async run({ rawArgs }) {
-      const { values, positionals, tokens } = parseArgs({
-        args: rawArgs,
-        options,
-        strict: false,
-        allowPositionals: true,
-        tokens: true,
-      });
-      const given = (option: string) =>
-        [values[option] ?? []].flat().map((value) => (typeof value === "string" ? value : ""));
-      // A positional is no option, and neither is a spelling `--help` doesn't show. Options come
-      // first, since an argument beside one was likely meant as its value.
-      const unknown = new Set(
-        tokens.flatMap((token) =>
-          token.kind === "option" && !Object.hasOwn(options, token.name) ? [token.rawName] : [],
-        ),
-      );
-      const last = spec.positionals?.at(-1);
-      const room = last && lists.has(last) ? Infinity : (spec.positionals?.length ?? 0);
-      const unwanted = unknown.size
-        ? [...unknown]
-        : positionals.slice(room).map((value) => `\`${value}\``);
-      const repeated = singles.filter((option) => given(option).length > 1);
-      const input: Record<string, unknown> = {};
-      for (const [field] of fields) {
-        const position = spec.positionals?.indexOf(field) ?? -1;
-        const taken =
-          position < 0
-            ? given(optionName(field))
-            : positionals.slice(position, lists.has(field) ? undefined : position + 1);
-        // Left out when not given, so a bridge of another release isn't sent an option it doesn't
-        // take.
-        if (taken.length) input[field] = lists.has(field) ? taken : taken[0];
-      }
-      const problems = [
-        ...(unwanted.length ? [`It doesn't take ${orList(unwanted)}.`] : []),
-        ...repeated.map((option) => `--${option}: Give it once.`),
-      ];
+      const { input, channelId, json, problems } = readCommandLine(spec, rawArgs);
       if (!problems.length) problems.push(...(await readPaths(spec, input)));
       // A terminal isn't kept waiting for text, since only a lead may post.
       if (
@@ -158,16 +119,72 @@ function socketCommand(name: string, spec: CommandSpec): CommandDef {
       ) {
         input.text = await Bun.stdin.text();
       }
-      const [channelId = null] = given("channel");
-      const { exitCode, text, json } = problems.length
+      const outcome = problems.length
         ? failed(1, didntRun(name, problems))
         : await callBridge(name, input, { channelId });
-      if ([values.json].flat()[0] === true) {
-        process.stdout.write(`${JSON.stringify(json, null, 2)}\n`);
-      } else process[exitCode === 0 ? "stdout" : "stderr"].write(`${text}\n`);
-      process.exitCode = exitCode;
+      if (json) {
+        process.stdout.write(`${JSON.stringify(outcome.json, null, 2)}\n`);
+      } else process[outcome.exitCode === 0 ? "stdout" : "stderr"].write(`${outcome.text}\n`);
+      process.exitCode = outcome.exitCode;
     },
   });
+}
+
+/** Reads a command line for the command `spec` describes, as `toy-box-slack <name>` does. */
+export function readCommandLine(spec: CommandSpec, rawArgs: string[]): CommandLine {
+  const fields = Object.entries(spec.input.shape);
+  const lists = new Set(fields.flatMap(([field, schema]) => (takesList(schema) ? [field] : [])));
+  // Every option reads each time it's given, so a list takes them all, and any other option given
+  // twice is refused rather than keeping one.
+  const options: ParseArgsOptionsConfig = {
+    channel: { type: "string", multiple: true },
+    json: { type: "boolean", multiple: true },
+  };
+  const singles = ["channel", "json"];
+  for (const [field] of fields) {
+    if (spec.positionals?.includes(field)) continue;
+    options[optionName(field)] = { type: "string", multiple: true };
+    if (!lists.has(field)) singles.push(optionName(field));
+  }
+  const { values, positionals, tokens } = parseArgs({
+    args: rawArgs,
+    options,
+    strict: false,
+    allowPositionals: true,
+    tokens: true,
+  });
+  const given = (option: string) =>
+    [values[option] ?? []].flat().map((value) => (typeof value === "string" ? value : ""));
+  // A positional is no option, and neither is a spelling `--help` doesn't show. Options come
+  // first, since an argument beside one was likely meant as its value.
+  const unknown = new Set(
+    tokens.flatMap((token) =>
+      token.kind === "option" && !Object.hasOwn(options, token.name) ? [token.rawName] : [],
+    ),
+  );
+  const last = spec.positionals?.at(-1);
+  const room = last && lists.has(last) ? Infinity : (spec.positionals?.length ?? 0);
+  const unwanted = unknown.size
+    ? [...unknown]
+    : positionals.slice(room).map((value) => `\`${value}\``);
+  const repeated = singles.filter((option) => given(option).length > 1);
+  const input: Record<string, unknown> = {};
+  for (const [field] of fields) {
+    const position = spec.positionals?.indexOf(field) ?? -1;
+    const taken =
+      position < 0
+        ? given(optionName(field))
+        : positionals.slice(position, lists.has(field) ? undefined : position + 1);
+    // Left out when not given, so a bridge of another release isn't sent an option it doesn't
+    // take.
+    if (taken.length) input[field] = lists.has(field) ? taken : taken[0];
+  }
+  const problems = [
+    ...(unwanted.length ? [`It doesn't take ${orList(unwanted)}.`] : []),
+    ...repeated.map((option) => `--${option}: Give it once.`),
+  ];
+  const [channelId = null] = given("channel");
+  return { input, channelId, json: [values.json].flat()[0] === true, problems };
 }
 
 /** Whether `schema` takes a list, of the arguments left or of an option's values. */
