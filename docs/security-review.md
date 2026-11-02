@@ -56,13 +56,13 @@ type and size, with why they can't be read.
 
 ## Copies and consent
 
-| Destination                           | Data and purpose                                                                                                                                                                                                                                                                                                             |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `~/.toy-box-slack` by default         | `bridge.db` and its WAL hold retained message text, requests, names and IDs, link settings, allowlists, wake runs and queued output, and each shared file's name, type, size and uploader, but never its contents. Credentials are separate. An image the lead reads waits ten minutes in `viewing` for the lead to view it. |
-| Local Toy Box                         | CLI output enters the lead's session transcript. Copilot keeps every image the lead views in its session history, as it keeps the Slack text and file text the lead reads. The lead may post digests or create workspace files. The bridge never posts into Toy Box.                                                         |
-| Copilot and the chosen model provider | Whatever Slack text, shared files and tool output the lead reads can enter model requests, images included. Copilot-only does not specify processing region, retention or contractual training restrictions.                                                                                                                 |
-| Slack                                 | Thread answers, posts and publications, with the images the lead shows in them, and eyes reactions. No progress notes or answer edits.                                                                                                                                                                                       |
-| Host backups and diagnostics          | Snapshots, copied reports and support bundles can become additional copies. Approve access and retention before enabling them.                                                                                                                                                                                               |
+| Destination                           | Data and purpose                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `~/.toy-box-slack` by default         | `bridge.db` and its WAL hold retained message text, requests, names and IDs, link settings, allowlists, wake runs and queued output, and each shared file's name, type, size and uploader, but never its contents. Credentials are separate. An image the lead reads waits in `viewing` for the lead to view it. |
+| Local Toy Box                         | CLI output enters the lead's session transcript. Copilot keeps every image the lead views in its session history, as it keeps the Slack text and file text the lead reads. The lead may post digests or create workspace files. The bridge never posts into Toy Box.                                             |
+| Copilot and the chosen model provider | Whatever Slack text, shared files and tool output the lead reads can enter model requests, images included. Copilot-only does not specify processing region, retention or contractual training restrictions.                                                                                                     |
+| Slack                                 | Thread answers, posts and publications, with the images the lead shows in them, and eyes reactions. No progress notes or answer edits.                                                                                                                                                                           |
+| Host backups and diagnostics          | Snapshots, copied reports and support bundles can become additional copies. Approve access and retention before enabling them.                                                                                                                                                                                   |
 
 Name the actual Copilot account and plan, permitted models and providers,
 subprocessors, processing regions, retention and support access before approval.
@@ -174,7 +174,7 @@ which Slack shows above it, gets the same secret check as the text. The bridge
 sends an image's bytes only to `https://files.slack.com`, without the token,
 and the file stays private to the bot until the post shows it. The bridge owes
 Slack a delete of any file no post shows, such as one whose post was refused,
-failed or was retracted, and retries it for 30 days.
+failed or was retracted.
 
 A shared file is untrusted too. Its text reaches the lead fenced under a label
 naming who shared and uploaded it, with control characters replaced and mentions
@@ -263,7 +263,8 @@ Ambiguous posts are checked for matching metadata about one and five minutes
 later, then remain unknown and reserved. They are never automatically resent,
 and no human-resolution command releases the reservation.
 
-Catch-up rereads up to 30 days of roots and follows threads with recent replies.
+Catch-up rereads roots as far back as the bridge keeps messages and follows
+threads with recent replies.
 It can recover new messages and current edits, but cannot reliably repair
 missed deletes. It misses replies on older roots and reply edits in threads
 it does not revisit. Unfinished reads are retried and reported in status,

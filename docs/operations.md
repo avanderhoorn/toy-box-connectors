@@ -129,10 +129,9 @@ about the file and downloads it each time the lead runs it, so a file deleted
 or unshared since is refused, and so is one whose sharer or uploader you
 denied. Text goes to the lead a page at a time and never to disk. The lead's
 viewer opens only files, so the bridge writes an image to `viewing` in the
-data folder, where only you can read it, and deletes it ten minutes later. It
-empties that folder when it starts and when it stops, so an image outlives the
-bridge only after a crash, until it starts again. Editing a snippet in Slack
-doesn't wake the lead or change an answer it already gave.
+data folder, where only you can read it, and deletes it soon after, as the
+[reviewer guide](security-review.md#retention-and-deletion) says. Editing a
+snippet in Slack doesn't wake the lead or change an answer it already gave.
 
 ## Images in posts
 
@@ -153,10 +152,9 @@ seconds, so it answers within the minute the CLI waits, and it refuses rather
 than post without an image Slack hasn't taken.
 
 A file no post shows, such as one whose post was refused, failed or was
-retracted, or one a crash left before its post was queued, is owed a delete.
-The bridge keeps trying it, waiting longer each time up to an hour apart, for
-30 days. Unlink leaves the deletes the bridge owes, since they belong to no
-link, while uninstalling the app forgets them, so the files they name stay in
+retracted, or one a crash left before its post was queued, is owed a delete,
+which the bridge retries until Slack takes it or the log says it gave up.
+Uninstalling the app forgets those deletes, so the files they name stay in
 Slack, though no message shows them.
 
 ## Deletion and limits
@@ -185,26 +183,15 @@ reset the database to recover an unknown post.
 Deleting or restoring an older database can also lose post reservations.
 Check Slack before resuming publications after any state reset.
 
-Cleanup runs at startup and hourly. It removes messages whose latest posted
-or edited version is over 30 days old, including markers and tombstones. The
-files a message lists go with it. A finished request goes once none of its
-messages remain, with the outbox items of its reply and the posts in
-its thread, so those can't be retracted after that, and a follow-up
-in its thread needs a new mention. A post forgets its text at the first
-cleanup after it can no longer go out, and keeps it as long as it may, such as
-a reply queued while its link is paused. Its number, hash and state stay, so an
-unknown post can still be confirmed and a publication slot stays reserved. What
-the lead queued with `post` goes entirely 30 days after it last changed, unless
-Slack never confirmed it or the bridge still keeps a reply or post in its
-thread, and after that it can't be retracted or named with `post --thread`. A
-request whose reply's delivery is unknown never finishes, so it stays too, and
-a finished one stays while a post in its thread may still go out or its
-delivery is unknown. A person's name and other IDs go with the `deny` or
-`unlink` that leaves no link allowing them.
+The [reviewer guide](security-review.md#retention-and-deletion) says what the
+bridge keeps and for how long. Once the bridge forgets a finished request, the
+lead can't retract its reply or the posts in its thread, and a follow-up there
+needs a new mention. Once it forgets what the lead queued with `post`, the lead
+can't retract that or name it with `post --thread`.
 
-Catch-up scans roots at most 30 days old and follows threads with replies
-since the gap. It takes new or edited versions from five minutes before the
-gap, never before the link or the retention horizon. Current snapshots are
+Catch-up scans roots as far back as the bridge keeps messages and follows
+threads with replies since the gap. It takes new or edited versions from five
+minutes before the gap, never before the link. Current snapshots are
 not an event log: do not rely on catch-up to repair missed deletes. Replies
 on older roots are missed, and reply edits alone do not make a thread get reread.
 

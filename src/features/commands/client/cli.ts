@@ -1,8 +1,9 @@
-// The CLI forwards the text it read and what its environment says about the caller to the bridge,
-// and prints the answer. It exits 0 when the command ran, 1 when it didn't or may not have, and 2
-// when no bridge is running. A command that posts reads its text from stdin unless --text gives it,
-// and sends the bytes of the files a path field names, refusing one it can't read or that's too big
-// without calling the bridge.
+// The CLI forwards the text it read and what its environment says about the caller to the bridge.
+// It exits 0 when the command ran, 1 when it didn't or may not have, and 2 when no bridge is
+// running. It prints the answer on stdout when the command ran and why it didn't on stderr, while
+// --json prints the result, or an { error } object, on stdout either way. A command that posts
+// reads its text from stdin unless --text gives it, and sends the bytes of the files a path field
+// names, refusing one it can't read or that's too big without calling the bridge.
 
 import { homedir } from "node:os";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
