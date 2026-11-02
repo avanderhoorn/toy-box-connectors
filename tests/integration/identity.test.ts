@@ -202,6 +202,17 @@ describe("reinstalling after an uninstall", () => {
     });
     expect(await database.read(readInstallation)).toMatchObject({ status: "uninstalled" });
   });
+
+  test("decides nothing when Slack can't be asked, so a reinstalled token isn't refused as the uninstall's", async () => {
+    const slack = fakeSlack(newBot);
+    const database = await openTestDatabase();
+    await confirm(database, fakeSlack());
+    await database.write(recordUninstall);
+    slack.failNext("auth.test", { status: 503 });
+
+    expect(await confirm(database, slack)).toMatchObject({ kind: "unavailable" });
+    expect(await database.read(readInstallation)).toMatchObject({ status: "uninstalled" });
+  });
 });
 
 describe("a rejected bot token", () => {
