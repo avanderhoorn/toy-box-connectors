@@ -35,6 +35,15 @@ test.each([
   ]);
 });
 
+test("post takes one member ID to each --mention, and says so to a lead that gives a list", () => {
+  const post = (mention: string[]) => problemWith("post", { text: "Shipped.", mention });
+
+  expect([post(["U0123ABCD", "U0456EFGH"]), post(["U0123ABCD,U0456EFGH"])]).toEqual([
+    null,
+    "`post` didn't run. --mention: Give one member ID to each, such as `--mention U0123ABCD --mention U0456EFGH`. Run `toy-box-slack post --help` to see what it takes.",
+  ]);
+});
+
 test("an --image is at most 5 MiB, and its --alt says what it shows in at most 1000 characters, each problem said once", () => {
   /** Two of each, so a problem both images have is said once. */
   const reply = (image: string, alt: string) =>

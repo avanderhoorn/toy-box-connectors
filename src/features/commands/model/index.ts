@@ -120,9 +120,9 @@ const slackChannelSchema = z
   .regex(/^[CDG][A-Z0-9]{2,20}$/, "Give the channel's ID, such as C0123ABCD, not its name")
   .describe("The Slack channel's ID, such as C0123ABCD, which its details show at the bottom");
 
-const memberIdSchema = z
-  .string()
-  .regex(/^[UW][A-Z0-9]{2,20}$/, "Give member IDs, such as U0123ABCD");
+const memberIdPattern = /^[UW][A-Z0-9]{2,20}$/;
+
+const memberIdSchema = z.string().regex(memberIdPattern, "Give member IDs, such as U0123ABCD");
 
 const slackUsersSchema = z
   .array(memberIdSchema)
@@ -131,7 +131,14 @@ const slackUsersSchema = z
 
 /** Whom a post notifies, one person to each --mention. */
 const mentionsSchema = z
-  .array(memberIdSchema)
+  .array(
+    z
+      .string()
+      .regex(
+        memberIdPattern,
+        "Give one member ID to each, such as `--mention U0123ABCD --mention U0456EFGH`",
+      ),
+  )
   .optional()
   .describe(
     "Someone on the allowlist to notify, by the member ID status shows, such as U0123ABCD. Repeat it for each person",
