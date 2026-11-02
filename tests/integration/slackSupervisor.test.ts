@@ -220,6 +220,27 @@ describe("connecting", () => {
     expect(logged()).toEqual(["Connected to Slack."]);
   });
 
+  test("a delivery is acked once it commits, however long after it arrived", async () => {
+    const logged = captureLog();
+    const link = await linkFakeSlack();
+    const { supervisor } = link.supervise();
+    await waitFor(() => expect(supervisor.state()).toEqual(connected));
+    // Catching up reads the clock too.
+    await caughtUp(link, 1);
+    const release = holdDatabase(link.database);
+    const arrived = link.nextRead();
+    const sent = link.fake.sendEvent(post("1700000200.000100"));
+    await arrived;
+    // A minute passes while the delivery waits on the database.
+    await Bun.sleep(10);
+    link.advance(60_000);
+    await release();
+
+    expect(await link.fake.waitForAck(sent.envelopeId)).not.toBeNull();
+    expect(await readMessages(link.database)).toEqual([{ ts: "1700000200.000100" }]);
+    expect(logged()).toEqual(["Connected to Slack."]);
+  });
+
   test("Slack that can't connect yet is asked again, less often each time, saying why once", async () => {
     const logged = captureLog();
     const link = await linkFakeSlack({ slackNow: Date.now });
