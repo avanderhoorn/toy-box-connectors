@@ -1,3 +1,17 @@
+## 📅 v0.6.0 (11/2/26)
+
+- Reinstalling the Slack app after an uninstall no longer means deleting bridge.db. Install it in Slack again, replace its bot token as status says and restart the bridge. The uninstall still forgets every link, so link each channel and allow its people again
+- A restart on the token Slack revoked says the app was uninstalled and how to install it again, as the running bridge does, rather than only asking for a new token
+- `post --mention` takes one member ID and repeats for each person, such as `--mention U0123ABCD --mention U0456EFGH`, as the skill now teaches. A comma list is refused with that example, so change any routine prompt that uses one
+- Any other option given twice is refused, naming it, rather than running with the last one
+- When Toy Box refuses to run the lead's routine, the bridge tries again after 15 seconds, then at longer waits up to 5 minutes, rather than waiting for something new in Slack
+- An answer from Slack the bridge can't read no longer stops it. It checks Slack for a post whose answer it couldn't read rather than sending it again, and tries a read again later
+- A suspended link wakes its lead once, rather than again each time the bridge reads its channel's name
+- Every fix that status and the commands print, such as `resume` or `unlink`, names its channel with `--channel`, so it runs as printed at a terminal
+- The bridge forgets what a reply, post or release note said within the hour after it can't go out, rather than 30 days later. It keeps only what proves it went out once
+- `deny` and `unlink` forget the names of people no link allows anymore at once, rather than within the hour
+- Restart `serve` after updating, and leads keep the routines they have. Until you do, the 0.5.1 bridge refuses any post with `--mention` and runs everything else as before. The first start upgrades bridge.db, which 0.5.x can't open afterward
+
 ## 📅 v0.5.1 (10/31/26)
 
 - A command refuses an option or argument it doesn't take, and names it, rather than running without it. Before, `post --threads r14` and `post r14` posted at the top of the channel, and `link --request all` linked in mention mode
