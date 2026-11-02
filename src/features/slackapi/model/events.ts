@@ -12,7 +12,7 @@ export type SlackEvent =
   | { kind: "uninstalled" }
   | { kind: "tokens_revoked"; botUserIds: string[] }
   | { kind: "other" }
-  | { kind: "malformed"; issues: string[]; channelId: string | null };
+  | { kind: "malformed"; issues: string[] };
 export type RoutingIdentity = Pick<Installation, "appId" | "teamId" | "botUserId" | "enterpriseId">;
 
 const id = z.string().min(1);
@@ -65,11 +65,7 @@ export function readSlackEvent(event: EventCallback["event"]): SlackEvent {
     return { kind: "member_left", channelId: member.channel, userId: member.user };
   } catch (error) {
     if (!(error instanceof z.ZodError)) throw error;
-    return {
-      kind: "malformed",
-      issues: issuesOf(error, ["event"]),
-      channelId: channelSchema.safeParse(event).data?.channel ?? null,
-    };
+    return { kind: "malformed", issues: issuesOf(error, ["event"]) };
   }
 }
 

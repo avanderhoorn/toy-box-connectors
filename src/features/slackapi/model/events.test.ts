@@ -9,13 +9,8 @@ test("event decoding retains lifecycle targets and never repeats malformed conte
     kind: "tokens_revoked",
     botUserIds: ["UBOT"],
   });
-  const result = readSlackEvent({
-    type: "message",
-    channel: "C1",
-    ts: "bad",
-    text: "private content",
-  });
-  expect(result).toMatchObject({ kind: "malformed", channelId: "C1" });
-  expect(JSON.stringify(result)).not.toContain("private content");
+  expect(
+    readSlackEvent({ type: "message", channel: "C1", ts: "bad", text: "private content" }),
+  ).toEqual({ kind: "malformed", issues: ["invalid_union at event"] });
   expect(readSlackEvent({ type: "toString" })).toEqual({ kind: "other" });
 });
