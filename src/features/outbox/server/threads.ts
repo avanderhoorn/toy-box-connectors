@@ -69,8 +69,6 @@ export async function threadProblem(
     request.rootTs !== item.threadTs
   )
     return "request_no_longer_valid";
-  // A reply holds its request answering until it settles, so any other state means it's moved on.
-  if (item.kind === "reply" && request.state !== "answering") return "request_no_longer_valid";
   return requestProblem(sql, link, request);
 }
 

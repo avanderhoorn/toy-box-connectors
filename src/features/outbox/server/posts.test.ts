@@ -116,15 +116,12 @@ test.each(unreadableAnswers)(
 );
 
 test.each([
-  ["deny", { item: { state: "failed", error: "requester_not_allowed" } }],
   ["cancel", { item: { state: "failed", error: "request_no_longer_valid" } }],
   ["pause", { kind: "waiting", reason: "link_inactive" }],
   ["widen", { kind: "waiting", reason: "channel_not_approved" }],
 ] as const)("a %s after queueing cannot reach Slack", async (cause, expected) => {
   const world = await createOutboxWorld();
   const item = await world.queue();
-  if (cause === "deny")
-    await world.database.write((tx) => tx`DELETE FROM allowlist WHERE link_id = 'link'`);
   if (cause === "cancel")
     await world.database.write(
       (tx) => tx`UPDATE requests SET state = 'cancelled', closed_reason = 'source_deleted'`,

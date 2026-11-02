@@ -18,14 +18,10 @@ import {
 } from "./database";
 import { createOutboxWorld } from "./testFixtures";
 
-test.each(["deny", "pause"])("a %s before queueing refuses the reply", async (cause) => {
+test("a pause before queueing refuses the reply", async () => {
   const world = await createOutboxWorld();
-  await world.database.write((tx) =>
-    cause === "deny"
-      ? tx`DELETE FROM allowlist WHERE link_id = 'link'`
-      : tx`UPDATE links SET status = 'paused' WHERE id = 'link'`,
-  );
-  await expect(world.queue()).rejects.toThrow(cause === "deny" ? "no longer allowed" : "active");
+  await world.database.write((tx) => tx`UPDATE links SET status = 'paused' WHERE id = 'link'`);
+  await expect(world.queue()).rejects.toThrow("This request's link isn't active.");
 });
 
 test("scheduled slots reserve publications across retraction, without using today's date", async () => {

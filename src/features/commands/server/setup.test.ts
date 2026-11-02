@@ -15,6 +15,7 @@ import { unreadableAnswers } from "@slackapi/server/testFixtures";
 import { startFakeToyBox } from "../../../../tests/fakes/toybox";
 import {
   allowCommand,
+  denyCommand,
   linkCommand,
   pauseCommand,
   resumeCommand,
@@ -137,6 +138,23 @@ test("pause answers that a link that was active is paused", async () => {
     result: { status: "paused" },
     text: "The link to #C-link is paused, so nothing new opens and nothing posts. Have the owner run `toy-box-slack resume --channel toybox-link`.",
   });
+});
+
+test("deny cancels the requests of the people it removes, so a reply queued for one never posts", async () => {
+  const world = await createOutboxWorld();
+  const reply = await world.queue();
+
+  const denied = await denyCommand(offline(world.database))({ users: ["U-owner"] }, OWNER);
+
+  expect(denied.result).toEqual({ cancelled: 1 });
+  expect(await world.database.read((sql) => readRequest(sql, world.request.id))).toMatchObject({
+    state: "cancelled",
+    closedReason: "requester_denied",
+  });
+  expect(await world.post(reply.id)).toMatchObject({
+    item: { state: "failed", error: "request_no_longer_valid" },
+  });
+  expect(world.slack.calls.some((call) => call.method === "chat.postMessage")).toBe(false);
 });
 
 test("unlink deletes what the bridge kept for its link, and nothing of another link's", async () => {

@@ -7,7 +7,6 @@ import {
   returnToSeen,
 } from "@requests/model/lifecycle";
 import { readRequest, saveRequest } from "@requests/server/database";
-import { canonicalUserId } from "@slackapi/server/users";
 import type { SlackTs } from "@slackapi/model/ts";
 import { z } from "zod";
 import { nextReconciliation, reconciliationDelays, type OutboxSettlement } from "../model/delivery";
@@ -88,8 +87,6 @@ export async function queueReply(
   const link = await readChannelLink(tx, request.channelId);
   if (!link || link.id !== request.linkId || link.status !== "active")
     throw new OutboxRefusedError("This request's link isn't active.");
-  if (!link.allowlist.has(await canonicalUserId(tx, request.requesterUserId)))
-    throw new OutboxRefusedError("This requester is no longer allowed.");
   const payload = rendered(input.text, [], input.images);
   try {
     await saveRequest(tx, beginAnswer(request, now));
