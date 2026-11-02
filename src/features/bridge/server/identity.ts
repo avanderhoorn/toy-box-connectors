@@ -45,6 +45,13 @@ export async function confirmIdentity(
   if (rotating !== null) return { kind: "refused", refusal: rotating };
 
   const asked = await ask(bot, "auth.test", fetchTokenOwner);
+  // A token Slack rejects after an uninstall is the uninstall's, so the owner gets its fix.
+  if (
+    asked.kind === "auth_failed" &&
+    (await database.read(readInstallation))?.status === "uninstalled"
+  ) {
+    return { kind: "refused", refusal: { reason: "uninstalled" } };
+  }
   if (asked.kind !== "ok") return asked;
   const checked = checkOwner(asked.result);
   if (checked.kind === "refused") return checked;

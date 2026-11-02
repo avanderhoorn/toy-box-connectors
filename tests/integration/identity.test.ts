@@ -189,14 +189,17 @@ describe("reinstalling after an uninstall", () => {
     }
   });
 
-  test("rejects a token Slack rejects, leaving the installation uninstalled", async () => {
+  test("reads a token Slack rejects as the uninstall's, leaving the installation uninstalled", async () => {
     const slack = fakeSlack(newBot);
     const database = await openTestDatabase();
     await confirm(database, fakeSlack());
     await database.write(recordUninstall);
     slack.failNext("auth.test", { error: "token_revoked" });
 
-    expect(await confirm(database, slack)).toEqual({ kind: "auth_failed", error: "token_revoked" });
+    expect(await confirm(database, slack)).toEqual({
+      kind: "refused",
+      refusal: { reason: "uninstalled" },
+    });
     expect(await database.read(readInstallation)).toMatchObject({ status: "uninstalled" });
   });
 });

@@ -451,6 +451,27 @@ describe("refusing Slack", () => {
     expect(await link.database.read(readInstallation)).toMatchObject({ status: "uninstalled" });
     expect(logged()).toEqual(["Connected to Slack.", problem]);
   });
+
+  test("a restart on the token an uninstall revoked says to install the app again, not only to paste a token", async () => {
+    const logged = captureLog();
+    const link = await linkFakeSlack();
+    const { supervisor } = link.supervise();
+    await waitFor(() => expect(supervisor.state()).toEqual(connected));
+    const uninstall = link.fake.sendEvent({ type: "app_uninstalled" });
+    expect(await link.fake.waitForAck(uninstall.envelopeId)).not.toBeNull();
+    await supervisor.stop();
+    link.fake.failNext("auth.test", { error: "token_revoked" });
+
+    const restarted = link.supervise();
+
+    const problem = refusalProblem({ reason: "uninstalled" }, DEFAULT_APP);
+    await waitFor(() =>
+      expect(restarted.supervisor.state()).toEqual({ connection: "refused", problem }),
+    );
+    // The bot client reports the rejection as it happens, before the bridge reads the uninstall.
+    const rejection = rejectedTokensProblem([["SLACK_BOT_TOKEN", "token_revoked"]], DEFAULT_APP);
+    expect(logged()).toEqual(["Connected to Slack.", problem, rejection, problem]);
+  });
 });
 
 describe("an added app", () => {
