@@ -3,10 +3,12 @@ import type { ClaimSlackApp } from "@bridge/model/claims";
 import type { BridgeDatabase } from "@bridge/server/database";
 import { confirmIdentity } from "@bridge/server/identity";
 import { captureLog, openTestDatabase } from "@bridge/server/testFixtures";
+import { recordUninstall } from "@links/server/lifecycle";
+import { createStoredRequest } from "@requests/server/testFixtures";
+import type { IdentityRefusal } from "@slackapi/model/identity";
 import type { Installation } from "@slackapi/model/installation";
 import { createBotClient } from "@slackapi/server/botClient";
 import { readInstallation } from "@slackapi/server/installation";
-import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack, type FakeSlack, type FakeSlackIdentity } from "../fakes/slack";
 
 const NOW = Date.parse("2026-10-28T09:00:00Z");
@@ -40,6 +42,15 @@ function confirm(
   return confirmIdentity(database, bot, tokens, claim);
 }
 
+/** The refusal of tokens whose `field` is `found` where the installation's is `stored`. */
+function mismatch(
+  field: Extract<IdentityRefusal, { reason: "mismatch" }>["field"],
+  stored: string,
+  found: string,
+) {
+  return { reason: "mismatch", field, stored, found } as const;
+}
+
 const fakeInstallation: Installation = {
   teamId: "TFAKE",
   enterpriseId: null,
@@ -62,10 +73,10 @@ describe("confirming the tokens", () => {
 
   test("tokens from another workspace, app, bot, bot user or Enterprise org are refused, changing nothing", async () => {
     for (const [identity, refusal] of [
-      [{ teamId: "TOTHER" }, { reason: "mismatch", field: "teamId", found: "TOTHER" }],
-      [{ appId: "AOTHER" }, { reason: "mismatch", field: "appId", found: "AOTHER" }],
-      [{ botId: "BOTHER" }, { reason: "mismatch", field: "botId", found: "BOTHER" }],
-      [{ botUserId: "UOTHER" }, { reason: "mismatch", field: "botUserId", found: "UOTHER" }],
+      [{ teamId: "TOTHER" }, mismatch("teamId", "TFAKE", "TOTHER")],
+      [{ appId: "AOTHER" }, mismatch("appId", "AFAKE", "AOTHER")],
+      [{ botId: "BOTHER" }, mismatch("botId", "BFAKE", "BOTHER")],
+      [{ botUserId: "UOTHER" }, mismatch("botUserId", "UFAKEBOT", "UOTHER")],
       // A workspace that joined an Enterprise org since it was set up.
       [{ enterpriseId: "EFAKE" }, { reason: "moved_org" }],
     ] as const) {
@@ -102,7 +113,7 @@ describe("a Slack app another app the bridge hosts holds", () => {
 
     expect(await confirm(database, fakeSlack({ appId: "AOTHER" }), { claim })).toEqual({
       kind: "refused",
-      refusal: { reason: "mismatch", field: "appId", found: "AOTHER" },
+      refusal: mismatch("appId", "AFAKE", "AOTHER"),
     });
     expect(claimed).toEqual([]);
   });
@@ -136,17 +147,57 @@ describe("refusing credentials v1 doesn't support", () => {
       expect(await database.read(readInstallation)).toBeNull();
     }
   });
+});
 
-  test("an uninstalled installation is refused without asking Slack", async () => {
-    const slack = fakeSlack();
+describe("reinstalling after an uninstall", () => {
+  // Slack doesn't promise a reinstall keeps the bot's IDs.
+  const newBot = { botId: "BNEW", botUserId: "UNEWBOT" };
+
+  test("goes on with the bot Slack reports now, numbering where it was, given the same workspace, org and app", async () => {
     const database = await openTestDatabase();
-    await createStoredInstallation(database, { status: "uninstalled" });
+    await confirm(database, fakeSlack({ enterpriseId: "EFAKE" }));
+    const before = await createStoredRequest(database);
+    await database.write(recordUninstall);
 
-    expect(await confirm(database, slack)).toEqual({
-      kind: "refused",
-      refusal: { reason: "uninstalled" },
+    const installation = { ...fakeInstallation, enterpriseId: "EFAKE", ...newBot };
+    expect(await confirm(database, fakeSlack({ enterpriseId: "EFAKE", ...newBot }))).toMatchObject({
+      kind: "confirmed",
+      installation,
     });
-    expect(slack.calls).toEqual([]);
+    expect(await database.read(readInstallation)).toEqual(installation);
+    expect((await createStoredRequest(database)).id).toBe(before.id + 1);
+  });
+
+  test("refuses another workspace, org or app, naming both, and a Slack app another app holds", async () => {
+    for (const [identity, refusal] of [
+      [{ teamId: "TOTHER" }, mismatch("teamId", "TFAKE", "TOTHER")],
+      [{ appId: "AOTHER" }, mismatch("appId", "AFAKE", "AOTHER")],
+      [{ enterpriseId: "EFAKE" }, { reason: "moved_org" }],
+      [{}, { reason: "duplicate_app", heldBy: "default" }],
+    ] as const) {
+      const database = await openTestDatabase();
+      await confirm(database, fakeSlack());
+      await database.write(recordUninstall);
+      const claim = () => (refusal.reason === "duplicate_app" ? refusal.heldBy : null);
+
+      expect(await confirm(database, fakeSlack({ ...identity, ...newBot }), { claim })).toEqual({
+        kind: "refused",
+        refusal,
+      });
+      const uninstalled: Installation = { ...fakeInstallation, status: "uninstalled" };
+      expect(await database.read(readInstallation)).toEqual(uninstalled);
+    }
+  });
+
+  test("rejects a token Slack rejects, leaving the installation uninstalled", async () => {
+    const slack = fakeSlack(newBot);
+    const database = await openTestDatabase();
+    await confirm(database, fakeSlack());
+    await database.write(recordUninstall);
+    slack.failNext("auth.test", { error: "token_revoked" });
+
+    expect(await confirm(database, slack)).toEqual({ kind: "auth_failed", error: "token_revoked" });
+    expect(await database.read(readInstallation)).toMatchObject({ status: "uninstalled" });
   });
 });
 

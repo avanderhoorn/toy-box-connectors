@@ -168,15 +168,20 @@ files and the login job's log are not removed; include them in the approved
 offboarding process.
 Run `toy-box-slack unlink --channel TOYBOX_ID` to remove one link, then have
 the lead delete its Slack routines.
-Before reinstalling after uninstall, stop the bridge and follow its startup
-refusal to remove that app's `bridge.db` and its WAL/SHM companions. The
-bridge refuses a `bridge.db` that an older version it can't upgrade made the
-same way. After removing that one, link each channel and allow its people
-again. One a newer version made needs that version, so install it again
-instead. An update that would leave a row pointing at nothing, such as one a
-sqlite3 session left, refuses and leaves `bridge.db` as it was, which the
-version that made it still reads. Do not reset the database to recover an
-unknown post.
+To reinstall after an uninstall, install the app in Slack again, replace that
+app's `SLACK_BOT_TOKEN` as its status says, and restart the bridge. It goes on
+with the bot Slack gives the new token, numbering where it was, but the
+uninstall forgot every link, so link each channel and allow its people again.
+A token for another workspace, org or Slack app is refused. A bridge that
+wasn't running at the uninstall never saw it, so if the reinstall gave the bot
+new IDs, the bridge refuses the new token and says how to start over.
+The bridge refuses a `bridge.db` that an older version it can't upgrade made,
+and says to remove it and its WAL/SHM companions. After removing that one,
+link each channel and allow its people again. One a newer version made needs
+that version, so install it again instead. An update that would leave a row
+pointing at nothing, such as one a sqlite3 session left, refuses and leaves
+`bridge.db` as it was, which the version that made it still reads. Do not
+reset the database to recover an unknown post.
 Deleting or restoring an older database can also lose post reservations.
 Check Slack before resuming publications after any state reset.
 

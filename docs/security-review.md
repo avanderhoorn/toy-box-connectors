@@ -229,11 +229,12 @@ Slack in memory.
 
 Unlink removes a link's owned bridge data. Observed app uninstall, or token
 revocation naming our bot, empties all other tables and leaves the installation
-marked uninstalled. That forgets the deletes the bridge owed, so the files they
-name stay in Slack, though no message shows them. Other credential errors stop
-work but retain data for repair. The credential file and the login job's log
-remain and need separate offboarding cleanup. An offline bridge cannot detect
-uninstall immediately.
+marked uninstalled, which only tokens Slack confirms for the same workspace,
+org and Slack app take up again. That forgets the deletes the bridge owed, so
+the files they name stay in Slack, though no message shows them. Other
+credential errors stop work but retain data for repair. The credential file and
+the login job's log remain and need separate offboarding cleanup. An offline
+bridge cannot detect uninstall immediately.
 
 When observed, Slack deletion, a tombstone or EKM/DLP withdrawal redacts the
 ledger's message and can cancel a pending request and its queued answer.

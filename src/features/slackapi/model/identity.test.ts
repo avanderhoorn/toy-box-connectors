@@ -46,16 +46,16 @@ describe("what the owner does about an added app's tokens", () => {
     );
   });
 
-  // The uninstalled hint names the app's files itself, not through the helpers the others share,
-  // and starting an added app over forgets only its own links and leaves its tokens in place.
+  // An added app's uninstall, and starting it over, forget only its own links, and starting over
+  // leaves its tokens in place.
   const refusals = {
     uninstalled: [
       { reason: "uninstalled" },
-      "The releases app was uninstalled from Slack. To install it again, have the owner stop the bridge, remove bridge.db and its -wal/-shm files from the bridge's apps/releases folder, delete the SLACK_BOT_TOKEN line from the bridge's apps/releases/credentials.env, install the app in Slack again, and run `toy-box-slack serve` at their own terminal, which asks for its new bot token.",
+      "The releases app was uninstalled from Slack, which forgot every link through it. To install it again, have the owner install the app in Slack, delete the SLACK_BOT_TOKEN line from the bridge's apps/releases/credentials.env, run `toy-box-slack serve` at their own terminal, which asks for its new bot token, and then restart the bridge.",
     ],
     mismatch: [
-      { reason: "mismatch", field: "teamId", found: "T-other" },
-      "The releases app's SLACK_BOT_TOKEN belongs to another workspace (T-other) than the one the releases app was set up for. Have the owner delete the SLACK_BOT_TOKEN line from the bridge's apps/releases/credentials.env, run `toy-box-slack serve` at their own terminal, which asks for it again, and then restart the bridge. To move the releases app to that workspace instead, which forgets every link through it, have the owner stop the bridge, remove bridge.db and its -wal/-shm files from the bridge's apps/releases folder, and start it again.",
+      { reason: "mismatch", field: "teamId", stored: "T-home", found: "T-other" },
+      "The releases app's SLACK_BOT_TOKEN belongs to another workspace (T-other) than the one the releases app was set up for (T-home). Have the owner delete the SLACK_BOT_TOKEN line from the bridge's apps/releases/credentials.env, run `toy-box-slack serve` at their own terminal, which asks for it again, and then restart the bridge. To move the releases app to that workspace instead, which forgets every link through it, have the owner stop the bridge, remove bridge.db and its -wal/-shm files from the bridge's apps/releases folder, and start it again.",
     ],
   } satisfies Partial<Record<IdentityRefusal["reason"], [IdentityRefusal, string]>>;
 

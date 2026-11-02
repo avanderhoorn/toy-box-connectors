@@ -20,7 +20,12 @@ export type BotOwner = TokenOwner & { botId: string };
 export type BotInfo = { appId: string; userId: string };
 export type IdentityRefusal =
   | { reason: "uninstalled" | "org_wide" | "not_bot" | "rotating" | "moved_org" | "other_app" }
-  | { reason: "mismatch"; field: "teamId" | "appId" | "botId" | "botUserId"; found: string }
+  | {
+      reason: "mismatch";
+      field: "teamId" | "appId" | "botId" | "botUserId";
+      stored: string;
+      found: string;
+    }
   // Another app the bridge hosts, `heldBy`, already connects through the same Slack app.
   | { reason: "duplicate_app"; heldBy: string };
 
@@ -82,12 +87,23 @@ export function identityOf(owner: BotOwner, bot: BotInfo): SlackIdentity | null 
     : null;
 }
 
+/**
+ * Why tokens Slack says are `found`'s aren't the `stored` installation's, if they aren't. An
+ * uninstall forgot everything tied to the bot, and Slack doesn't promise a reinstall keeps its
+ * IDs, so after one only the workspace, org and app must match.
+ */
 export function identityRefusal(
-  stored: SlackIdentity,
+  stored: Installation,
   found: SlackIdentity,
 ): IdentityRefusal | null {
-  for (const field of ["teamId", "appId", "botId", "botUserId"] as const) {
-    if (stored[field] !== found[field]) return { reason: "mismatch", field, found: found[field] };
+  const fields =
+    stored.status === "uninstalled"
+      ? (["teamId", "appId"] as const)
+      : (["teamId", "appId", "botId", "botUserId"] as const);
+  for (const field of fields) {
+    if (stored[field] !== found[field]) {
+      return { reason: "mismatch", field, stored: stored[field], found: found[field] };
+    }
   }
   return stored.enterpriseId === found.enterpriseId ? null : { reason: "moved_org" };
 }
@@ -112,7 +128,7 @@ export function refusalProblem(refusal: IdentityRefusal, app: string): string {
         app === DEFAULT_APP
           ? "Slack was uninstalled"
           : `${upper(its.app)} was uninstalled from Slack`;
-      return `${what}. To install it again, have the owner stop the bridge, remove ${its.database}, delete the SLACK_BOT_TOKEN line from ${its.credentials}, install the app in Slack again, and run \`toy-box-slack serve\` at their own terminal, which asks for its new bot token.`;
+      return `${what}, which forgot ${its.links}. To install it again, have the owner install the app in Slack, ${replace(its, ["SLACK_BOT_TOKEN"], "its new bot token")}.`;
     }
     case "not_bot":
       return `${bot} isn't a bot token. Have the owner ${replace(its, ["SLACK_BOT_TOKEN"])}.`;
@@ -126,7 +142,7 @@ export function refusalProblem(refusal: IdentityRefusal, app: string): string {
       return `The workspace joined or left an Enterprise org since ${its.app} was set up. ${upper(its.app)} has to start over, which forgets ${its.links}, so have the owner ${startOver(its)}.`;
     case "mismatch": {
       const other = belongings[refusal.field];
-      return `${bot} belongs to another ${other} (${refusal.found}) than the one ${its.app} was set up for. Have the owner ${replace(its, ["SLACK_BOT_TOKEN"])}. To move ${its.app} to that ${other} instead, which forgets ${its.links}, have the owner ${startOver(its)}.`;
+      return `${bot} belongs to another ${other} (${refusal.found}) than the one ${its.app} was set up for (${refusal.stored}). Have the owner ${replace(its, ["SLACK_BOT_TOKEN"])}. To move ${its.app} to that ${other} instead, which forgets ${its.links}, have the owner ${startOver(its)}.`;
     }
     // Only another app can hold the same Slack app, so this one names the default app too.
     case "duplicate_app":

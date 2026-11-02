@@ -11,18 +11,14 @@ import {
 import type { Installation } from "@slackapi/model/installation";
 import type { BotClient } from "@slackapi/server/botClient";
 import { fetchBotInfo, fetchTokenOwner } from "@slackapi/server/identity";
-import {
-  reactivateInstallation,
-  readInstallation,
-  recordInstallation,
-} from "@slackapi/server/installation";
+import { readInstallation, recordInstallation } from "@slackapi/server/installation";
 
 // Confirming the tokens.
 //
 // Startup asks Slack whose tokens the bridge holds before it reads or sends anything. The first
-// answer records the installation, and every later start must agree with it. No other app the
-// bridge hosts may hold the Slack app it names. An answer the bridge can't get or can't read
-// decides nothing.
+// answer records the installation, and every later start must agree with it, though a reinstall
+// after an uninstall may bring a new bot. No other app the bridge hosts may hold the Slack app it
+// names. An answer the bridge can't get or can't read decides nothing.
 
 /** What Slack said about the tokens. */
 export type IdentityVerdict =
@@ -47,7 +43,6 @@ export async function confirmIdentity(
 ): Promise<IdentityVerdict> {
   const rotating = tokensRefusal(tokens);
   if (rotating !== null) return { kind: "refused", refusal: rotating };
-  if ((await database.read(readInstallation))?.status === "uninstalled") return uninstalled;
 
   const asked = await ask(bot, "auth.test", fetchTokenOwner);
   if (asked.kind !== "ok") return asked;
@@ -64,21 +59,16 @@ export async function confirmIdentity(
   }
 
   return database.write(async (transaction): Promise<IdentityVerdict> => {
-    // Slack may have uninstalled the app, or the bridge recorded the installation, since it read.
     const stored = await readInstallation(transaction);
-    if (stored?.status === "uninstalled") return uninstalled;
     const refusal = stored === null ? null : identityRefusal(stored, found);
     if (refusal !== null) return { kind: "refused", refusal };
     const heldBy = claim(found.appId);
     if (heldBy !== null) return { kind: "refused", refusal: { reason: "duplicate_app", heldBy } };
-    if (stored === null) await recordInstallation(transaction, found);
-    await reactivateInstallation(transaction);
+    await recordInstallation(transaction, found);
     const installation: Installation = { ...found, status: "active" };
     return { kind: "confirmed", installation, workspaceUrl: owner.workspaceUrl };
   });
 }
-
-const uninstalled: IdentityVerdict = { kind: "refused", refusal: { reason: "uninstalled" } };
 
 type Asked<Result> =
   | { kind: "ok"; result: Result }

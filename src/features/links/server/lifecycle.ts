@@ -28,9 +28,9 @@ export async function suspendChannelLinks(
 
 /**
  * Records that the app was uninstalled or its bot token revoked, and deletes everything else the
- * bridge kept, settings included. The installation stays, marked uninstalled, so the bridge won't
- * start again on tokens Slack revoked. Once the installation is uninstalled already, it does
- * nothing.
+ * bridge kept, settings included. The installation stays, marked uninstalled, so the bridge takes
+ * nothing more from Slack until tokens for the same workspace, org and app reinstall it. Once the
+ * installation is uninstalled already, it does nothing.
  */
 export async function recordUninstall(transaction: Bun.SQL): Promise<void> {
   const uninstalled = await transaction`
