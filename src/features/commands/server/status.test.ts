@@ -158,42 +158,30 @@ test("stops waiting for a name two seconds after asking, showing the channel by 
   expect((await shown).text).toContain("\n\n## #C-link and Toy Box channel ");
 });
 
-test("shows the channel by the name the link stored when Slack doesn't name it in time", async () => {
-  const { app, toyBox, channelId } = await startNamedLink();
-  await app.database.write(
-    (transaction) => transaction`UPDATE links SET slack_channel_name = 'stored-name'`,
-  );
-  const status = statusCommand({
-    nameApps: false,
-    toyBoxOrigin: new URL(toyBox.url),
-    nameTimeoutMs: 20,
-  });
-  const silent: BotClient = { ...app.bot, call: () => new Promise(() => {}) };
-
-  const { result, text } = await status([{ ...app, bot: silent }], { channelId, at: 1_000 });
-
-  expect((result as Status).links[0]).toMatchObject({ slackChannel: "#stored-name" });
-  expect(text).toContain("\n\n## #stored-name and Toy Box channel ");
-});
-
 test.each<[string, BotClient["call"]]>([
   ["never answers", () => new Promise(() => {})],
   ["sends what the bridge can't read", () => Promise.reject(new Error("No channel ID."))],
 ])(
-  "shows the Slack channel by its ID within the deadline when Slack %s, still naming the Toy Box channel",
+  "shows the Slack channel by the name its link stored, else by its ID, within the deadline when Slack %s, still naming the Toy Box channel",
   async (_, call) => {
     const { app, toyBox, channelId } = await startNamedLink();
     const origin = new URL(toyBox.url);
     const status = statusCommand({ nameApps: false, toyBoxOrigin: origin, nameTimeoutMs: 100 });
-    const started = performance.now();
+    const shown = async () => {
+      const started = performance.now();
+      const { text } = await status([{ ...app, bot: { ...app.bot, call } }], {
+        channelId,
+        at: 1_000,
+      });
+      expect(performance.now() - started).toBeLessThan(500);
+      return text;
+    };
 
-    const { text } = await status([{ ...app, bot: { ...app.bot, call } }], {
-      channelId,
-      at: 1_000,
-    });
-
-    expect(performance.now() - started).toBeLessThan(500);
-    expect(text).toContain('\n\n## #C-link and Toy Box channel "Toy Box Slack"\n');
+    expect(await shown()).toContain('\n\n## #C-link and Toy Box channel "Toy Box Slack"\n');
+    await app.database.write(
+      (transaction) => transaction`UPDATE links SET slack_channel_name = 'stored-name'`,
+    );
+    expect(await shown()).toContain('\n\n## #stored-name and Toy Box channel "Toy Box Slack"\n');
   },
 );
 
