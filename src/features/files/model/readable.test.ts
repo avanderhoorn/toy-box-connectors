@@ -23,7 +23,7 @@ test.each<[string, SlackFile, FileVerdict]>([
   [
     "but not text a byte longer",
     { ...notes, size: mib + 1 },
-    refused("it's over 1 MB, more text than the bridge reads"),
+    refused("it's over 1 MiB, more text than the bridge reads"),
   ],
   [
     "nor HTML, however its type is written",
@@ -38,7 +38,7 @@ test.each<[string, SlackFile, FileVerdict]>([
   [
     "but not an image a byte bigger",
     { ...notes, mimeType: "image/png", size: 10 * mib + 1 },
-    refused("it's over 10 MB, more than you can view, so ask for a crop or a JPEG"),
+    refused("it's over 10 MiB, more than you can view, so ask for a crop or a JPEG"),
   ],
   [
     "nor a PDF",

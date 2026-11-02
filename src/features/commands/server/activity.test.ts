@@ -40,7 +40,7 @@ test("serves the messages that changed after the cursor a page at a time, and ma
     [
       "Here's what changed in #C-link since you last marked it read.",
       "### Thread started 2 hours ago\nhttps://acme.slack.com/archives/C-link/p1700000100000100",
-      '```slack from U-owner (edited)\nCan you look at prod instead?\n```\nIt shares 1 file:\n- f2, PNG, 402 KB, read it with `toy-box-slack file f2`: "build-error.png"',
+      '```slack from U-owner (edited)\nCan you look at prod instead?\n```\nIt shares 1 file:\n- f2, PNG, 402 KiB, read it with `toy-box-slack file f2`: "build-error.png"',
       "```slack from Toy (you)\nOn it.\n```",
       "Once you've read these, run `toy-box-slack mark-read --through 5`. Then run activity again for 2 more messages.",
     ].join("\n\n"),

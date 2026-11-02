@@ -43,8 +43,8 @@ test.each<[string, FileAnswer, string]>([
 
 test.each<[number, string]>([
   [1_023, "1023 bytes"],
-  [1_024, "1 KB"],
-  [1_048_575, "1.0 MB"],
+  [1_024, "1 KiB"],
+  [1_048_575, "1.0 MiB"],
 ])("a file of %d bytes lists as %s, in units of 1,024", (size, shown) => {
   expect(presentListedFile({ reference: "f12", format: "text", size, name: null })).toBe(
     `- f12, text, ${shown}, read it with \`toy-box-slack file f12\``,

@@ -88,10 +88,10 @@ function quoted(name: string | null): string {
   return name === null ? "" : `: "${name}"`;
 }
 
-// In KB and MB of 1,024 bytes, as the bridge's limits on what it reads are.
+// In KiB and MiB, as the bridge's limits on what it reads are.
 function fileSize(bytes: number): string {
   if (bytes < 1024) return count(bytes, "byte");
-  const kilobytes = Math.round(bytes / 1024);
-  if (kilobytes < 1024) return `${kilobytes} KB`;
-  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  const kibibytes = Math.round(bytes / 1024);
+  if (kibibytes < 1024) return `${kibibytes} KiB`;
+  return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
 }

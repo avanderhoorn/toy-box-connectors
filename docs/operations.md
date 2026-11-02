@@ -122,8 +122,8 @@ else changes. A message the bridge stored before the update lists no files
 until someone edits it.
 
 Inbox and activity list each file under its message, as `f12` or with why the
-lead can't read it, such as a PDF. The lead reads text up to 1 MB and PNG or
-JPEG images up to 10 MB and 40 megapixels, and only while whoever shared the
+lead can't read it, such as a PDF. The lead reads text up to 1 MiB and PNG or
+JPEG images up to 10 MiB and 40 megapixels, and only while whoever shared the
 file and whoever uploaded it are both on the allowlist. `file` asks Slack
 about the file and downloads it each time the lead runs it, so a file deleted
 or unshared since is refused, and so is one whose sharer or uploader you

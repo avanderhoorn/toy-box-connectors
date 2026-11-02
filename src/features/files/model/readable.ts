@@ -54,9 +54,9 @@ export function judgeFile(file: SlackFile, sharerId: string | null, allowed: All
   const format = file.mode === "hosted" || file.mode === "snippet" ? formatOf(type) : null;
   if (!format) return refused("the bridge reads only text, PNG and JPEG");
   if (format === "text" && file.size > textCap)
-    return refused("it's over 1 MB, more text than the bridge reads");
+    return refused("it's over 1 MiB, more text than the bridge reads");
   if (format !== "text" && file.size > imageCap)
-    return refused("it's over 10 MB, more than you can view, so ask for a crop or a JPEG");
+    return refused("it's over 10 MiB, more than you can view, so ask for a crop or a JPEG");
   return { kind: "readable", format };
 }
 
