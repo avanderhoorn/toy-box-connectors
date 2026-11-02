@@ -6,6 +6,8 @@ import { startOutboxWorker, type OutboxWorker } from "@outbox/server";
 import { queuePublication, queueReply } from "@outbox/server/database";
 import { oweFileDeletes } from "@outbox/server/files";
 import { createOutboxWorld } from "@outbox/server/testFixtures";
+import { dismissRequest } from "@requests/model/lifecycle";
+import { saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import type { BotClient } from "@slackapi/server/botClient";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
@@ -129,10 +131,7 @@ test("a dismissed request keeps 👀, though a post in its thread goes out", asy
   const { world, worker, eyes, reactions } = await startWatching();
   worker.acknowledge([world.request]);
   await waitFor(() => expect(eyes()).toEqual(eyesOn));
-  await world.database.write(
-    (tx) =>
-      tx`UPDATE requests SET state = 'dismissed', closed_reason = 'Not asked.' WHERE id = ${world.request.id}`,
-  );
+  await world.database.write((tx) => saveRequest(tx, dismissRequest(world.request, "Not asked.")));
 
   const post = await world.queuePost({ request: world.request.id });
   await waitFor(async () => expect(await world.read(post.id)).toMatchObject({ state: "sent" }));

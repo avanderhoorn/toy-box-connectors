@@ -9,8 +9,8 @@ import { createPostDelivery, type PostStep } from "./posts";
 import { createReconciliation } from "./reconcile";
 
 type SeenRequest = Pick<StoredRequest, "channelId" | "sourceTs">;
-/** The bot's 👀 on a request's message, put there once a lead is woken and taken off once its answer posts. */
-type Eyes = SeenRequest & { call: "add" | "remove" };
+/** The bot's 👀 on a request's message, put on once its lead is woken or reads it and taken off once its answer posts. */
+type Eyes = SeenRequest & { change: "add" | "remove" };
 export interface OutboxWorker {
   poke(): void;
   acknowledge(requests: readonly SeenRequest[]): void;
@@ -68,9 +68,9 @@ export function startOutboxWorker(
         : checks.reconcile(item.id));
       onChange();
       const answered = await answeredRequest(step);
-      if (answered) eyes.push({ call: "remove", ...answered });
+      if (answered) eyes.push({ change: "remove", ...answered });
     }
-    for (const { call: change, channelId, sourceTs } of eyes.splice(0)) {
+    for (const { change, channelId, sourceTs } of eyes.splice(0)) {
       if (stopped || !ready()) return;
       const reaction = { channel: channelId, timestamp: sourceTs, name: "eyes" };
       const call = await bot.call(`reactions.${change}`, (client) =>
@@ -101,7 +101,7 @@ export function startOutboxWorker(
     acknowledge(requests) {
       if (stopped || !ready()) return;
       for (const { channelId, sourceTs } of requests)
-        eyes.push({ call: "add", channelId, sourceTs });
+        eyes.push({ change: "add", channelId, sourceTs });
       poke();
     },
     async stop() {
