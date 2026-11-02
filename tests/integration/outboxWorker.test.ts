@@ -181,7 +181,10 @@ test("the worker deletes what the bridge owes once it's due, backs off while Sla
   expect(deletes()).toEqual(["F-1"]);
   worker.poke();
   await waitFor(() => expect(deletes()).toEqual(["F-1", "F-2", "F-3"]));
-  expect(logged()).toEqual(["Gave up deleting Slack file F-3 after trying for 30 days."]);
+  // The fake records a call before it answers, so the worker gives up only after that.
+  await waitFor(() =>
+    expect(logged()).toEqual(["Gave up deleting Slack file F-3 after trying for 30 days."]),
+  );
 
   // The bridge asks about F-1 again a minute later, and when Slack loses that answer too, two after.
   world.slack.failNext("files.delete", { lostResponse: true });
@@ -202,7 +205,7 @@ test("the worker deletes what the bridge owes once it's due, backs off while Sla
   worker.poke();
   await waitFor(() => expect(deletes()).toHaveLength(6));
   expect(deletes().at(-1)).toBe("F-4");
-  expect(await owed()).toEqual([]);
+  await waitFor(async () => expect(await owed()).toEqual([]));
 });
 
 test("a reply Slack refuses after removing the bot suspends the link and wakes its lead once", async () => {
