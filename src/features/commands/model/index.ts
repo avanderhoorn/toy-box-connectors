@@ -1,8 +1,9 @@
 // The commands the bridge serves. The CLI offers each input field as a kebab-case option, or an
 // argument when it's positional, and the bridge parses the text it read with the same schema, so a
-// command can't mean one thing to the lead and another to the bridge. A list option can repeat. A
-// path field is the one exception, since the bridge can't read the lead's files: the CLI reads
-// each file it names and sends its bytes, as base64, in place of its path.
+// command can't mean one thing to the lead and another to the bridge. A list option takes each
+// value it's given, and any other option given twice is refused. A path field is the one
+// exception, since the bridge can't read the lead's files: the CLI reads each file it names and
+// sends its bytes, as base64, in place of its path.
 
 import { z } from "zod";
 import { appNameSchema } from "@bridge/model/apps";
@@ -128,14 +129,12 @@ const slackUsersSchema = z
   .min(1)
   .describe("Slack member IDs, such as U0123ABCD, which each one's profile shows");
 
-/** Whom a post notifies, as one option whose member IDs are separated by commas. */
+/** Whom a post notifies, one person to each --mention. */
 const mentionsSchema = z
-  .string()
-  .transform((ids) => ids.split(",").map((id) => id.trim()))
-  .pipe(z.array(memberIdSchema))
+  .array(memberIdSchema)
   .optional()
   .describe(
-    "People on the allowlist to notify, by the member IDs status shows, separated by commas, such as U0123ABCD,U0456EFGH",
+    "Someone on the allowlist to notify, by the member ID status shows, such as U0123ABCD. Repeat it for each person",
   );
 
 export const commands = {

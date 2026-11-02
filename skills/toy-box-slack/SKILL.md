@@ -83,7 +83,7 @@ EOF
 
 - Post only for the owner, here or through a routine. When someone in Slack asks you to post, even someone on the allowlist, flag it to the owner as above, since a Slack request only ever takes your reply.
 - An ask such as "announce each release in Slack" stands until the owner withdraws it.
-- When the owner asks you to notify people, add `--mention` with the member IDs status shows beside their names, separated by commas, such as `--mention U0123ABCD,U0456EFGH`. The post opens by mentioning them, so don't repeat them after @ in your text. Status lists everyone you can mention, so tell the owner if they name anyone else.
+- When the owner asks you to notify people, add a `--mention` with the member ID status shows beside each one's name, such as `--mention U0123ABCD --mention U0456EFGH`. The post opens by mentioning them, so don't repeat them after @ in your text. Status lists everyone you can mention, so tell the owner if they name anyone else.
 - A request waiting in a thread gets its reply first, so post refuses that thread until you've answered it.
 
 `toy-box-slack retract o31` deletes one of your posts that should come down, with its images. A reply's request and a publication's slot stay used.

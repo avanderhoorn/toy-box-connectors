@@ -86,38 +86,40 @@ export async function callBridge(
 
 function socketCommand(name: string, spec: CommandSpec): CommandDef {
   const fields = Object.entries(spec.input.shape);
+  const lists = new Set(fields.flatMap(([field, schema]) => (takesList(schema) ? [field] : [])));
   const args: ArgsDef = { ...sharedArgs };
+  // Every option reads each time it's given, so a list takes them all, and any other option given
+  // twice is refused rather than keeping one.
   const options: ParseArgsOptionsConfig = {
-    channel: { type: "string" },
-    json: { type: "boolean" },
+    channel: { type: "string", multiple: true },
+    json: { type: "boolean", multiple: true },
   };
-  for (const [field, schema] of fields) {
-    const { description } = schema;
+  const singles = ["channel", "json"];
+  for (const [field, { description }] of fields) {
     const option = optionName(field);
     if (spec.positionals?.includes(field)) {
-      args[option] = {
-        type: "positional",
-        description,
-        required: !schema.safeParse(undefined).success,
-      };
+      // citty would answer a missing one with its usage, so the bridge refuses it instead, the way
+      // it refuses anything else, in JSON under --json.
+      args[option] = { type: "positional", description, required: false };
     } else {
       args[option] = { type: "string", description };
-      options[option] = { type: "string", multiple: takesList(schema) };
+      options[option] = { type: "string", multiple: true };
+      if (!lists.has(field)) singles.push(option);
     }
   }
   return defineCommand({
     meta: { name, description: spec.description },
     args,
-    async run({ args: read, rawArgs }) {
-      // citty gives a positional only its first argument, and an option only its last, so a list
-      // takes the arguments left, or reads every time its option repeats.
-      const { values, tokens } = parseArgs({
+    async run({ rawArgs }) {
+      const { values, positionals, tokens } = parseArgs({
         args: rawArgs,
         options,
         strict: false,
         allowPositionals: true,
         tokens: true,
       });
+      const given = (option: string) =>
+        [values[option] ?? []].flat().map((value) => (typeof value === "string" ? value : ""));
       // A positional is no option, and neither is a spelling `--help` doesn't show. Options come
       // first, since an argument beside one was likely meant as its value.
       const unknown = new Set(
@@ -126,41 +128,43 @@ function socketCommand(name: string, spec: CommandSpec): CommandDef {
         ),
       );
       const last = spec.positionals?.at(-1);
-      const room = last && takesList(spec.input.shape[last]!) ? Infinity : spec.positionals?.length;
-      const extra = tokens
-        .flatMap((token) => (token.kind === "positional" ? [`\`${token.value}\``] : []))
-        .slice(room ?? 0);
-      const input: Record<string, unknown> = Object.fromEntries(
-        fields.flatMap(([field, schema]) => {
-          const option = optionName(field);
-          const position = spec.positionals?.indexOf(field) ?? -1;
-          if (!takesList(schema)) return [[field, read[option]]];
-          if (position >= 0) return [[field, read._.slice(position)]];
-          // Left out like any option not given, so a bridge of another release isn't sent one it
-          // doesn't take.
-          if (values[option] === undefined) return [];
-          return [[field, [values[option]].flat().map((value) => (value === true ? "" : value))]];
-        }),
-      );
-      const unwanted = unknown.size ? [...unknown] : extra;
-      const problems = unwanted.length
-        ? [`It doesn't take ${orList(unwanted)}.`]
-        : await readPaths(spec, input);
+      const room = last && lists.has(last) ? Infinity : (spec.positionals?.length ?? 0);
+      const unwanted = unknown.size
+        ? [...unknown]
+        : positionals.slice(room).map((value) => `\`${value}\``);
+      const repeated = singles.filter((option) => given(option).length > 1);
+      const input: Record<string, unknown> = {};
+      for (const [field] of fields) {
+        const position = spec.positionals?.indexOf(field) ?? -1;
+        const taken =
+          position < 0
+            ? given(optionName(field))
+            : positionals.slice(position, lists.has(field) ? undefined : position + 1);
+        // Left out when not given, so a bridge of another release isn't sent an option it doesn't
+        // take.
+        if (taken.length) input[field] = lists.has(field) ? taken : taken[0];
+      }
+      const problems = [
+        ...(unwanted.length ? [`It doesn't take ${orList(unwanted)}.`] : []),
+        ...repeated.map((option) => `--${option}: Give it once.`),
+      ];
+      if (!problems.length) problems.push(...(await readPaths(spec, input)));
       // A terminal isn't kept waiting for text, since only a lead may post.
       if (
         !problems.length &&
-        Object.hasOwn(input, "text") &&
+        Object.hasOwn(spec.input.shape, "text") &&
         input.text === undefined &&
         !process.stdin.isTTY
       ) {
         input.text = await Bun.stdin.text();
       }
-      const channelId = typeof read.channel === "string" ? read.channel : null;
+      const [channelId = null] = given("channel");
       const { exitCode, text, json } = problems.length
         ? failed(1, didntRun(name, problems))
         : await callBridge(name, input, { channelId });
-      if (read.json === true) process.stdout.write(`${JSON.stringify(json, null, 2)}\n`);
-      else process[exitCode === 0 ? "stdout" : "stderr"].write(`${text}\n`);
+      if ([values.json].flat()[0] === true) {
+        process.stdout.write(`${JSON.stringify(json, null, 2)}\n`);
+      } else process[exitCode === 0 ? "stdout" : "stderr"].write(`${text}\n`);
       process.exitCode = exitCode;
     },
   });

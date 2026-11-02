@@ -141,6 +141,49 @@ test("refuses an option or argument the command doesn't take, before it reads a 
   expect(inputs).toEqual([]);
 });
 
+test("refuses an option that takes one value given twice, naming it, before the bridge hears of it", async () => {
+  const folder = createTestFolder();
+  const inputs = answeringBridge(folder);
+  const lead = { TOY_BOX_SLACK_HOME: folder, COPILOT_AGENT_SESSION_ID: "toybox-link" };
+  const error =
+    "`post` didn't run. --json: Give it once. --thread: Give it once. Run `toy-box-slack post --help` to see what it takes.";
+
+  expect(
+    await runToyBoxSlack(["post", "--thread", "r1", "--thread", "r2"], lead, new ReadableStream()),
+  ).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr:
+      "`post` didn't run. --thread: Give it once. Run `toy-box-slack post --help` to see what it takes.\n",
+  });
+  expect(
+    await runToyBoxSlack(
+      ["post", "--json", "--thread", "r1", "--json", "--thread", "r2"],
+      lead,
+      new ReadableStream(),
+    ),
+  ).toEqual({ exitCode: 1, stdout: `${JSON.stringify({ error }, null, 2)}\n`, stderr: "" });
+  expect(inputs).toEqual([]);
+});
+
+test("a command missing its argument is refused by the bridge, in JSON under --json", async () => {
+  const { channelId, home } = await startLinkedBridge();
+  const lead = { HOME: home, COPILOT_AGENT_SESSION_ID: channelId };
+  const error =
+    "`dismiss` didn't run. <request>: Missing. --reason: Missing. Run `toy-box-slack dismiss --help` to see what it takes.";
+
+  expect(await runToyBoxSlack(["dismiss", "--json"], lead)).toEqual({
+    exitCode: 1,
+    stdout: `${JSON.stringify({ error }, null, 2)}\n`,
+    stderr: "",
+  });
+  expect(await runToyBoxSlack(["dismiss"], lead)).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr: `${error}\n`,
+  });
+}, 15_000);
+
 test("allow takes the options it has and every user left, as the owner at a terminal", async () => {
   const folder = createTestFolder();
   const inputs = answeringBridge(folder);
@@ -170,12 +213,16 @@ test("reply refuses an --image it can't read or that's over 5 MiB, without calli
   });
 });
 
-test("post reads the thread it names, and whom to mention as one option, by member IDs separated by commas", async () => {
+test("post reads the thread it names, and mentions everyone its --mention names each time it repeats", async () => {
   const { channelId, home } = await startLinkedBridge({ allowed: ["U0ALICE", "U0BOB"] });
   const lead = { HOME: home, COPILOT_AGENT_SESSION_ID: channelId };
 
   expect(
-    await runToyBoxSlack(["post", "--mention", "U0ALICE, U0BOB"], lead, "Shipped **1.2**.\n"),
+    await runToyBoxSlack(
+      ["post", "--mention", "U0ALICE", "--mention", "U0BOB"],
+      lead,
+      "Shipped **1.2**.\n",
+    ),
   ).toEqual({
     exitCode: 0,
     stdout: "Queued o1 in #C-link, mentioning U0ALICE and U0BOB.\n",
