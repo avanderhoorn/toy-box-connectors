@@ -233,7 +233,7 @@ export function startCatchUp(
           const suspended = await database.write((transaction) =>
             suspendChannelLinks(transaction, channelId, reason, now()),
           );
-          if (suspended.length > 0) onChange();
+          if (suspended) onChange();
           return null;
         }
         case "auth_failed":

@@ -163,7 +163,7 @@ async function takeEvent(
         action.reason,
         now,
       );
-      return { changed: taken.changed || suspended.length > 0 };
+      return { changed: taken.changed || suspended };
     }
     case "uninstall":
       await recordUninstall(transaction);

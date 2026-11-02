@@ -21,9 +21,10 @@ describe("a lifecycle signal about a linked channel", () => {
       database.write((transaction) =>
         suspendChannelLinks(transaction, channelId, "channel_made_public", 60_000),
       );
-    expect(await suspend("C-private")).toEqual(["private"]);
-    expect(await suspend("C-public")).toEqual([]);
-    expect(await suspend("C-private")).toEqual([]);
+    expect(await suspend("C-private")).toBe(true);
+    expect(await suspend("C-public")).toBe(false);
+    expect(await suspend("C-private")).toBe(false);
+    expect(await suspend("C-unlinked")).toBe(false);
 
     expect(await readLinks(database)).toEqual([
       { id: "private", status: "suspended", status_reason: "channel_made_public" },

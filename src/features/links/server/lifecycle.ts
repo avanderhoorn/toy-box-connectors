@@ -10,20 +10,20 @@ import { suspendLink } from "./status";
 // owner links the channel again.
 
 /**
- * Suspends the link that watches a channel a signal says can't be used as the owner approved.
- * A channel made public suspends the link only if
- * the owner approved it private. Returns the links whose status changed.
+ * Suspends the link that watches a channel a signal says can't be used as the owner approved, and
+ * returns whether its status changed. A channel made public suspends the link only if the owner
+ * approved it private.
  */
 export async function suspendChannelLinks(
   transaction: Bun.SQL,
   channelId: string,
   reason: SuspendReason,
   now: number,
-): Promise<string[]> {
+): Promise<boolean> {
   const link = await readChannelLink(transaction, channelId);
-  if (!link) return [];
-  if (reason === "channel_made_public" && link.approved.kind === "public") return [];
-  return (await suspendLink(transaction, link.id, reason, now)) ? [link.id] : [];
+  if (!link) return false;
+  if (reason === "channel_made_public" && link.approved.kind === "public") return false;
+  return suspendLink(transaction, link.id, reason, now);
 }
 
 /**
