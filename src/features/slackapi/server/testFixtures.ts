@@ -24,6 +24,15 @@ export const unreadableAnswers = [
   ["has a null response_metadata", JSON.stringify({ ok: true, response_metadata: null })],
 ] as const;
 
+/** Non-JSON answers the SDK otherwise treats as Slack error codes, using the whole body. */
+export const nonJsonAnswers = [
+  ["names a rate limit without JSON", "ratelimited"],
+  ["names a refusal without JSON", "invalid_blocks"],
+  ["is HTML", "<html>The staging password is hunter2</html>"],
+  ["is empty", ""],
+  ["is unfinished JSON", '{"ok":'],
+] as const;
+
 /**
  * Persist the installation the other fixtures belong to: app A-app in team T-home, with our bot
  * U-bot. `columns` replace the fixture's, such as an uninstalled status.

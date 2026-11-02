@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from "bun:test";
 import { captureLog } from "@bridge/server/testFixtures";
 import { createBotClient } from "@slackapi/server/botClient";
 import { fetchHistoryPage } from "@slackapi/server/history";
-import { captureConsole, unreadableAnswers } from "@slackapi/server/testFixtures";
+import { captureConsole, nonJsonAnswers, unreadableAnswers } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../fakes/slack";
 
 /** How Slack explains blocks it can't accept, which names where they went wrong. */
@@ -90,6 +90,24 @@ test.each(unreadableAnswers)(
         fetchHistoryPage(client, { channelId, oldest: "0", cursor: null }),
       ),
     ).toEqual({ kind: "unknown", detail: "unreadable response" });
+  },
+);
+test.each(nonJsonAnswers)(
+  "an answer that %s is unreadable, with no error code or method cooldown",
+  async (_, body) => {
+    const { slack, bot } = await setup();
+    const logged = captureLog();
+    const channelId = slack.addChannel();
+    const read = () =>
+      bot.call("conversations.history", (client) =>
+        fetchHistoryPage(client, { channelId, oldest: "0", cursor: null }),
+      );
+    slack.failNext("conversations.history", { body });
+    expect(await read()).toEqual({ kind: "unknown", detail: "unreadable response" });
+    expect(logged()).toEqual([
+      "Couldn't read Slack's answer to conversations.history: the answer isn't JSON.",
+    ]);
+    expect((await read()).kind).toBe("ok");
   },
 );
 test.each([

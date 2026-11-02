@@ -61,9 +61,22 @@ export function createBotClient(
   token: string,
   { slackApiUrl, timeoutMs, onAuthFailed, now = Date.now, log = bridgeLog }: BotClientOptions = {},
 ): BotClient {
-  const client = new ReadingClient(token, {
+  const client: ReadingClient = new ReadingClient(token, {
     ...oneAttemptOptions({ slackApiUrl, timeoutMs }),
     logger: silentLogger,
+    fetch: async (url, init) => {
+      const response = await fetch(url, init);
+      // The SDK treats non-JSON as an error code, which can authorize resending an accepted write.
+      // Uploads answer in plain text, so only Web API method answers must be JSON.
+      if (response.status === 200 && url.toString().startsWith(client.slackApiUrl)) {
+        try {
+          await response.clone().json();
+        } catch (cause) {
+          throw new UnreadableAnswer("Slack's answer isn't JSON", { cause });
+        }
+      }
+      return response;
+    },
   });
   // Fake Slack serves and takes files beside its API.
   const filesOrigin = slackApiUrl ? new URL(slackApiUrl).origin : slackFilesOrigin;
@@ -127,6 +140,8 @@ class UnreadableAnswer extends Error {}
 /** What the bridge couldn't read in an answer, without the answer's text, or null if it read it. */
 function unreadPart(error: unknown): string | null {
   if (error instanceof UnreadableAnswer) return "the Slack SDK failed on it";
+  if (error instanceof WebAPIRequestError && error.original instanceof UnreadableAnswer)
+    return "the answer isn't JSON";
   if (error instanceof ZodError) return issuesOf(error).join(", ");
   return null;
 }

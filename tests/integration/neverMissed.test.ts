@@ -175,11 +175,12 @@ test("catching up backs off from answers it can't read, and the bridge keeps run
       response_metadata: { messages: [7] },
     }),
   });
+  slack.failNext("conversations.history", { body: "ratelimited" });
   slack.disconnect();
 
   await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
   expect(await inbox()).toMatchObject({ requests: [{ id: 1, messages: [{ ts: missedTs }] }] });
-  expect(histories()).toHaveLength(3 + unreadableAnswers.length);
+  expect(histories()).toHaveLength(4 + unreadableAnswers.length);
   const unread = "Couldn't read Slack's answer to conversations.history:";
   expect(await stop()).toEqual({
     code: 0,
@@ -190,6 +191,7 @@ test("catching up backs off from answers it can't read, and the bridge keeps run
       "Can't catch up on messages the bridge may have missed. Slack didn't answer conversations.history: unreadable response.",
       ...unreadableAnswers.slice(1).map(() => `${unread} the Slack SDK failed on it.`),
       `${unread} unreadable response.`,
+      `${unread} the answer isn't JSON.`,
       "Caught up on messages the bridge may have missed.",
     ),
   });
