@@ -20,8 +20,8 @@
 import { resolve } from "node:path";
 import { claimSlackApp, recordedHolders, type ClaimSlackApp } from "@bridge/model/claims";
 import { askForMissingCredentials } from "@commands/client/firstRun";
+import { isOwnerAtTerminal } from "@commands/client/secrets";
 import { installSkill } from "@commands/client/skill";
-import { resolveSessionId } from "@commands/model/callers";
 import { serveCommands } from "@commands/server/serve";
 import { statusCommand } from "@commands/server/status";
 import { openViewingFolder, type ViewingFolder } from "@files/server/viewing";
@@ -44,8 +44,7 @@ export interface Bridge {
 export async function serveBridge(): Promise<number> {
   try {
     const dataFolder = resolveDataFolder();
-    // Only the owner answers these, never a lead, whose shell can be a terminal too.
-    if (process.stdin.isTTY && resolveSessionId(process.env) === null) {
+    if (isOwnerAtTerminal()) {
       for (const saved of await askForMissingCredentials(dataFolder, process.env)) log(saved);
     }
     const bridge = await startBridge(dataFolder);

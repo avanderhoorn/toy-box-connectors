@@ -14,15 +14,13 @@ import { listApps, locateApp, type App } from "@bridge/server/apps";
 import { prepareDataFolder } from "@bridge/server/dataFolder";
 import { writeCredential } from "@bridge/server/environment";
 import { BridgeRefusedError } from "@bridge/server/refusal";
-import { resolveSessionId } from "@commands/model/callers";
 import { log } from "@/shared/log";
 import { askForToken, TOKENS, type Token } from "./firstRun";
-import { secretReader, type SecretReader } from "./secrets";
+import { isOwnerAtTerminal, secretReader, type SecretReader } from "./secrets";
 
 /** Adds the `name` app at the owner's terminal, says how to start it, and returns the exit code. */
 export async function addApp(dataFolder: string, name: string): Promise<number> {
-  // Only the owner pastes an app's tokens, never a lead, whose shell can be a terminal too.
-  if (!process.stdin.isTTY || resolveSessionId(process.env) !== null) {
+  if (!isOwnerAtTerminal()) {
     log("Only the owner at a terminal runs `add-app`.");
     return 1;
   }

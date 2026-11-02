@@ -3,6 +3,12 @@
 
 import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
+import { resolveSessionId } from "@commands/model/callers";
+
+/** Whether the owner runs the CLI at a terminal, not a lead, whose shell can be a terminal too. */
+export function isOwnerAtTerminal(): boolean {
+  return process.stdin.isTTY === true && resolveSessionId(process.env) === null;
+}
 
 /** Reads what the owner types a line at a time without showing it. */
 export interface SecretReader {
