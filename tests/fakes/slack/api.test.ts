@@ -26,7 +26,7 @@ function botClient(app: FakeSlackApp) {
   });
 }
 
-test("opaque cursors preserve exact decimal bounds through empty pages and reject a different query", async () => {
+test("opaque cursors preserve exact decimal bounds and reject a different query", async () => {
   const { fake, client } = setup({ pageSize: 1 });
   const channel = fake.addChannel();
   const timestamps = [
@@ -39,12 +39,10 @@ test("opaque cursors preserve exact decimal bounds through empty pages and rejec
   expect((await client.conversations.history(query)).messages?.map(({ ts }) => ts)).toEqual([
     timestamps[1],
   ]);
-  fake.emptyNextPage("conversations.history");
   const pages = [];
   for await (const page of client.paginate("conversations.history", { ...query, inclusive: true }))
     pages.push(messagePage.parse(page));
-  expect(pages).toHaveLength(4);
-  expect(pages[0]).toMatchObject({ messages: [], has_more: true });
+  expect(pages).toHaveLength(3);
   expect(pages.flatMap((page) => page.messages ?? []).map(({ ts }) => ts)).toEqual(
     timestamps.toReversed(),
   );

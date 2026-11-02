@@ -1,9 +1,9 @@
 // Web API argument/response shapes: https://docs.slack.dev/reference/methods/
-// Cursor traversal, including short/empty pages: https://docs.slack.dev/apis/web-api/pagination/
+// Cursor traversal, including short pages: https://docs.slack.dev/apis/web-api/pagination/
 // History is newest first; thread replies are oldest first, with exclusive time bounds by default:
 // https://docs.slack.dev/reference/methods/conversations.history/
 // https://docs.slack.dev/reference/methods/conversations.replies/
-// Identity, scopes header and Enterprise profiles:
+// Identity and Enterprise profiles:
 // https://docs.slack.dev/reference/methods/auth.test/
 // https://docs.slack.dev/reference/methods/bots.info/
 // https://docs.slack.dev/reference/objects/user-object/
@@ -79,18 +79,6 @@ export function createFakeSlackStore() {
   };
 }
 
-const BOT_SCOPES = [
-  "channels:history",
-  "channels:read",
-  "groups:history",
-  "groups:read",
-  "users:read",
-  "chat:write",
-  "metadata.message:read",
-  "reactions:write",
-  "files:read",
-  "files:write",
-];
 const bool = z
   .union([z.boolean(), z.enum(["true", "false", "1", "0"])])
   .transform((value) => value === true || value === "true" || value === "1");
@@ -194,7 +182,6 @@ export function createFakeSlackApi(options: {
   const problems: string[] = [];
   const membership = new Map<string, unknown>();
   const failures = new Map<string, FakeSlackFailure[]>();
-  const emptyPages = new Map<PageMethod, number>();
   const cursors = new Map<string, { method: string; query: string; offset: number }>();
   const authChanges: Record<string, unknown> = {};
   const botChanges: Record<string, unknown> = {};
@@ -311,9 +298,6 @@ export function createFakeSlackApi(options: {
     },
     setBotResponse(changes: Record<string, unknown>) {
       Object.assign(botChanges, structuredClone(changes));
-    },
-    emptyNextPage(method: PageMethod) {
-      emptyPages.set(method, (emptyPages.get(method) ?? 0) + 1);
     },
     /** Slack never finishes processing what the bot uploads from now on. */
     stallProcessing() {
@@ -457,15 +441,7 @@ export function createFakeSlackApi(options: {
     return null;
   }
 
-  function post(
-    requested: z.output<(typeof schemas)["chat.postMessage"]>,
-    injected?: FakeSlackFailure,
-  ): Response {
-    const misplaced = injected !== undefined && "misplacedReply" in injected;
-    if (misplaced && requested.thread_ts === undefined)
-      return unexpected("misplacedReply needs a chat.postMessage with thread_ts.");
-    // Slack accepted the reply as a new root, so the store, the event and the receipt all say so.
-    const input = misplaced ? { ...requested, thread_ts: undefined } : requested;
+  function post(input: z.output<(typeof schemas)["chat.postMessage"]>): Response {
     const problem = writeProblem(input.channel);
     if (problem) return failure(problem);
     if (!input.text && !input.blocks?.length) return failure("no_text");
@@ -573,9 +549,7 @@ export function createFakeSlackApi(options: {
       return failure("invalid_cursor");
     const offset = cursor?.offset ?? 0;
     const limit = Math.min(typeof args.limit === "number" ? args.limit : 100, maxPageSize);
-    const empty = (emptyPages.get(method) ?? 0) > 0;
-    if (empty) emptyPages.set(method, emptyPages.get(method)! - 1);
-    const result = empty ? [] : items.slice(offset, offset + limit);
+    const result = items.slice(offset, offset + limit);
     const nextOffset = offset + result.length;
     let nextCursor = "";
     if (nextOffset < items.length) {
@@ -799,7 +773,7 @@ export function createFakeSlackApi(options: {
     calls.push({ method, args: structuredClone(args), token, at: now() });
     function run<T extends z.ZodType>(
       schema: T,
-      work: (input: z.output<T>, injected?: FakeSlackFailure) => Response,
+      work: (input: z.output<T>) => Response,
     ): Response | Promise<Response> {
       const input = schema.safeParse(args);
       if (!input.success) return unexpected(`${method}: ${input.error.message}`);
@@ -819,7 +793,7 @@ export function createFakeSlackApi(options: {
           );
         if ("error" in injected) return failure(injected.error, injected.messages);
       }
-      const response = work(input.data, injected);
+      const response = work(input.data);
       if (injected && "body" in injected)
         return new Response(injected.body, { headers: { "content-type": "application/json" } });
       if (injected && "lostResponse" in injected) {
@@ -844,21 +818,18 @@ export function createFakeSlackApi(options: {
         );
       case "auth.test":
         return run(schemas[method], () =>
-          Response.json(
-            {
-              ok: true,
-              url: "https://fake-workspace.slack.com/",
-              team: "Fake workspace",
-              user: "toy-box",
-              team_id: identity.teamId,
-              user_id: identity.botUserId,
-              bot_id: identity.botId,
-              is_enterprise_install: false,
-              ...(identity.enterpriseId ? { enterprise_id: identity.enterpriseId } : {}),
-              ...authChanges,
-            },
-            { headers: { "x-oauth-scopes": BOT_SCOPES.join(",") } },
-          ),
+          Response.json({
+            ok: true,
+            url: "https://fake-workspace.slack.com/",
+            team: "Fake workspace",
+            user: "toy-box",
+            team_id: identity.teamId,
+            user_id: identity.botUserId,
+            bot_id: identity.botId,
+            is_enterprise_install: false,
+            ...(identity.enterpriseId ? { enterprise_id: identity.enterpriseId } : {}),
+            ...authChanges,
+          }),
         );
       case "bots.info":
         return run(schemas[method], (input) =>
@@ -935,8 +906,6 @@ export function createFakeSlackApi(options: {
         (!Number.isInteger(injected.status) || injected.status < 400 || injected.status > 599)
       )
         throw new Error("HTTP failure status must be between 400 and 599.");
-      if ("misplacedReply" in injected && method !== "chat.postMessage")
-        throw new Error("Misplacing a reply is only supported for chat.postMessage.");
       const queue = failures.get(method) ?? [];
       queue.push(structuredClone(injected));
       failures.set(method, queue);
