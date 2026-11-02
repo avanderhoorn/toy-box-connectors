@@ -37,9 +37,8 @@ deadline. Restarting may encounter another 429, never retry an ambiguous post.
 
 A matching response confirms delivery. A lost, malformed or ambiguous response becomes
 `delivery_unknown`. The bot client checks Web API answers are JSON before the SDK can mistake
-their text for an error code. An upload's plain-text acknowledgement is not a Web API answer.
-Startup treats interrupted sends the same way. Read the intended thread
-or publication history around one and five minutes after the attempt. Only our bot's exact
+their text for an error code. Startup treats interrupted sends the same way. Read the intended
+thread or publication history around one and five minutes after the attempt. Only our bot's exact
 item ID, payload hash and destination prove delivery. Complete misses leave the item unknown.
 Partial or failed reads spend no check. There is no automatic resend or manual resolution.
 An unknown item can settle only on positive delivery proof, never a later apparent refusal.

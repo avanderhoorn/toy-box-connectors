@@ -61,14 +61,13 @@ export function createBotClient(
   token: string,
   { slackApiUrl, timeoutMs, onAuthFailed, now = Date.now, log = bridgeLog }: BotClientOptions = {},
 ): BotClient {
-  const client: ReadingClient = new ReadingClient(token, {
+  const client = new ReadingClient(token, {
     ...oneAttemptOptions({ slackApiUrl, timeoutMs }),
     logger: silentLogger,
     fetch: async (url, init) => {
       const response = await fetch(url, init);
       // The SDK treats non-JSON as an error code, which can authorize resending an accepted write.
-      // Uploads answer in plain text, so only Web API method answers must be JSON.
-      if (response.status === 200 && url.toString().startsWith(client.slackApiUrl)) {
+      if (response.status === 200) {
         try {
           await response.clone().json();
         } catch (cause) {
