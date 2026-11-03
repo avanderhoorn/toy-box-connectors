@@ -2,7 +2,7 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { judgeDeletion, type Deletion } from "@slackapi/model/uploads";
 import type { BotClient } from "@slackapi/server/botClient";
 import { log as bridgeLog, type Log } from "@/shared/log";
-import { nextDeletion } from "../model/delivery";
+import { nextOwedAttempt } from "../model/delivery";
 import { deferDeletion, forgetDeletion, type OwedDeletion } from "./files";
 
 export function createFileDeletion(
@@ -16,7 +16,7 @@ export function createFileDeletion(
       await bot.call("files.delete", (client) => client.files.delete({ file: owed.fileId })),
     );
     const next =
-      deletion.kind === "kept" ? nextDeletion(owed.createdAt, owed.attempts, now()) : null;
+      deletion.kind === "kept" ? nextOwedAttempt(owed.createdAt, owed.attempts, now()) : null;
     if (deletion.kind === "kept" && next === null)
       log(`Gave up deleting Slack file ${owed.fileId} after trying for 30 days.`);
     await database.write((tx) =>

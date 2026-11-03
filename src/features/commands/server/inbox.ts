@@ -24,7 +24,7 @@ import {
 } from "@commands/model/slackText";
 import { judgeSharedFile } from "@files/server/read";
 import type { ChannelLink } from "@links/server/database";
-import type { OutboxWorker } from "@outbox/server";
+import { oweDisplays } from "@outbox/server/displays";
 import { serveRequest } from "@requests/model/lifecycle";
 import { readActiveRequests, saveRequest, type StoredRequest } from "@requests/server/database";
 import { readSlackPersonName } from "@slackapi/server/users";
@@ -36,8 +36,6 @@ export type InboxCommandOptions = {
   database: BridgeDatabase;
   /** The Slack workspace's URL, once Slack has said it, for permalinks. */
   workspaceUrl: () => string | null;
-  /** Called with the requests inbox read for the first time, once they're marked seen. */
-  mark: OutboxWorker["mark"];
 };
 
 /** A message the bridge keeps text for, as commands read it. */
@@ -52,11 +50,10 @@ export type MessageRow = {
 export function inboxCommand({
   database,
   workspaceUrl,
-  mark,
 }: InboxCommandOptions): CommandHandler<"inbox"> {
   return async ({ limit }, { channelId, at }) => {
-    const opened: StoredRequest[] = [];
     const inbox = await database.write(async (transaction): Promise<Inbox> => {
+      const opened: StoredRequest[] = [];
       const link = await readCallerLink(transaction, channelId);
       const waiting = inboxOrder(await readActiveRequests(transaction, link.id));
       const requests: InboxRequest[] = [];
@@ -67,6 +64,8 @@ export function inboxCommand({
           if (request.state === "open") opened.push(request);
         }
       }
+      // A request read for the first time shows 🏃, owed with the change that marks it seen.
+      await oweDisplays(transaction, opened, "working", at);
       return {
         channel: link.channel,
         linkStatus: link.status,
@@ -74,7 +73,6 @@ export function inboxCommand({
         more: waiting.length - requests.length,
       };
     });
-    mark(opened, "working");
     return { result: inbox, text: presentInbox(inbox, at) };
   };
 }

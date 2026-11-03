@@ -6,6 +6,7 @@ import type { BridgeDatabase } from "@bridge/server/database";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { readChannelLink } from "@links/server/database";
 import { createStoredLink } from "@links/server/testFixtures";
+import { readOwedDisplays } from "@outbox/server/testFixtures";
 import { beginAnswer, confirmAnswer, serveRequest } from "@requests/model/lifecycle";
 import type { SlackMessage } from "@slackapi/model/messages";
 import { askMessage, editMessage, replyMessage } from "@slackapi/model/testFixtures";
@@ -30,11 +31,7 @@ async function openIntake(...messages: SlackMessage[]): Promise<BridgeDatabase> 
 }
 
 /** Stores `message` in the ledger and takes it at `at`, in one transaction as ingest does. */
-async function take(database: BridgeDatabase, message: SlackMessage, at = now) {
-  return (await takeIntake(database, message, at)).changed;
-}
-
-function takeIntake(database: BridgeDatabase, message: SlackMessage, at = now) {
+function take(database: BridgeDatabase, message: SlackMessage, at = now) {
   return database.write(async (transaction) => {
     const link = (await readChannelLink(transaction, message.channelId))!;
     const stored = await storeMessage(transaction, linkAudience(), message, false);
@@ -110,15 +107,17 @@ test("losing its mention cancels a request, and losing its question cancels it a
   expect(await deleted.read((sql) => sql`SELECT text FROM messages`)).toEqual([{ text: null }]);
 });
 
-test("losing its mention releases a request the lead read, and not one it hadn't", async () => {
+test("losing its mention owes 👀 back to a request the lead read, and not one it hadn't", async () => {
   const unread = await openIntake(theirs);
-  const taken = await takeIntake(unread, editMessage(theirs, "1700000300.000100", "never mind"));
-  expect(taken).toEqual({ changed: true, ended: [] });
+  await take(unread, editMessage(theirs, "1700000300.000100", "never mind"));
+  expect(await readOwedDisplays(unread)).toEqual([]);
 
   const read = await openIntake();
   await advance(read, "seen");
-  const edited = await takeIntake(read, editMessage(ask, "1700000300.000100", "never mind"));
-  expect(edited.ended).toMatchObject([{ id: 1, state: "seen", sourceTs: ask.ts }]);
+  await take(read, editMessage(ask, "1700000300.000100", "never mind"));
+  expect(await readOwedDisplays(read)).toMatchObject([
+    { channelId: ask.channelId, sourceTs: ask.ts, shows: "eyes" },
+  ]);
 });
 
 test("once the lead answers, edits change nothing and a new message asks again", async () => {

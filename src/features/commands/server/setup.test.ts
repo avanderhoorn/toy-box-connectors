@@ -6,7 +6,7 @@ import { allowPerson } from "@links/server/database";
 import { pauseLink, suspendLink } from "@links/server/status";
 import { countRows, createStoredLink, fillEveryTable } from "@links/server/testFixtures";
 import { queuePublication, queueReply } from "@outbox/server/database";
-import { createOutboxWorld } from "@outbox/server/testFixtures";
+import { createOutboxWorld, readOwedDisplays } from "@outbox/server/testFixtures";
 import { readRequest } from "@requests/server/database";
 import { cancelStoredRequest } from "@requests/server/lifecycle";
 import { createStoredRequest } from "@requests/server/testFixtures";
@@ -35,7 +35,6 @@ const offline = (database: BridgeDatabase) => ({
   bot: null,
   slackState: connectedSlack,
   toyBoxOrigin: new URL("http://127.0.0.1"),
-  mark: () => {},
 });
 
 const OWNER = { channelId: "toybox-link", at: 1_000 };
@@ -148,15 +147,13 @@ test("deny cancels the requests of the people it removes, so a reply queued for 
   const reply = await world.queue();
   // The lead never read this one, so it only ever had 👀.
   await createStoredRequest(world.database, { sourceTs: "1700000300.000100" });
-  const released: unknown[] = [];
 
-  const denied = await denyCommand({
-    ...offline(world.database),
-    mark: (requests, standing) => released.push([requests, standing]),
-  })({ users: ["U-owner"] }, OWNER);
+  const denied = await denyCommand(offline(world.database))({ users: ["U-owner"] }, OWNER);
 
   expect(denied.result).toEqual({ cancelled: 2 });
-  expect(released).toEqual([[[expect.objectContaining({ id: world.request.id })], "released"]]);
+  expect(await readOwedDisplays(world.database)).toMatchObject([
+    { sourceTs: world.request.sourceTs, shows: "eyes" },
+  ]);
   expect(await world.database.read((sql) => readRequest(sql, world.request.id))).toMatchObject({
     state: "cancelled",
     closedReason: "requester_denied",
@@ -203,17 +200,16 @@ test("unlink deletes what the bridge kept for its link, and nothing of another l
   expect(await countRows(database)).toEqual({ ...before, ledger_seq: before.ledger_seq! + 1 });
 });
 
-test("unlink releases the requests the lead read, but not the ones it hadn't", async () => {
+test("unlink owes 👀 back to the requests the lead read, but not the ones it hadn't, past the link's own rows", async () => {
   const world = await createOutboxWorld();
   await createStoredRequest(world.database, { sourceTs: "1700000300.000100" });
-  const released: unknown[] = [];
 
-  await unlinkCommand({
-    ...offline(world.database),
-    mark: (requests, standing) => released.push([requests, standing]),
-  })({}, OWNER);
+  await unlinkCommand(offline(world.database))({}, OWNER);
 
-  expect(released).toEqual([[[expect.objectContaining({ id: world.request.id })], "released"]]);
+  expect(await world.database.read((sql) => sql`SELECT id FROM requests`)).toEqual([]);
+  expect(await readOwedDisplays(world.database)).toMatchObject([
+    { sourceTs: world.request.sourceTs, shows: "eyes" },
+  ]);
 });
 
 test("unlink still deletes the images its link's queued replies would have shown", async () => {

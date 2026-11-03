@@ -3,8 +3,9 @@
 - Whoever asked sees 🏃 on their message once the lead reads their request, in place of the 👀 that showed it was woken. 🏃 means the lead read it and owes an answer or a dismissal, not that it's typing right now
 - A request the lead read that ends unanswered gets 👀 back, so 🏃 never stays on something nobody works on. That's a dismissal, a week's wait, the owner denying who asked or unlinking the channel, or the mention edited out of the message. An edit, a follow-up or a failed reply leaves what shows as it is
 - The answer's post takes both reactions off, even after Slack lost a removal
+- A reaction that's wrong while the bridge or Slack is down comes right once it's back. The bridge keeps what each message should show until Slack confirms it, so a restart or an outage no longer leaves a stale 👀 or 🏃 behind
 - The bridge waits up to a minute for Toy Box to run the lead's routine, so a slow wake, such as one that resumes the lead's session, no longer counts as failed and wakes the lead a second time
-- Restart `serve` after updating. There is no Slack app change, since the bot already has `reactions:write`
+- Restart `serve` after updating. There is no Slack app change, since the bot already has `reactions:write`. The first start upgrades bridge.db, which 0.6.0 can't open afterward
 
 ## 📅 v0.6.0 (11/2/26)
 

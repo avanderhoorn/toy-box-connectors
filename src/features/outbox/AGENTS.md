@@ -45,21 +45,34 @@ An unknown item can settle only on positive delivery proof, never a later appare
 
 The bridge recovers interrupted attempts before starting work. The worker shares its one bot
 client, waits for verified Slack readiness, and serializes coalesced command pokes and a
-one-second fallback timer. Stop drains the current pass before storage closes. The wake
-scheduler marks the requests no lead had read woken, once Toy Box runs their wake, and inbox
-marks the requests it just served working, after commit. Whatever ends one the lead read
-unanswered, which is a dismissal, an expiry, a denial, an unlink or a mention edited out,
-marks it released after its commit. A request shows what its standing says, and the pure
-`reactionChanges` orders the calls: woken adds 👀, working adds 🏃 then removes 👀, released
-adds 👀 then removes 🏃, and answered removes both. Each swap adds before it removes, so
-a message is never bare mid-swap and never shows both at rest. The best-effort queue has no
-stored state and keeps what Slack holds back, in order: a rate limit, or a Slack that didn't answer
-for three tries in a row, waits for a later pass, and a call Slack refuses is dropped, such as a second 👀
-on a message. Marks queue while Slack isn't ready. A reply settled as sent, by posting or by
-reconciliation proving it landed, marks its request answered behind whatever is queued, so the message
-ends with neither even after a lost removal. A refused or unknown reply, a post or publication
-even in the request's thread, a request that ends before the lead read it, and an edit or
-follow-up, a reminder, a pause or a suspension leave it as it is.
+one-second fallback timer. Stop drains the current pass before storage closes.
+
+A request's message shows 👀 or 🏃 or neither, and the bridge owes Slack that display in
+`reaction_displays`, one row per message that says what it should show. `displayOf` maps a
+standing to it: woken and released show 👀, working shows 🏃 and answered shows neither. The
+wake scheduler owes woken once Toy Box runs a wake, for the requests no lead had read. Inbox owes
+working for the requests it serves for the first time. Whatever ends a request the lead read
+unanswered, which is a dismissal, an expiry, a denial, an unlink or a mention edited out, owes
+released. A reply settled as sent, by posting or by reconciliation proving it landed, owes
+answered, so the message ends with neither even after a lost removal. A refused or unknown
+reply, a post or publication even in the request's thread, a request that ends before the lead
+read it, and an edit or follow-up, a reminder, a pause or a suspension leave the display as it is.
+Each is owed in the write that changes the request, so a stop or crash never separates them, and
+a newer display replaces an older one still owed and its backoff.
+
+`reactionChanges` orders the calls that bring a message to a display. A display adds what it shows
+before it removes the rest, so a message is never bare mid-swap and never shows both at rest.
+It names everything the message shows, so it never depends on what the message showed, and the
+newest display wins however many Slack missed. Each pass settles the displays due after its posts
+and before its deletes, and `judgeReaction` reads each call. A call Slack accepted or refused is
+done, since a refusal such as `already_reacted`, `no_reaction` or `message_not_found` means it has
+nothing left to change. One Slack didn't answer or failed on may not have run, so the row is due
+again later, from a minute to an hour, for 30 days, and logged when given up. A rate limit or a
+rejected token ends the pass's reactions without counting an attempt. A call Slack didn't answer
+ends them too, after counting one, since an unresponsive Slack would otherwise cost a timed-out
+call per due display while the next pass's posts wait behind them. Once the calls are made, the
+row goes only if it still owes the same display, so one owed meanwhile survives them. The row
+names no link, so unlink can still take 🏃 off.
 
 Queueing a reply calls the request model's `beginAnswer` in the same transaction. Proven
 delivery calls `confirmAnswer`. Only a definite refusal can return it to seen and replace

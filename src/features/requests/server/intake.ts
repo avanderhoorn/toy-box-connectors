@@ -1,4 +1,5 @@
 import { readOwnTextBefore, type StoredVersion } from "@activity/server/ledger";
+import { oweDisplays } from "@outbox/server/displays";
 import { classify, type ClassifyLink } from "@requests/model/classify";
 import { asksQuestion } from "@requests/model/courtesy";
 import { isActive, openRequest, wasRead } from "@requests/model/lifecycle";
@@ -9,7 +10,6 @@ import {
   insertRequest,
   readMessageRequest,
   readThreadRequests,
-  type StoredRequest,
 } from "./database";
 import { cancelStoredRequest, changeStoredRequest } from "./lifecycle";
 
@@ -19,47 +19,43 @@ import { cancelStoredRequest, changeStoredRequest } from "./lifecycle";
 // A new message is classified. An edit changes the request its message belongs to, or cancels the
 // request whose mention it removed, and asks again only when it adds a mention to a message no
 // active request has. Once the lead answers, edits change nothing. Deleting a request's source
-// cancels the request, and deleting one of its other messages changes it.
+// cancels the request, and deleting one of its other messages changes it. A request the lead read
+// that a mention's removal cancels owes 👀 back, in the same transaction.
 
 /** The link settings intake reads. */
 export type IntakeLink = ClassifyLink & { id: string };
 
 /**
- * What taking a message did: whether a request changed, and the requests it ended unanswered that
- * the lead had read, as they were.
+ * Applies request policy to a version of a message the ledger just stored. Returns whether a
+ * request changed.
  */
-export type Intake = { changed: boolean; ended: readonly StoredRequest[] };
-
-export const unchanged: Intake = { changed: false, ended: [] };
-const changed: Intake = { changed: true, ended: [] };
-
-/** Applies request policy to a version of a message the ledger just stored. */
 export async function takeMessage(
   transaction: Bun.SQL,
   link: IntakeLink,
   message: SlackMessage,
   stored: StoredVersion,
   now: number,
-): Promise<Intake> {
+): Promise<boolean> {
   const { decision } = stored;
   // A redelivery, a fill-in and a version that says the same thing ask nothing new.
-  if (decision.kind === "ignore" || decision.change === null) return unchanged;
+  if (decision.kind === "ignore" || decision.change === null) return false;
   const { channelId, ts } = message;
 
   const current = await readMessageRequest(transaction, channelId, ts);
   if (current !== null && isActive(current.state)) {
-    if (current.state === "answering") return unchanged;
+    if (current.state === "answering") return false;
     if (current.reason === "mention" && current.sourceTs === ts && !message.mentionsBot) {
       await cancelStoredRequest(transaction, current, "mention_removed");
-      return { changed: true, ended: [current].filter(wasRead) };
+      await oweDisplays(transaction, [current].filter(wasRead), "released", now);
+      return true;
     }
-    return (await changeStoredRequest(transaction, current, now)) ? changed : unchanged;
+    return changeStoredRequest(transaction, current, now);
   }
   // A finished request never reopens, so its message asks again only by gaining a mention.
-  if (current !== null && !(message.mentionsBot && !stored.mentionedBot)) return unchanged;
+  if (current !== null && !(message.mentionsBot && !stored.mentionedBot)) return false;
 
   const requester = message.userId;
-  if (requester === null) return unchanged;
+  if (requester === null) return false;
   const asked = await readThreadRequests(transaction, link.id, requester, message.rootTs);
   // Their later messages join the newest request still waiting on the lead.
   const active = asked.findLast(({ state }) => state === "open" || state === "seen") ?? null;
@@ -75,10 +71,10 @@ export async function takeMessage(
   });
   switch (classification.kind) {
     case "none":
-      return unchanged;
+      return false;
     case "join":
       await assignRequestMessage(transaction, active!.id, channelId, ts);
-      return (await changeStoredRequest(transaction, active!, now)) ? changed : unchanged;
+      return changeStoredRequest(transaction, active!, now);
     case "request": {
       const request = await insertRequest(
         transaction,
@@ -95,7 +91,7 @@ export async function takeMessage(
         ),
       );
       await assignRequestMessage(transaction, request.id, channelId, ts);
-      return changed;
+      return true;
     }
   }
 }

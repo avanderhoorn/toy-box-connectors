@@ -49,6 +49,18 @@ export async function initializeOutboxSchema(db: Bun.SQL): Promise<void> {
       attempts   INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
       created_at INTEGER NOT NULL
     );
+    -- What a request's message in Slack should show, until Slack confirms it does. One row per
+    -- message, so the newest display replaces an older one. It names no link, so unlinking can't
+    -- drop the 👀 it owes.
+    CREATE TABLE reaction_displays (
+      channel_id TEXT NOT NULL,
+      ts         TEXT NOT NULL,
+      shows      TEXT NOT NULL CHECK (shows IN ('eyes', 'runner', 'bare')),
+      due_at     INTEGER NOT NULL,
+      attempts   INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+      owed_at    INTEGER NOT NULL,
+      PRIMARY KEY (channel_id, ts)
+    );
   `);
 }
 
@@ -111,6 +123,25 @@ export async function addOutboxImages(db: Bun.SQL): Promise<void> {
       due_at     INTEGER NOT NULL,
       attempts   INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
       created_at INTEGER NOT NULL
+    );
+  `);
+}
+
+/**
+ * Takes version 6's outbox, which kept the reactions it owed in memory, to version 7's, which keeps
+ * what each message should show. It keeps its own copy of version 7's table, so a later change to
+ * it can't change what it makes.
+ */
+export async function addReactionDisplays(db: Bun.SQL): Promise<void> {
+  await db.unsafe(`
+    CREATE TABLE reaction_displays (
+      channel_id TEXT NOT NULL,
+      ts         TEXT NOT NULL,
+      shows      TEXT NOT NULL CHECK (shows IN ('eyes', 'runner', 'bare')),
+      due_at     INTEGER NOT NULL,
+      attempts   INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+      owed_at    INTEGER NOT NULL,
+      PRIMARY KEY (channel_id, ts)
     );
   `);
 }

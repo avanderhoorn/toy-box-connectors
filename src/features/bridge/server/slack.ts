@@ -9,7 +9,6 @@ import {
   type IdentityRefusal,
   type TokenName,
 } from "@slackapi/model/identity";
-import type { StoredRequest } from "@requests/server/database";
 import type { BotClient, CallFailure } from "@slackapi/server/botClient";
 import { openSlackSocket, type SlackSocket } from "@slackapi/server/socketMode";
 import { retryDelay, type WakeTimings } from "@wakes/model";
@@ -54,8 +53,6 @@ export type SlackSupervisorOptions = {
   slackApiUrl?: string;
   /** Called after a delivery changed a link or request. */
   onChange?: () => void;
-  /** Called with the requests a delivery or catching up ended unanswered that the lead had read. */
-  onEnded?: (requests: readonly StoredRequest[]) => void;
   /** Called when the supervisor stops on an error that retrying can't fix, such as storage failing. */
   onError: (error: unknown) => void;
   now?: () => number;
@@ -81,7 +78,6 @@ export function startSlackSupervisor(
     claim,
     slackApiUrl,
     onChange,
-    onEnded,
     onError,
     now = Date.now,
     timings,
@@ -92,17 +88,9 @@ export function startSlackSupervisor(
 ): SlackSupervisor {
   const stopping = new AbortController();
   const { signal } = stopping;
-  const catchUp = startCatchUp(database, bot, {
-    onChange,
-    onEnded,
-    onError: halt,
-    now,
-    timings,
-    log,
-  });
+  const catchUp = startCatchUp(database, bot, { onChange, onError: halt, now, timings, log });
   const receiver = startSlackReceiver(database, {
     onChange,
-    onEnded,
     onMissed: () => catchUp.poke(),
     onUninstalled: () => refuse({ reason: "uninstalled" }),
     onError: halt,

@@ -3,6 +3,7 @@ import { createStoredMessage } from "@activity/server/testFixtures";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { failQueuedItem, queueReply } from "@outbox/server/database";
+import { readOwedDisplays } from "@outbox/server/testFixtures";
 import { dismissRequest, serveRequest } from "@requests/model/lifecycle";
 import { saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
@@ -16,7 +17,7 @@ function askedAt(thread: number) {
   return { rootTs: `1700000100.00010${thread}`, sourceTs: `1700000100.00010${thread}` };
 }
 
-test("shows changed requests first, up to its limit, and marks only those it showed read", async () => {
+test("shows changed requests first, up to its limit, and owes 🏃 only for those it showed read", async () => {
   const database = await openTestDatabase();
   await createStoredLink(database);
   await createStoredLink(database, "other");
@@ -34,17 +35,10 @@ test("shows changed requests first, up to its limit, and marks only those it sho
     });
     await saveRequest(transaction, dismissRequest(serveRequest(dismissed, 5), "Done"));
   });
-  const working: string[][] = [];
-  const inbox = inboxCommand({
-    database,
-    workspaceUrl: () => null,
-    mark: (requests, standing) => {
-      expect(standing).toBe("working");
-      working.push(requests.map(({ sourceTs }) => sourceTs));
-    },
-  });
+  const inbox = inboxCommand({ database, workspaceUrl: () => null });
 
   const first = await inbox({ limit: 1 }, { ...LEAD, at: 1_000 });
+  expect(await readOwedDisplays(database)).toEqual([]);
   const second = await inbox({ limit: 10 }, { ...LEAD, at: 2_000 });
 
   expect(first.result).toMatchObject({ requests: [{ id: 3 }], more: 2 });
@@ -60,8 +54,10 @@ test("shows changed requests first, up to its limit, and marks only those it sho
     { id: 4, state: "dismissed", attention: null, touchedAt: 5 },
     { id: 5, state: "open", attention: null, touchedAt: null },
   ]);
-  // Only a request read for the first time is marked, since one the lead read already shows 🏃.
-  expect(working).toEqual([[], [askedAt(2).sourceTs]]);
+  // Only a request read for the first time owes 🏃, since one the lead read already shows it.
+  expect(await readOwedDisplays(database)).toMatchObject([
+    { sourceTs: askedAt(2).sourceTs, shows: "runner" },
+  ]);
 });
 
 test.each([
@@ -71,7 +67,7 @@ test.each([
   const database = await openTestDatabase();
   await createStoredLink(database, "link", { slack_channel_name: name });
   await createStoredRequest(database, askedAt(1));
-  const inbox = inboxCommand({ database, workspaceUrl: () => null, mark: () => {} });
+  const inbox = inboxCommand({ database, workspaceUrl: () => null });
 
   const { result, text } = await inbox({ limit: 10 }, { ...LEAD, at: 1_000 });
 
@@ -94,7 +90,7 @@ test("says why each request's reply didn't post", async () => {
       await failQueuedItem(transaction, reply, error, 20);
     }
   });
-  const inbox = inboxCommand({ database, workspaceUrl: () => null, mark: () => {} });
+  const inbox = inboxCommand({ database, workspaceUrl: () => null });
 
   const { result } = await inbox({ limit: 10 }, { ...LEAD, at: 1_000 });
 
@@ -117,7 +113,7 @@ test("lists the files each message shares in the order it shares them, and why t
   const forwarded = sharedFile("F-shot", { uploaderId: "U-mallory" });
   await createStoredMessage(database, askMessage(undefined, { files: [notes, forwarded] }));
   await createStoredRequest(database);
-  const inbox = inboxCommand({ database, workspaceUrl: () => null, mark: () => {} });
+  const inbox = inboxCommand({ database, workspaceUrl: () => null });
 
   const { result } = await inbox({ limit: 10 }, { ...LEAD, at: 1_000 });
 

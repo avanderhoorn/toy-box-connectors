@@ -14,6 +14,7 @@ import {
 import { addLinkChannelName, initializeLinkSchema } from "@links/server/schema";
 import {
   addOutboxImages,
+  addReactionDisplays,
   allowOutboxPosts,
   initializeOutboxSchema,
   renderOutboxAtSend,
@@ -93,7 +94,7 @@ export interface Schema {
 // that any recorded version made. The bridge refuses a `bridge.db` any other version made rather
 // than fail on it later, and one a newer version made needs that version, not a fresh start.
 const bridgeSchema: Schema = {
-  version: 6,
+  version: 7,
   create: createSchema,
   migrations: {
     2: allowOutboxPosts,
@@ -107,6 +108,7 @@ const bridgeSchema: Schema = {
       await numberLedgerChanges(transaction);
       await renderOutboxAtSend(transaction);
     },
+    6: addReactionDisplays,
   },
 };
 

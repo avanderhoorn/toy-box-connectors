@@ -14,8 +14,6 @@ import { compareTs, type SlackTs } from "@slackapi/model/ts";
 import type { BotClient } from "@slackapi/server/botClient";
 import { fetchHistoryPage, fetchThreadPage } from "@slackapi/server/history";
 import { markConnected, readConnectedAt, readInstallation } from "@slackapi/server/installation";
-import type { StoredRequest } from "@requests/server/database";
-import { unchanged, type Intake } from "@requests/server/intake";
 import { defaultWakeTimings, retryDelay, type WakeTimings } from "@wakes/model";
 import { log as bridgeLog, type Log } from "@/shared/log";
 import { sleep } from "@/shared/sleep";
@@ -40,8 +38,6 @@ export interface CatchUp {
 export type CatchUpOptions = {
   /** Called after catching up changed a link or request. */
   onChange?: () => void;
-  /** Called with the requests catching up ended unanswered that the lead had read. */
-  onEnded?: (requests: readonly StoredRequest[]) => void;
   /** Called when catching up stops on an error that retrying can't fix, such as storage failing. */
   onError?: (error: unknown) => void;
   now?: () => number;
@@ -70,7 +66,6 @@ export function startCatchUp(
   bot: BotClient,
   {
     onChange = () => {},
-    onEnded = () => {},
     onError = () => {},
     now = Date.now,
     timings = defaultWakeTimings,
@@ -177,20 +172,17 @@ export function startCatchUp(
    * never sees half of what was missed. A message history and its thread both show merges once.
    */
   async function take(channelId: string, messages: SlackMessagePayload[]) {
-    const intakes = await database.write(async (transaction) => {
+    const changed = await database.write(async (transaction) => {
       const installation = await readInstallation(transaction);
-      if (installation === null || installation.status === "uninstalled") return [unchanged];
-      const taken: Intake[] = [];
+      if (installation === null || installation.status === "uninstalled") return false;
+      let changed = false;
       for (const message of messages.toSorted((left, right) => compareTs(left.ts, right.ts))) {
         const event = normalizeHistoryMessage(channelId, message, installation);
-        taken.push(await ingestMessageEvent(transaction, event, now()));
+        changed = (await ingestMessageEvent(transaction, event, now())) || changed;
       }
-      return taken;
+      return changed;
     });
-    const changed = intakes.some((intake) => intake.changed);
-    const ended = intakes.flatMap((intake) => intake.ended);
     if (changed) onChange();
-    if (ended.length) onEnded(ended);
   }
 
   /** Every message a listing pages through, or null when Slack shut the bot out of the channel. */

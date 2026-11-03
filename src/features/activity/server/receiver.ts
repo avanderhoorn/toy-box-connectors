@@ -2,7 +2,6 @@ import { lifecycleAction, type SlackDelivery } from "@activity/model/receiver";
 import { log as bridgeLog, type Log } from "@/shared/log";
 import { SerialTaskQueue } from "@/shared/serialTaskQueue";
 import type { BridgeDatabase } from "@bridge/server/database";
-import type { StoredRequest } from "@requests/server/database";
 import { recordUninstall, suspendChannelLinks } from "@links/server/lifecycle";
 import type { EventCallback } from "@slackapi/model/envelopes";
 import { isForInstallation, readSlackEvent } from "@slackapi/model/events";
@@ -37,8 +36,6 @@ export interface SlackReceiver {
 export type SlackReceiverOptions = {
   /** Called after a delivery changed a link or request. */
   onChange?: () => void;
-  /** Called with the requests a delivery ended unanswered that the lead had read, once it commits. */
-  onEnded?: (requests: readonly StoredRequest[]) => void;
   /** Called after a hello or delivery noted that the bridge may have missed events. */
   onMissed?: () => void;
   /** Called after a delivery uninstalled the app and the purge committed. */
@@ -51,12 +48,7 @@ export type SlackReceiverOptions = {
 };
 
 /** What a delivery did, which decides what follows its commit. */
-type Taken = {
-  changed: boolean;
-  ended?: readonly StoredRequest[];
-  missed?: boolean;
-  uninstalled?: boolean;
-};
+type Taken = { changed: boolean; missed?: boolean; uninstalled?: boolean };
 
 const unchanged: Taken = { changed: false };
 const missed: Taken = { changed: false, missed: true };
@@ -65,7 +57,6 @@ export function startSlackReceiver(
   database: BridgeDatabase,
   {
     onChange = () => {},
-    onEnded = () => {},
     onMissed = () => {},
     onUninstalled = () => {},
     onError = () => {},
@@ -87,7 +78,6 @@ export function startSlackReceiver(
     }
     if (delivery.envelopeId !== null) ack(delivery.envelopeId);
     if (taken.changed) onChange();
-    if (taken.ended?.length) onEnded(taken.ended);
     if (taken.missed) onMissed();
     if (taken.uninstalled) onUninstalled();
   }
@@ -173,7 +163,7 @@ async function takeEvent(
         action.reason,
         now,
       );
-      return { ...taken, changed: taken.changed || suspended };
+      return { changed: taken.changed || suspended };
     }
     case "uninstall":
       await recordUninstall(transaction);
@@ -188,7 +178,7 @@ async function takeMessage(
   now: number,
 ): Promise<Taken> {
   const event = normalizeMessageEvent(payload, installation);
-  return ingestMessageEvent(transaction, event, now);
+  return { changed: await ingestMessageEvent(transaction, event, now) };
 }
 
 /** Notes that the bridge missed what it couldn't read, logged by its issue codes and paths only. */

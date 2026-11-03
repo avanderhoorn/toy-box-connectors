@@ -91,8 +91,6 @@ export async function openApp(
     const slackState = (): SlackState => unconfiguredSlack(tokens, app.name) ?? slack!.state();
     const { botToken, appToken } = tokens;
     const { slackApiUrl, toyBoxOrigin: origin, wakeTimings: timings } = settings;
-    // The outbox exists once its bot does, so what's marked before then, or with no bot, is dropped.
-    const mark: OutboxWorker["mark"] = (requests, standing) => outbox?.mark(requests, standing);
     let bot: BotClient | null = null;
     if (botToken && appToken) {
       bot = createBotClient(botToken, {
@@ -106,14 +104,12 @@ export async function openApp(
         claim,
         slackApiUrl,
         onChange: () => scheduler?.reconsider(),
-        onEnded: (requests) => mark(requests, "released"),
         onError,
         timings,
         log,
       });
     }
     scheduler = startWakeScheduler(database, (channelId) => wakeLead(origin, channelId, log), {
-      mark,
       onError,
       timings,
       log,
@@ -133,7 +129,6 @@ export async function openApp(
       slackState,
       toyBoxOrigin: origin,
       app: nameApps ? app.name : null,
-      mark,
     };
     return {
       name: app.name,
@@ -143,8 +138,8 @@ export async function openApp(
       workspaceUrl,
       log,
       handlers: {
-        inbox: inboxCommand({ database, workspaceUrl, mark }),
-        dismiss: dismissCommand({ database, mark }),
+        inbox: inboxCommand({ database, workspaceUrl }),
+        dismiss: dismissCommand({ database }),
         reply: replyCommand({ database, bot, outbox }),
         activity: activityCommand({ database, workspaceUrl }),
         "mark-read": markReadCommand({ database }),

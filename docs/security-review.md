@@ -217,6 +217,9 @@ timestamps, states and hashes that posting once and numbering need.
 - `file_deletions` names each file the bridge uploaded that no message should
   show, until Slack confirms it deleted or 30 days of trying pass. It names no
   link, so it outlasts unlink.
+- `reaction_displays` names each message of a request whose 👀 or 🏃 the bridge
+  owes Slack, until Slack confirms it or 30 days of its not answering pass. It
+  holds no text and names no link, so it outlasts unlink.
 - `users` and `user_aliases` keep a person's name and other IDs only while a
   link allows them.
 

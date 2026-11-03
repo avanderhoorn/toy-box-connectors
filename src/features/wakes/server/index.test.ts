@@ -1,6 +1,7 @@
-import { expect, mock, onTestFinished, spyOn, test } from "bun:test";
+import { expect, onTestFinished, spyOn, test } from "bun:test";
 import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
+import { readOwedDisplays } from "@outbox/server/testFixtures";
 import { requestLifetimeMs, serveRequest } from "@requests/model/lifecycle";
 import { readRequest, saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
@@ -34,7 +35,7 @@ test("wakes a lead once its requests settle, and stopping mid-run logs it and le
   expect(timers.mock.results.filter(({ value }) => (value as Timer).hasRef())).toEqual([]);
 });
 
-test("marks the requests no lead has read with 👀 once Toy Box runs their wake, and not before", async () => {
+test("owes 👀 to the requests no lead has read once Toy Box runs their wake, and not before", async () => {
   const database = await openTestDatabase();
   await createStoredLink(database);
   const settled = { createdAt: NOW - 10_000, changedAt: NOW - 10_000 };
@@ -48,38 +49,38 @@ test("marks the requests no lead has read with 👀 once Toy Box runs their wake
   });
   const outcomes: RoutineRunOutcome[] = ["failed", "ran"];
   const failed = Promise.withResolvers<unknown>();
-  const woken = Promise.withResolvers<unknown>();
-  const mark = mock((requests: unknown, standing: string) => {
-    expect(standing).toBe("woken");
-    woken.resolve(requests);
-  });
+  const ran = Promise.withResolvers<void>();
   let clock = NOW;
-  const scheduler = startWakeScheduler(database, async () => outcomes.shift()!, {
-    mark,
-    now: () => clock,
-    log: failed.resolve,
-  });
+  const scheduler = startWakeScheduler(
+    database,
+    async () => {
+      const outcome = outcomes.shift()!;
+      if (outcome === "ran") ran.resolve();
+      return outcome;
+    },
+    { now: () => clock, log: failed.resolve },
+  );
 
   await failed.promise;
-  expect(mark).not.toHaveBeenCalled();
+  expect(await readOwedDisplays(database)).toEqual([]);
   clock += retryDelay(1);
   scheduler.reconsider();
-  // The request the lead read and that changed since already has 🏃.
-  expect(await woken.promise).toEqual([
-    expect.objectContaining({ channelId: "C-link", sourceTs: "1700000100.000100" }),
-  ]);
+  await ran.promise;
+  // Stopping waits for the pass, which owes 👀 as it records the run.
   await scheduler.stop();
-  expect(mark).toHaveBeenCalledTimes(1);
+  // The request the lead read and that changed since already has 🏃.
+  expect(await readOwedDisplays(database)).toMatchObject([
+    { channelId: "C-link", sourceTs: "1700000100.000100", shows: "eyes" },
+  ]);
 });
 
-test("doesn't give 👀 to a request the lead read while Toy Box ran its wake", async () => {
+test("doesn't owe 👀 to a request the lead read while Toy Box ran its wake", async () => {
   const database = await openTestDatabase();
   await createStoredLink(database);
   const asked = await createStoredRequest(database, {
     createdAt: NOW - 10_000,
     changedAt: NOW - 10_000,
   });
-  const marks: unknown[][] = [];
   const running = Promise.withResolvers<void>();
   const wakeLead = async () => {
     running.resolve();
@@ -91,33 +92,27 @@ test("doesn't give 👀 to a request the lead read while Toy Box ran its wake", 
     });
     return "ran" as const;
   };
-  const scheduler = startWakeScheduler(database, wakeLead, {
-    mark: (requests, standing) => marks.push([requests, standing]),
-    now: () => NOW,
-  });
+  const scheduler = startWakeScheduler(database, wakeLead, { now: () => NOW });
 
   await running.promise;
-  // Stopping waits for the pass, so its mark would be in by now.
+  // Stopping waits for the pass, so what it owes would be in by now.
   await scheduler.stop();
-  expect(marks).toEqual([]);
+  expect(await readOwedDisplays(database)).toEqual([]);
 });
 
-test("releases the requests the lead read that expired unanswered, and not the ones it never read", async () => {
+test("owes 👀 back to the requests the lead read that expired unanswered, and not the ones it never read", async () => {
   const database = await openTestDatabase();
   await createStoredLink(database);
   const stale = { createdAt: 0, changedAt: 0, touchedAt: 0 };
   await createStoredRequest(database, { ...stale, state: "seen" });
   await createStoredRequest(database, { ...stale, sourceTs: "1700000200.000200" });
-  const released = Promise.withResolvers<unknown[]>();
   const scheduler = startWakeScheduler(database, async () => "failed", {
-    mark: (requests, standing) => released.resolve([requests, standing]),
     now: () => requestLifetimeMs,
     log: () => {},
   });
 
-  expect(await released.promise).toEqual([
-    [expect.objectContaining({ sourceTs: "1700000100.000100", state: "seen" })],
-    "released",
-  ]);
   await scheduler.stop();
+  expect(await readOwedDisplays(database)).toMatchObject([
+    { sourceTs: "1700000100.000100", shows: "eyes" },
+  ]);
 });

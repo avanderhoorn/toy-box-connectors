@@ -3,7 +3,7 @@ import { RETENTION_MS } from "@activity/model/ledger";
 import type { SlackCall } from "@slackapi/server/botClient";
 import {
   deleteReceipt,
-  nextDeletion,
+  nextOwedAttempt,
   nextReconciliation,
   outboxMetadata,
   postSettlement,
@@ -84,10 +84,10 @@ test("there are exactly two scheduled checks, and deletion names one exact targe
   ).toBe(false);
 });
 
-test("a file Slack keeps is asked about again a minute later, doubling to hourly, for 30 days", () => {
-  expect([0, 1, 5, 6, 30].map((attempts) => nextDeletion(0, attempts, 1000))).toEqual([
+test("a call Slack keeps or leaves unanswered is tried again a minute later, doubling to hourly, for 30 days", () => {
+  expect([0, 1, 5, 6, 30].map((attempts) => nextOwedAttempt(0, attempts, 1000))).toEqual([
     61_000, 121_000, 1_921_000, 3_601_000, 3_601_000,
   ]);
-  expect(nextDeletion(1000, 9, RETENTION_MS + 999)).toBe(RETENTION_MS + 3_600_999);
-  expect(nextDeletion(1000, 9, RETENTION_MS + 1000)).toBeNull();
+  expect(nextOwedAttempt(1000, 9, RETENTION_MS + 999)).toBe(RETENTION_MS + 3_600_999);
+  expect(nextOwedAttempt(1000, 9, RETENTION_MS + 1000)).toBeNull();
 });

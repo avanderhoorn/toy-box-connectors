@@ -10,11 +10,18 @@ import { createBotClient } from "@slackapi/server/botClient";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../../../../tests/fakes/slack";
 import type { PostImage } from "../model/payload";
+import type { Standing } from "../model/reactions";
 import { renderMarkdown } from "../model/rendering";
 import { queuePost, queueReply, readOutboxItem } from "./database";
+import { oweDisplays, readDueDisplays } from "./displays";
 import { attachFiles, readDueDeletions } from "./files";
 import { createPostDelivery } from "./posts";
 import type { PostThread } from "./threads";
+
+/** Every display the bridge owes, whenever it's due. */
+export function readOwedDisplays(database: BridgeDatabase) {
+  return database.read((sql) => readDueDisplays(sql, Number.MAX_SAFE_INTEGER));
+}
 
 export function createStoredOutboxItem(
   database: BridgeDatabase,
@@ -164,6 +171,9 @@ export async function createOutboxWorld(asked: Partial<Request> = {}) {
     read: (id: string) => database.read((sql) => readOutboxItem(sql, id)),
     /** The deletes the bridge owes Slack by now. */
     owed: () => database.read((sql) => readDueDeletions(sql, now())),
+    /** Owes the request's message the display `standing` names, as the bridge does when it changes. */
+    oweDisplay: (standing: Standing) =>
+      database.write((tx) => oweDisplays(tx, [request], standing, now())),
     post: createPostDelivery(database, bot, { now }).post,
   };
 }

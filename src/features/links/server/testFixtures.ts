@@ -62,6 +62,10 @@ export async function fillEveryTable(database: BridgeDatabase): Promise<void> {
     await transaction`INSERT INTO outbox_files (item_id, position, file_id) VALUES ('item-1', 0, 'F-shown')`;
     await transaction`INSERT INTO file_deletions (file_id, due_at, created_at) VALUES ('F-owed', 0, 0)`;
     await transaction`
+      INSERT INTO reaction_displays (channel_id, ts, shows, due_at, owed_at)
+      VALUES ('C-link', '1700000100.000100', 'eyes', 0, 0)
+    `;
+    await transaction`
       INSERT INTO request_messages (request_id, channel_id, ts)
       VALUES (1, 'C-link', '1700000100.000200')
     `;

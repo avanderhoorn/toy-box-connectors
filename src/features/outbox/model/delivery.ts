@@ -26,10 +26,15 @@ export function postSettlement(
     case "unknown":
       return { state: "delivery_unknown", error: "unverified_slack_response" };
     case "error":
-      return ["internal_error", "fatal_error", "service_unavailable"].includes(call.error)
+      return isSlackFault(call.error)
         ? { state: "delivery_unknown", error: call.error }
         : { state: "failed", error: call.error };
   }
+}
+
+/** Whether an error code says Slack failed to act, not that it refused, so the call may not have run. */
+export function isSlackFault(error: string): boolean {
+  return ["internal_error", "fatal_error", "service_unavailable"].includes(error);
 }
 
 export type OutboxPost = {
@@ -125,10 +130,10 @@ export function nextReconciliation(attemptAt: number, completedPasses: number): 
 }
 
 /**
- * When to ask Slack again to delete a file it kept: a minute after the first try, doubling to
- * hourly, until 30 days after the bridge first owed the delete, as long as it keeps a post.
+ * When to ask Slack again about a call the bridge owes it that Slack kept or left unanswered: a
+ * minute after the first try, doubling to hourly, until 30 days after the bridge first owed it.
  */
-export function nextDeletion(owedAt: number, attempts: number, at: number): number | null {
+export function nextOwedAttempt(owedAt: number, attempts: number, at: number): number | null {
   if (at - owedAt >= RETENTION_MS) return null;
   return at + Math.min(3_600_000, 60_000 * 2 ** attempts);
 }

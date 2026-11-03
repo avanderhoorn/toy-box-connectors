@@ -11,6 +11,7 @@ import type { SlackTs } from "@slackapi/model/ts";
 import { z } from "zod";
 import { nextReconciliation, reconciliationDelays, type OutboxSettlement } from "../model/delivery";
 import { renderPayload, type LeadPayload, type PostImage } from "../model/payload";
+import { oweDisplays } from "./displays";
 import { oweItemFiles } from "./files";
 import { findThreadPlace, type PostThread } from "./threads";
 
@@ -412,11 +413,17 @@ function rendered(
   };
 }
 
-/** A reply's outcome answers its request or returns it to the lead. A post in its thread does neither. */
+/**
+ * A reply's outcome answers its request or returns it to the lead, and a reply that landed leaves
+ * the request's message showing neither reaction, whatever became of the request meanwhile. A post
+ * in its thread does none of it.
+ */
 async function settleRequest(tx: Bun.SQL, item: OutboxItem, now: number): Promise<void> {
   if (item.kind !== "reply" || item.requestId === null) return;
   const request = await readRequest(tx, item.requestId);
-  if (request?.state !== "answering") return;
+  if (request === null) return;
+  if (item.state === "sent") await oweDisplays(tx, [request], "answered", now);
+  if (request.state !== "answering") return;
   if (item.state === "sent") await saveRequest(tx, confirmAnswer(request));
   if (item.state === "failed") await saveRequest(tx, returnToSeen(request, now));
 }
