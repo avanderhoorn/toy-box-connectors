@@ -46,12 +46,20 @@ An unknown item can settle only on positive delivery proof, never a later appare
 The bridge recovers interrupted attempts before starting work. The worker shares its one bot
 client, waits for verified Slack readiness, and serializes coalesced command pokes and a
 one-second fallback timer. Stop drains the current pass before storage closes. The wake
-scheduler hands it the requests no lead had read once Toy Box runs their wake, and inbox the
-requests it just served after commit. Their best-effort eyes queue has no stored state, and
-moves on when Slack refuses one, such as a second 👀 on a message. A reply settled as sent,
-by posting or by reconciliation proving it landed, queues taking 👀 off its request's message
-behind any add still waiting, so the message ends with none. A refused or unknown reply, a post
-or publication even in the request's thread, and a dismissed or expired request keep it.
+scheduler marks the requests no lead had read woken, once Toy Box runs their wake, and inbox
+marks the requests it just served working, after commit. Whatever ends one the lead read
+unanswered, which is a dismissal, an expiry, a denial, an unlink or a mention edited out,
+marks it released after its commit. A request shows what its standing says, and the pure
+`reactionChanges` orders the calls: woken adds 👀, working adds 🏃 then removes 👀, released
+adds 👀 then removes 🏃, and answered removes both. Each swap adds before it removes, so
+a message is never bare mid-swap and never shows both at rest. The best-effort queue has no
+stored state and keeps what Slack holds back, in order: a rate limit, or a Slack that didn't answer
+for three tries in a row, waits for a later pass, and a call Slack refuses is dropped, such as a second 👀
+on a message. Marks queue while Slack isn't ready. A reply settled as sent, by posting or by
+reconciliation proving it landed, marks its request answered behind whatever is queued, so the message
+ends with neither even after a lost removal. A refused or unknown reply, a post or publication
+even in the request's thread, a request that ends before the lead read it, and an edit or
+follow-up, a reminder, a pause or a suspension leave it as it is.
 
 Queueing a reply calls the request model's `beginAnswer` in the same transaction. Proven
 delivery calls `confirmAnswer`. Only a definite refusal can return it to seen and replace

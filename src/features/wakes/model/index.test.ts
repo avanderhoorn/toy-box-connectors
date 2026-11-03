@@ -94,7 +94,7 @@ describe("deciding whether to wake a link's lead", () => {
 describe("choosing which requests a wake marks with 👀", () => {
   test("marks only the requests no lead has read, and none while the link waits", () => {
     const asked = open(NOW - MINUTE);
-    // A request the lead read already has 👀, even once it changes.
+    // A request the lead read already has 🏃, even once it changes.
     const changed = { ...read(NOW - HOUR), attention: "updated", changedAt: NOW } as const;
     const requests = [asked, read(NOW - HOUR), changed];
     expect(unreadRequests({ active: true, requests })).toEqual([asked]);

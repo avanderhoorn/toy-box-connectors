@@ -27,7 +27,9 @@ import {
   type ChannelLink,
 } from "@links/server/database";
 import { approveLink, deleteLink, pauseLink } from "@links/server/status";
+import type { OutboxWorker } from "@outbox/server";
 import { failQueuedItems } from "@outbox/server/database";
+import { wasRead } from "@requests/model/lifecycle";
 import { deleteLinkRequests, readActiveRequests } from "@requests/server/database";
 import { cancelStoredRequest } from "@requests/server/lifecycle";
 import type { WebClient } from "@slack/web-api";
@@ -53,6 +55,8 @@ export type SetupCommandOptions = {
   toyBoxOrigin: URL;
   /** The app the commands run in, which they name once the bridge hosts several. */
   app?: string | null;
+  /** Called with the requests the lead had read that deny or unlink ended, once that commits. */
+  mark: OutboxWorker["mark"];
 };
 
 export function linkCommand(options: SetupCommandOptions): CommandHandler<"link"> {
@@ -88,17 +92,19 @@ export function pauseCommand({ database }: SetupCommandOptions): CommandHandler<
  * Deletes everything the bridge kept for the link, and the names of people no link allows now. A
  * queued post fails first, so the bridge still deletes the images it uploaded for it.
  */
-export function unlinkCommand({ database }: SetupCommandOptions): CommandHandler<"unlink"> {
+export function unlinkCommand({ database, mark }: SetupCommandOptions): CommandHandler<"unlink"> {
   return async (_input, { channelId, at }) => {
-    const link = await database.write(async (transaction) => {
+    const { link, read } = await database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
+      const read = (await readActiveRequests(transaction, link.id)).filter(wasRead);
       await failQueuedItems(transaction, link.id, "unlinked", at);
       await deleteLinkActivity(transaction, link);
       await deleteLinkRequests(transaction, link.id);
       await deleteLink(transaction, link.id);
       await forgetUnallowedPeople(transaction);
-      return link;
+      return { link, read };
     });
+    mark(read, "released");
     return {
       result: { unlinked: link.slackChannelId },
       text: `Unlinked ${link.channel} and deleted what the bridge kept for it. The lead should delete its routines that run toy-box-slack.`,
@@ -143,9 +149,9 @@ export function allowCommand(options: SetupCommandOptions): CommandHandler<"allo
  * Cancels whatever the people it removes are still waiting on, and forgets the names of those no
  * link allows now.
  */
-export function denyCommand({ database }: SetupCommandOptions): CommandHandler<"deny"> {
+export function denyCommand({ database, mark }: SetupCommandOptions): CommandHandler<"deny"> {
   return async ({ users }, { channelId }) => {
-    const { link, cancelled } = await database.write(async (transaction) => {
+    const { link, cancelled, read } = await database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
       // An Enterprise member can be named by either of their IDs, and each is denied.
       const ids = await Promise.all(users.map((userId) => readPersonIds(transaction, userId)));
@@ -158,8 +164,9 @@ export function denyCommand({ database }: SetupCommandOptions): CommandHandler<"
       for (const request of asked) {
         await cancelStoredRequest(transaction, request, "requester_denied");
       }
-      return { link, cancelled: asked.length };
+      return { link, cancelled: asked.length, read: asked.filter(wasRead) };
     });
+    mark(read, "released");
     const text = `They can't ask the lead to act from ${link.channel} now.`;
     return {
       result: { cancelled },

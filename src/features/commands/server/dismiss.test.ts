@@ -12,7 +12,11 @@ test("ends a request the lead read, keeping the lead's reason, and says why it c
   const database = await openTestDatabase();
   await createStoredLink(database);
   await createStoredRequest(database, { state: "seen" });
-  const dismiss = dismissCommand({ database });
+  const released: unknown[] = [];
+  const dismiss = dismissCommand({
+    database,
+    mark: (requests, standing) => released.push([requests, standing]),
+  });
 
   expect(await dismiss({ request: 1, reason: "Answered in standup" }, LEAD)).toEqual({
     result: { request: "r1", state: "dismissed" },
@@ -22,6 +26,7 @@ test("ends a request the lead read, keeping the lead's reason, and says why it c
     state: "dismissed",
     closedReason: "Answered in standup",
   });
+  expect(released).toEqual([[[expect.objectContaining({ id: 1 })], "released"]]);
   expect(await refusal(dismiss({ request: 1, reason: "Done" }, LEAD))).toMatch(
     /^r1 wasn't dismissed\. A request that's dismissed can't .+ Run `toy-box-slack inbox` to see what waits on you\.$/,
   );

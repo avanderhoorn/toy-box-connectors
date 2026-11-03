@@ -35,6 +35,7 @@ const offline = (database: BridgeDatabase) => ({
   bot: null,
   slackState: connectedSlack,
   toyBoxOrigin: new URL("http://127.0.0.1"),
+  mark: () => {},
 });
 
 const OWNER = { channelId: "toybox-link", at: 1_000 };
@@ -145,10 +146,17 @@ test("pause answers that a link that was active is paused", async () => {
 test("deny cancels the requests of the people it removes, so a reply queued for one never posts", async () => {
   const world = await createOutboxWorld();
   const reply = await world.queue();
+  // The lead never read this one, so it only ever had 👀.
+  await createStoredRequest(world.database, { sourceTs: "1700000300.000100" });
+  const released: unknown[] = [];
 
-  const denied = await denyCommand(offline(world.database))({ users: ["U-owner"] }, OWNER);
+  const denied = await denyCommand({
+    ...offline(world.database),
+    mark: (requests, standing) => released.push([requests, standing]),
+  })({ users: ["U-owner"] }, OWNER);
 
-  expect(denied.result).toEqual({ cancelled: 1 });
+  expect(denied.result).toEqual({ cancelled: 2 });
+  expect(released).toEqual([[[expect.objectContaining({ id: world.request.id })], "released"]]);
   expect(await world.database.read((sql) => readRequest(sql, world.request.id))).toMatchObject({
     state: "cancelled",
     closedReason: "requester_denied",
@@ -193,6 +201,19 @@ test("unlink deletes what the bridge kept for its link, and nothing of another l
 
   // The ledger's numbers hold nothing of the link's, so they wait for retention.
   expect(await countRows(database)).toEqual({ ...before, ledger_seq: before.ledger_seq! + 1 });
+});
+
+test("unlink releases the requests the lead read, but not the ones it hadn't", async () => {
+  const world = await createOutboxWorld();
+  await createStoredRequest(world.database, { sourceTs: "1700000300.000100" });
+  const released: unknown[] = [];
+
+  await unlinkCommand({
+    ...offline(world.database),
+    mark: (requests, standing) => released.push([requests, standing]),
+  })({}, OWNER);
+
+  expect(released).toEqual([[[expect.objectContaining({ id: world.request.id })], "released"]]);
 });
 
 test("unlink still deletes the images its link's queued replies would have shown", async () => {

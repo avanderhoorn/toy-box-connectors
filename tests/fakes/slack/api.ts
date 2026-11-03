@@ -296,6 +296,12 @@ export function createFakeSlackApi(options: {
         .sort((a, b) => compareTs(a.ts, b.ts))
         .map((message) => messageSnapshot(channelId, message));
     },
+    /** The names of the reactions on the message at `ts`, in the order they went on. */
+    reactionNames(channelId: string, ts: string): string[] {
+      const message = messages.get(channelId)?.get(ts);
+      const list = z.array(z.object({ name: z.string() })).parse(message?.reactions ?? []);
+      return list.map(({ name }) => name);
+    },
     setAuthResponse(changes: Record<string, unknown>) {
       Object.assign(authChanges, structuredClone(changes));
     },
@@ -527,7 +533,7 @@ export function createFakeSlackApi(options: {
     if (problem) return failure(problem);
     const message = messages.get(input.channel)!.get(input.timestamp);
     if (!message) return failure("message_not_found");
-    if (!["eyes", "white_check_mark", "thumbsup"].includes(input.name))
+    if (!["eyes", "runner", "white_check_mark", "thumbsup"].includes(input.name))
       return failure("invalid_name");
     const list = z
       .array(z.object({ name: z.string(), count: z.number(), users: z.array(z.string()) }))

@@ -22,8 +22,11 @@ async function openIngest(): Promise<BridgeDatabase> {
   return database;
 }
 
-function ingest(database: BridgeDatabase, event: SlackMessageEvent) {
-  return database.write((transaction) => ingestMessageEvent(transaction, event, 1_700_001_000_000));
+async function ingest(database: BridgeDatabase, event: SlackMessageEvent) {
+  const intake = await database.write((transaction) =>
+    ingestMessageEvent(transaction, event, 1_700_001_000_000),
+  );
+  return intake.changed;
 }
 
 test("only a linked channel's messages are stored, under their authors' own IDs, and a delete cancels the request it asked", async () => {

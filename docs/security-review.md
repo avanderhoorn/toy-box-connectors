@@ -18,18 +18,18 @@ Use a company-owned internal app installed in exactly one workspace and invite
 its bot only to approved channels. The [manifest](manifest.yaml) requests ten
 bot scopes:
 
-| Scope                                                                                     | Purpose                                                                        |
-| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| [`channels:history`](https://docs.slack.dev/reference/scopes/channels.history/)           | Receive public-channel messages and read history and threads.                  |
-| [`channels:read`](https://docs.slack.dev/reference/scopes/channels.read/)                 | Check public-channel membership, archive state and audience.                   |
-| [`groups:history`](https://docs.slack.dev/reference/scopes/groups.history/)               | The same message access in private channels the bot has joined.                |
-| [`groups:read`](https://docs.slack.dev/reference/scopes/groups.read/)                     | Check those private channels and their audience.                               |
-| [`files:read`](https://docs.slack.dev/reference/scopes/files.read/)                       | Check a shared file and download it when the lead reads it.                    |
-| [`files:write`](https://docs.slack.dev/reference/scopes/files.write/)                     | Upload the images the lead shows in a post, and delete them.                   |
-| [`users:read`](https://docs.slack.dev/reference/scopes/users.read/)                       | Resolve names, check admission and identify the installed bot. No email scope. |
-| [`chat:write`](https://docs.slack.dev/reference/scopes/chat.write/)                       | Post answers, publications and posts the owner asks for, and retract its own.  |
-| [`metadata.message:read`](https://docs.slack.dev/reference/scopes/metadata.message.read/) | Confirm a possibly delivered post by its outbox metadata.                      |
-| [`reactions:write`](https://docs.slack.dev/reference/scopes/reactions.write/)             | Put eyes on a request once the lead is woken or reads it, until it's answered. |
+| Scope                                                                                     | Purpose                                                                                           |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [`channels:history`](https://docs.slack.dev/reference/scopes/channels.history/)           | Receive public-channel messages and read history and threads.                                     |
+| [`channels:read`](https://docs.slack.dev/reference/scopes/channels.read/)                 | Check public-channel membership, archive state and audience.                                      |
+| [`groups:history`](https://docs.slack.dev/reference/scopes/groups.history/)               | The same message access in private channels the bot has joined.                                   |
+| [`groups:read`](https://docs.slack.dev/reference/scopes/groups.read/)                     | Check those private channels and their audience.                                                  |
+| [`files:read`](https://docs.slack.dev/reference/scopes/files.read/)                       | Check a shared file and download it when the lead reads it.                                       |
+| [`files:write`](https://docs.slack.dev/reference/scopes/files.write/)                     | Upload the images the lead shows in a post, and delete them.                                      |
+| [`users:read`](https://docs.slack.dev/reference/scopes/users.read/)                       | Resolve names, check admission and identify the installed bot. No email scope.                    |
+| [`chat:write`](https://docs.slack.dev/reference/scopes/chat.write/)                       | Post answers, publications and posts the owner asks for, and retract its own.                     |
+| [`metadata.message:read`](https://docs.slack.dev/reference/scopes/metadata.message.read/) | Confirm a possibly delivered post by its outbox metadata.                                         |
+| [`reactions:write`](https://docs.slack.dev/reference/scopes/reactions.write/)             | Put eyes on a request once the lead is woken, and a runner once it reads it, until it's answered. |
 
 [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/) also
 needs an app-level token with `connections:write`. Connections are outbound
@@ -61,7 +61,7 @@ type and size, with why they can't be read.
 | `~/.toy-box-slack` by default         | `bridge.db` and its WAL hold retained message text, requests, names and IDs, link settings, allowlists, wake runs and queued output, and each shared file's name, type, size and uploader, but never its contents. Credentials are separate. An image the lead reads waits in `viewing` for the lead to view it. |
 | Local Toy Box                         | CLI output enters the lead's session transcript. Copilot keeps every image the lead views in its session history, as it keeps the Slack text and file text the lead reads. The lead may post digests or create workspace files. The bridge never posts into Toy Box.                                             |
 | Copilot and the chosen model provider | Whatever Slack text, shared files and tool output the lead reads can enter model requests, images included. Copilot-only does not specify processing region, retention or contractual training restrictions.                                                                                                     |
-| Slack                                 | Thread answers, posts and publications, with the images the lead shows in them, and eyes on a request until its answer posts. No progress notes or answer edits.                                                                                                                                                 |
+| Slack                                 | Thread answers, posts and publications, with the images the lead shows in them, and eyes or a runner on a request until its answer posts. No progress notes or answer edits.                                                                                                                                     |
 | Host backups and diagnostics          | Snapshots, copied reports and support bundles can become additional copies. Approve access and retention before enabling them.                                                                                                                                                                                   |
 
 Name the actual Copilot account and plan, permitted models and providers,

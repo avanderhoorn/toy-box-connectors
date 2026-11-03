@@ -34,11 +34,14 @@ test("shows changed requests first, up to its limit, and marks only those it sho
     });
     await saveRequest(transaction, dismissRequest(serveRequest(dismissed, 5), "Done"));
   });
-  const acknowledged: string[][] = [];
+  const working: string[][] = [];
   const inbox = inboxCommand({
     database,
     workspaceUrl: () => null,
-    acknowledge: (requests) => acknowledged.push(requests.map(({ sourceTs }) => sourceTs)),
+    mark: (requests, standing) => {
+      expect(standing).toBe("working");
+      working.push(requests.map(({ sourceTs }) => sourceTs));
+    },
   });
 
   const first = await inbox({ limit: 1 }, { ...LEAD, at: 1_000 });
@@ -57,7 +60,8 @@ test("shows changed requests first, up to its limit, and marks only those it sho
     { id: 4, state: "dismissed", attention: null, touchedAt: 5 },
     { id: 5, state: "open", attention: null, touchedAt: null },
   ]);
-  expect(acknowledged).toEqual([[askedAt(3).sourceTs], [askedAt(2).sourceTs]]);
+  // Only a request read for the first time is marked, since one the lead read already shows 🏃.
+  expect(working).toEqual([[], [askedAt(2).sourceTs]]);
 });
 
 test.each([
@@ -67,7 +71,7 @@ test.each([
   const database = await openTestDatabase();
   await createStoredLink(database, "link", { slack_channel_name: name });
   await createStoredRequest(database, askedAt(1));
-  const inbox = inboxCommand({ database, workspaceUrl: () => null });
+  const inbox = inboxCommand({ database, workspaceUrl: () => null, mark: () => {} });
 
   const { result, text } = await inbox({ limit: 10 }, { ...LEAD, at: 1_000 });
 
@@ -90,7 +94,7 @@ test("says why each request's reply didn't post", async () => {
       await failQueuedItem(transaction, reply, error, 20);
     }
   });
-  const inbox = inboxCommand({ database, workspaceUrl: () => null });
+  const inbox = inboxCommand({ database, workspaceUrl: () => null, mark: () => {} });
 
   const { result } = await inbox({ limit: 10 }, { ...LEAD, at: 1_000 });
 
@@ -113,7 +117,7 @@ test("lists the files each message shares in the order it shares them, and why t
   const forwarded = sharedFile("F-shot", { uploaderId: "U-mallory" });
   await createStoredMessage(database, askMessage(undefined, { files: [notes, forwarded] }));
   await createStoredRequest(database);
-  const inbox = inboxCommand({ database, workspaceUrl: () => null });
+  const inbox = inboxCommand({ database, workspaceUrl: () => null, mark: () => {} });
 
   const { result } = await inbox({ limit: 10 }, { ...LEAD, at: 1_000 });
 

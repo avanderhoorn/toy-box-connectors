@@ -12,23 +12,46 @@ const PROMPTLY = {
   TOY_BOX_SLACK_WAKE_TIMINGS: JSON.stringify({ debounce: 50, debounceLimit: 200 }),
 };
 
-test("whoever asked sees 👀 once Toy Box runs the lead's wake, before the lead reads it", async () => {
+test("whoever asked sees 👀 once Toy Box runs the lead's wake, and 🏃 once the lead reads it", async () => {
   const { slack, toyBox, inbox, post, stop, saying } = await connectedBridge();
   const [askedTs] = timestamps(1);
-  const reactions = () => slack.calls.filter(({ method }) => method === "reactions.add");
 
   await post(said(ALICE, askedTs, `<@${BOT}> can you check the deploy?`));
 
   await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
-  await waitFor(() =>
-    expect(slack.getMessages("C-link")).toMatchObject([
-      { ts: askedTs, reactions: [{ name: "eyes", count: 1, users: [BOT] }] },
-    ]),
-  );
+  await waitFor(() => expect(slack.reactionNames("C-link", askedTs)).toEqual(["eyes"]));
   expect(await inbox()).toMatchObject({ requests: [{ id: 1, state: "open" }] });
-  // Inbox marks what it shows too, for a lead that reads without a wake, and Slack's refusal of a
-  // second 👀 goes unremarked.
-  await waitFor(() => expect(reactions()).toHaveLength(2));
+  await waitFor(() => expect(slack.reactionNames("C-link", askedTs)).toEqual(["runner"]));
+  expect(await stop()).toEqual({ code: 0, stderr: saying() });
+}, 15_000);
+
+test("whoever asked sees 👀 again when they edit the mention out of a request the lead read", async () => {
+  const { slack, toyBox, inbox, post, edit, stop, saying } = await connectedBridge();
+  const [askedTs, editedTs] = timestamps(2);
+  const asked = said(ALICE, askedTs, `<@${BOT}> can you check the deploy?`);
+  await post(asked);
+  await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
+  expect(await inbox()).toMatchObject({ requests: [{ id: 1, state: "open" }] });
+  await waitFor(() => expect(slack.reactionNames("C-link", askedTs)).toEqual(["runner"]));
+
+  await edit(asked, "never mind the deploy", editedTs);
+
+  await waitFor(() => expect(slack.reactionNames("C-link", askedTs)).toEqual(["eyes"]));
+  expect(await stop()).toEqual({ code: 0, stderr: saying() });
+}, 15_000);
+
+test("whoever asked sees 👀 again when the lead dismisses a request it read", async () => {
+  const { slack, toyBox, inbox, dismiss, post, stop, saying } = await connectedBridge();
+  const [askedTs] = timestamps(1);
+  await post(said(ALICE, askedTs, `<@${BOT}> can you check the deploy?`));
+  await waitFor(() => expect(toyBox.runs).toHaveLength(1), 5_000);
+  await waitFor(() => expect(slack.reactionNames("C-link", askedTs)).toEqual(["eyes"]));
+  expect(await inbox()).toMatchObject({ requests: [{ id: 1, state: "open" }] });
+  await waitFor(() => expect(slack.reactionNames("C-link", askedTs)).toEqual(["runner"]));
+
+  expect(await dismiss(1, "Answered in standup")).toMatchObject({ exitCode: 0 });
+
+  await waitFor(() => expect(slack.reactionNames("C-link", askedTs)).toEqual(["eyes"]));
   expect(await stop()).toEqual({ code: 0, stderr: saying() });
 }, 15_000);
 

@@ -8,7 +8,7 @@
 // suspended link's requests wait, but its suspension wakes the lead once to tell the owner. A run
 // Toy Box couldn't take or refused is retried with backoff, and no lead is woken more than 12 times
 // an hour. Once Toy Box runs a wake, each request no lead has read yet gets 👀 in Slack, so whoever
-// asked sees within seconds that a lead has it.
+// asked sees within seconds that a lead has it, until the lead reads it and 🏃 replaces it.
 
 import { z } from "zod";
 import type { Request, RequestAttention } from "@requests/model/lifecycle";

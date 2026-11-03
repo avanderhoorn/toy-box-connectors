@@ -110,16 +110,22 @@ describe.skipIf(process.env.TOY_BOX_SLACK_E2E !== "1")("a channel linked to Slac
       expect(link.query("SELECT outcome FROM wakes WHERE at >= ?", since)).toEqual([
         { outcome: "ran" },
       ]);
-      // The bridge takes 👀 off once the answer posts, so the message ends with none.
+      // The bridge takes what it showed off once the answer posts, so the message ends with none.
       await waitFor(() =>
         expect(seenInSlack(link.slack, askedTs)).toEqual({ reactions: undefined, replies: 1 }),
       );
-      // Waking the lead and its inbox read may each add 👀, and Slack refuses the second.
-      const methods = link.slack.calls
-        .filter((call) => call.method.startsWith("reactions.") && call.args.timestamp === askedTs)
-        .map((call) => call.method);
-      expect(methods.at(-1)).toBe("reactions.remove");
-      expect(methods.filter((method) => method === "reactions.remove")).toHaveLength(1);
+      // The lead's inbox read put 🏃 on before its answer posted, and its answer took both off.
+      const calls = link.slack.calls.filter(
+        (call) =>
+          call.args.timestamp === askedTs ||
+          (call.method === "chat.postMessage" && call.args.thread_ts === askedTs),
+      );
+      const shown = calls.map((call) =>
+        typeof call.args.name === "string" ? `${call.method} ${call.args.name}` : call.method,
+      );
+      expect(shown.indexOf("reactions.add runner")).toBeGreaterThanOrEqual(0);
+      expect(shown.indexOf("reactions.add runner")).toBeLessThan(shown.indexOf("chat.postMessage"));
+      expect(shown.slice(-2)).toEqual(["reactions.remove eyes", "reactions.remove runner"]);
       expect(seenInSlack(link.slack, strangerTs)).toEqual({ reactions: undefined, replies: 0 });
     },
     { turns: 1 },

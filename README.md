@@ -6,7 +6,7 @@ It runs as one local bridge beside Toy Box on your Mac. Only the bridge holds th
 
 ## Features
 
-- **Answers in threads:** When someone you allow mentions the app, the bridge wakes the channel's lead and reacts with 👀 once it has. The lead answers once in its thread, and the bridge then takes the 👀 off.
+- **Answers in threads:** When someone you allow mentions the app, the bridge wakes the channel's lead and reacts with 👀 once it has. When the lead reads the request, 🏃 replaces the 👀. The lead answers once in its thread, and the bridge then takes the reaction off.
 - **Reads shared files:** The lead can read the text files and PNG or JPEG screenshots that people you allow share, when an answer depends on them. The bridge fetches a file from Slack only when the lead reads it, and keeps a screenshot only for the ten minutes the lead has to view it.
 - **Posts when you ask:** Ask the lead in Toy Box, or have a routine ask, and it posts in the Slack channel or one of its threads, mentioning people you allow when you ask it to. Someone in Slack gets an answer, and the lead asks you before posting anything else for them.
 - **Shows images:** The lead can show up to three PNG images below an answer or post, such as a chart it made, each with alt text that says what it shows. The bridge uploads only each image's pixels, and deletes it from Slack when its post doesn't go out or the lead retracts it.
@@ -65,7 +65,7 @@ You need an Apple silicon Mac with [Node 24](https://nodejs.org/en/download), an
    toy-box-slack allow --channel TOYBOX_ID USER_ID
    ```
 
-1. Send a **new** mention, picking the app from Slack's mention menu. Within minutes, you should see 👀 on it, then one answer in its thread and the 👀 gone. If not, run `toy-box-slack status` and see the [operations guide](docs/operations.md).
+1. Send a **new** mention, picking the app from Slack's mention menu. Within minutes, you should see 👀 on it, then 🏃 once the lead reads it, then one answer in its thread and the reaction gone. If not, run `toy-box-slack status` and see the [operations guide](docs/operations.md).
 
 ## Link Options
 

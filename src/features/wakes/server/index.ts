@@ -2,12 +2,14 @@
 //
 // A pass expires the requests that waited their lifetime, so nobody is reminded of them, prunes the
 // run log, then reads every link and wakes each lead its decision says to, one at a time,
-// recording each run's outcome. Once Toy Box runs a wake, it hands the requests no lead has read
-// yet to be acknowledged with 👀. A pass follows any change to what a decision reads, every run,
-// the end of the earliest wait, and at least every minute, so a Mac that slept is noticed.
+// recording each run's outcome. Once Toy Box runs a wake, the requests no lead has read yet, as the
+// write that records the run finds them, are marked woken with 👀, and a request that expired
+// after the lead read it goes back to 👀. A pass follows any change to what a decision reads, every
+// run, the end of the earliest wait, and at least every minute, so a Mac that slept is noticed.
 
 import type { BridgeDatabase } from "@bridge/server/database";
 import type { OutboxWorker } from "@outbox/server";
+import { wasRead } from "@requests/model/lifecycle";
 import { expireRequests } from "@requests/server/lifecycle";
 import { REQUESTS_COMMAND, type RoutineRunOutcome } from "@toybox/model";
 import { decideWake, defaultWakeTimings, unreadRequests, type WakeTimings } from "@wakes/model";
@@ -22,8 +24,8 @@ export interface WakeScheduler {
 }
 
 export type WakeSchedulerOptions = {
-  /** Called with the requests no lead had read once Toy Box runs a wake for them. */
-  acknowledge?: OutboxWorker["acknowledge"];
+  /** Called with the requests no lead had read once Toy Box runs a wake for them, and with the ones the lead had read that expired. */
+  mark?: OutboxWorker["mark"];
   /** Called when the scheduler stops on an error that deciding again can't fix. */
   onError?: (error: unknown) => void;
   now?: () => number;
@@ -49,7 +51,7 @@ export function startWakeScheduler(
   database: BridgeDatabase,
   wakeLead: WakeLead,
   {
-    acknowledge = () => {},
+    mark = () => {},
     onError = () => {},
     now = Date.now,
     timings = defaultWakeTimings,
@@ -84,10 +86,13 @@ export function startWakeScheduler(
   async function decide() {
     clearTimeout(timer);
     const at = now();
-    await database.write(async (transaction) => {
-      await expireRequests(transaction, at);
+    const expired = await database.write(async (transaction) => {
+      const expired = await expireRequests(transaction, at);
       await pruneWakes(transaction, at);
+      return expired;
     });
+    const read = expired.filter(wasRead);
+    if (read.length) mark(read, "released");
     let next = at + MAX_WAIT;
     for (const link of await database.read(readLinkWakes)) {
       if (stopped) return;
@@ -97,10 +102,16 @@ export function startWakeScheduler(
       // A run covers what changed before it started, so it's logged at its start.
       const startedAt = now();
       const outcome = await wakeLead(link.channelId);
-      await database.write((transaction) => recordWake(transaction, link.id, startedAt, outcome));
-      if (outcome === "ran") {
-        acknowledge(unreadRequests(link));
-      } else {
+      await database.write(async (transaction) => {
+        await recordWake(transaction, link.id, startedAt, outcome);
+        // Marked under this write, so a request the lead read during the run isn't marked woken
+        // behind the 🏃 inbox queued, and one that ended meanwhile isn't marked at all.
+        if (outcome !== "ran") return;
+        const current = (await readLinkWakes(transaction)).find(({ id }) => id === link.id);
+        const unread = current ? unreadRequests(current) : [];
+        if (unread.length) mark(unread, "woken");
+      });
+      if (outcome !== "ran") {
         log(`Couldn't wake the lead of Toy Box channel ${link.channelId}: ${unwoken[outcome]}.`);
       }
       again = true;

@@ -75,6 +75,11 @@ export function isActive(state: RequestState): boolean {
   return transitions[state].length > 0;
 }
 
+/** Whether the lead read a request, so it owes the lead's answer or dismissal until it ends. */
+export function wasRead({ state }: Pick<Request, "state">): boolean {
+  return state === "seen" || state === "answering";
+}
+
 /** Whether a request may move from one state to another. */
 export function canMove(from: RequestState, to: RequestState): boolean {
   return transitions[from].includes(to);

@@ -36,7 +36,8 @@ export type InboxCommandOptions = {
   database: BridgeDatabase;
   /** The Slack workspace's URL, once Slack has said it, for permalinks. */
   workspaceUrl: () => string | null;
-  acknowledge?: OutboxWorker["acknowledge"];
+  /** Called with the requests inbox read for the first time, once they're marked seen. */
+  mark: OutboxWorker["mark"];
 };
 
 /** A message the bridge keeps text for, as commands read it. */
@@ -51,10 +52,10 @@ export type MessageRow = {
 export function inboxCommand({
   database,
   workspaceUrl,
-  acknowledge,
+  mark,
 }: InboxCommandOptions): CommandHandler<"inbox"> {
   return async ({ limit }, { channelId, at }) => {
-    const seen: StoredRequest[] = [];
+    const opened: StoredRequest[] = [];
     const inbox = await database.write(async (transaction): Promise<Inbox> => {
       const link = await readCallerLink(transaction, channelId);
       const waiting = inboxOrder(await readActiveRequests(transaction, link.id));
@@ -63,7 +64,7 @@ export function inboxCommand({
         requests.push(await readInboxRequest(transaction, link, request, workspaceUrl()));
         if (isPending(request)) {
           await saveRequest(transaction, serveRequest(request, at));
-          seen.push(request);
+          if (request.state === "open") opened.push(request);
         }
       }
       return {
@@ -73,7 +74,7 @@ export function inboxCommand({
         more: waiting.length - requests.length,
       };
     });
-    acknowledge?.(seen);
+    mark(opened, "working");
     return { result: inbox, text: presentInbox(inbox, at) };
   };
 }

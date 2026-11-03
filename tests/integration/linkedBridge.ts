@@ -107,6 +107,9 @@ export async function startLinkedBridge({
     inbox: async () => (await call("inbox", channelId)).json as Inbox,
     /** What activity shows the channel's lead. */
     activity: async () => (await call("activity", channelId)).json as Activity,
+    /** Has the channel's lead end request `id`, which needs no answer, saying `reason`. */
+    dismiss: (id: number, reason: string) =>
+      call("dismiss", channelId, null, { request: `r${id}`, reason }),
     /** Has the channel's lead answer request `id` with `text`. */
     reply: (id: number, text: string) =>
       call("reply", channelId, null, { request: `r${id}`, text }),
