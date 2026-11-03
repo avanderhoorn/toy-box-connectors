@@ -131,7 +131,7 @@ test("a request shows 👀 once woken and 🏃 once read, and neither once its r
     "remove eyes",
     "remove runner",
   ]);
-  expect(await readOwedDisplays(world.database)).toEqual([]);
+  await waitFor(async () => expect(await readOwedDisplays(world.database)).toEqual([]));
 });
 
 test("a request the lead read that ends unanswered goes back to 👀", async () => {
@@ -287,7 +287,9 @@ test("a display owed while a call Slack left unanswered is out isn't put off wit
 test("a swap Slack rate limits halfway finishes on a later pass, with 👀 still on until then", async () => {
   const { world, worker, owe, shown, reactions } = await startWatching();
   await owe("woken");
-  await waitFor(() => expect(shown()).toEqual(["eyes"]));
+  // The 👀 display also removes 🏃, so wait it out before the rate limit is armed for the next.
+  await waitFor(async () => expect(await readOwedDisplays(world.database)).toEqual([]));
+  expect(shown()).toEqual(["eyes"]);
   world.slack.failNext("reactions.remove", { retryAfter: 30 });
   await owe("working");
   await waitFor(() =>
@@ -295,9 +297,13 @@ test("a swap Slack rate limits halfway finishes on a later pass, with 👀 still
   );
   expect(shown()).toEqual(["eyes", "runner"]);
 
-  world.advance(30_000);
-  worker.poke();
-  await waitFor(() => expect(shown()).toEqual(["runner"]));
+  // Slack's answer reaches the worker after the call shows in the calls, and holds the method for
+  // 30 seconds from then, so the clock moves on until the pass that follows isn't held.
+  await waitFor(() => {
+    world.advance(30_000);
+    worker.poke();
+    expect(shown()).toEqual(["runner"]);
+  });
 });
 
 test("a call Slack leaves unanswered is tried again later, without holding up a post", async () => {
@@ -317,7 +323,7 @@ test("a call Slack leaves unanswered is tried again later, without holding up a 
   world.advance(60_000);
   worker.poke();
   await waitFor(() => expect(shown()).toEqual(["eyes"]));
-  expect(await readOwedDisplays(world.database)).toEqual([]);
+  await waitFor(async () => expect(await readOwedDisplays(world.database)).toEqual([]));
 });
 
 test("a newer display replaces one waiting out its backoff, and starts over at once", async () => {
@@ -339,7 +345,7 @@ test("a newer display replaces one waiting out its backoff, and starts over at o
   world.advance(60_000);
   await owe("working");
   await waitFor(() => expect(shown()).toEqual(["runner"]));
-  expect(await readOwedDisplays(world.database)).toEqual([]);
+  await waitFor(async () => expect(await readOwedDisplays(world.database)).toEqual([]));
 });
 
 test("a pass posts first, then tries one display Slack leaves unanswered, then deletes what's due", async () => {
