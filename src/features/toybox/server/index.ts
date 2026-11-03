@@ -7,7 +7,7 @@
 
 import { findRoutine, REQUESTS_COMMAND, type RoutineRunOutcome } from "@toybox/model";
 import { log as bridgeLog, type Log } from "@/shared/log";
-import { readToyBoxChannel, runToyBoxRoutine } from "./api";
+import { READ_TIMEOUT_MS, RUN_TIMEOUT_MS, readToyBoxChannel, runToyBoxRoutine } from "./api";
 
 /**
  * Runs the channel's routine that reads Slack requests, which wakes the channel's lead, saying in
@@ -17,11 +17,12 @@ export async function wakeLead(
   origin: URL,
   channelId: string,
   log: Log = bridgeLog,
+  { readMs = READ_TIMEOUT_MS, runMs = RUN_TIMEOUT_MS } = {},
 ): Promise<RoutineRunOutcome> {
   try {
-    const channel = await readToyBoxChannel(origin, channelId);
+    const channel = await readToyBoxChannel(origin, channelId, readMs);
     const routine = channel && findRoutine(channel.routines, REQUESTS_COMMAND);
-    return routine ? await runToyBoxRoutine(origin, channelId, routine.id, log) : "missing";
+    return routine ? await runToyBoxRoutine(origin, channelId, routine.id, log, runMs) : "missing";
   } catch (error) {
     log(`Calling Toy Box for channel ${channelId} failed:`, error);
     return "failed";

@@ -16,4 +16,5 @@ Toy Box shows a channel's routines only in the snapshot its event stream starts 
 
 - Never post into Toy Box. The lead decides what reaches the Toy Box channel.
 - Only talk to a Toy Box on loopback. A non-loopback `TOY_BOX_URL` is refused at startup, and a redirect is never followed.
+- A read gets 15 seconds, since it only looks the channel up. A run gets 60, since Toy Box answers it only once it has delivered the run, which can resume the lead's session twice and clear its status. A timeout doesn't mean Toy Box didn't deliver, so the retry it earns can wake the lead twice. The scheduler wakes links one at a time, so a Toy Box that hangs holds every other link's wake up to 60 seconds.
 - A wake never throws. A call that can't connect, times out or reads something unexpected is logged and comes back `failed`, so the wake scheduler retries it while Slack ingestion continues. `publish` and `link` let such a call fail the command instead, for the lead or owner to run again.

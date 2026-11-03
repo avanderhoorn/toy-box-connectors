@@ -14,8 +14,12 @@ import {
 import { log as bridgeLog, type Log } from "@/shared/log";
 import { readServerSentEvents } from "./sse";
 
-// Toy Box answers on loopback, so a call this slow has failed rather than queued.
-const REQUEST_TIMEOUT_MS = 15_000;
+// A read only looks the channel up, so on loopback one this slow has failed rather than queued.
+export const READ_TIMEOUT_MS = 15_000;
+// A run answers only once Toy Box has delivered it, which can take two resumes of the lead's
+// session. Toy Box goes on delivering after the bridge gives up, so this only bounds how long a wake
+// waits before it retries.
+export const RUN_TIMEOUT_MS = 60_000;
 
 /**
  * The channel, with its routines oldest first, or null when Toy Box has no such channel. Toy Box
@@ -25,11 +29,12 @@ const REQUEST_TIMEOUT_MS = 15_000;
 export async function readToyBoxChannel(
   origin: URL,
   channelId: string,
+  timeoutMs = READ_TIMEOUT_MS,
 ): Promise<ToyBoxChannel | null> {
   const response = await fetch(channelsUrl(origin, channelId), {
     headers: { Accept: "text/event-stream" },
     redirect: "manual",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const type = response.headers.get("Content-Type") ?? "";
   if (response.status !== 200 || !response.body || !type.startsWith("text/event-stream")) {
@@ -58,11 +63,12 @@ export async function runToyBoxRoutine(
   channelId: string,
   routineId: string,
   log: Log = bridgeLog,
+  timeoutMs = RUN_TIMEOUT_MS,
 ): Promise<RoutineRunOutcome> {
   const response = await fetch(channelsUrl(origin, channelId, "routines", routineId, "run"), {
     method: "POST",
     redirect: "manual",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const outcome = routineRunOutcome(response.status);
   if (outcome === "ran" || outcome === "missing") {

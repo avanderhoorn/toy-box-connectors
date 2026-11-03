@@ -27,15 +27,19 @@ export function startFakeToyBox() {
   const channels = new Map<string, FakeChannel>();
   const runs: FakeRun[] = [];
   const failures: number[] = [];
+  const holds: Record<"read" | "run", Promise<void>[]> = { read: [], run: [] };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: route });
 
-  function route(request: Request): Response {
+  async function route(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname.split("/").slice(1).map(decodeURIComponent);
     const [api, version, resource, channelId, routines, routineId, run] = path;
     if (api !== "api" || version !== "v1" || resource !== "channels" || !channelId?.trim()) {
       return new Response("Not Found", { status: 404 });
     }
-    if (request.method === "GET" && path.length === 4) return stream(channelId);
+    if (request.method === "GET" && path.length === 4) {
+      await holds.read.shift();
+      return stream(channelId);
+    }
     if (
       request.method === "POST" &&
       path.length === 7 &&
@@ -72,7 +76,7 @@ export function startFakeToyBox() {
     });
   }
 
-  function runRoutine(channelId: string, routineId: string): Response {
+  async function runRoutine(channelId: string, routineId: string): Promise<Response> {
     const failure = failures.shift();
     if (failure !== undefined) {
       return Response.json({ error: "Unable to run routine." }, { status: failure });
@@ -81,6 +85,8 @@ export function startFakeToyBox() {
       return Response.json({ error: "Routine not found." }, { status: 404 });
     }
     runs.push({ channelId, routineId, at: Date.now() });
+    // Toy Box delivers a run before it answers, and goes on delivering if the caller gives up.
+    await holds.run.shift();
     return new Response(null, { status: 204 });
   }
 
@@ -102,6 +108,12 @@ export function startFakeToyBox() {
     },
     failNextRun(status = 500) {
       failures.push(status);
+    },
+    /** Holds the next read's answer, or the next run's once it's delivered, until the returned release. */
+    holdNext(call: "read" | "run") {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      holds[call].push(promise);
+      return resolve;
     },
     stop: () => server.stop(true),
   };
