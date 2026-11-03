@@ -98,7 +98,7 @@ test("a definite refusal can reuse only its own row, after inbox clears reply_fa
   await expect(world.queue("Corrected")).rejects.toThrow();
   await world.database.write(async (tx) => {
     const request = await readRequest(tx, world.request.id);
-    await saveRequest(tx, serveRequest(request!, world.now()));
+    await saveRequest(tx, serveRequest(request!, world.now()), world.now());
   });
   expect(await world.queue("Corrected")).toMatchObject({
     id: item.id,

@@ -378,7 +378,7 @@ test("resume fails what its link held once more people can read the channel, and
   const late = await database.write(async (transaction) => {
     const queued = await queueReply(transaction, { requestId: denied.id, text: "Late." }, now());
     const asked = await readRequest(transaction, denied.id);
-    await cancelStoredRequest(transaction, asked!, "requester_denied");
+    await cancelStoredRequest(transaction, asked!, "requester_denied", now());
     await suspendLink(transaction, "link", "channel_made_public", now());
     return queued;
   });

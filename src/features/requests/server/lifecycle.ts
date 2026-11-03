@@ -19,7 +19,7 @@ export async function changeStoredRequest(
 ): Promise<boolean> {
   const changed = changeRequest(request, now);
   if (changed === request) return false;
-  await saveRequest(transaction, changed);
+  await saveRequest(transaction, changed, now);
   return true;
 }
 
@@ -28,16 +28,17 @@ export async function cancelStoredRequest(
   transaction: Bun.SQL,
   request: StoredRequest,
   reason: CancelReason,
+  now: number,
 ): Promise<void> {
-  await saveRequest(transaction, cancelRequest(request, reason));
+  await saveRequest(transaction, cancelRequest(request, reason), now);
 }
 
 /**
- * Expires every request that waited its lifetime without an answer, and returns them as they
- * were. Only a request waiting on the lead expires, so none has a reply queued.
+ * Expires every request that waited its lifetime without an answer. Only a request waiting on
+ * the lead expires, so none has a reply queued.
  */
-export async function expireRequests(transaction: Bun.SQL, now: number): Promise<StoredRequest[]> {
-  const due = await readOverdueRequests(transaction, now);
-  for (const request of due) await saveRequest(transaction, expireRequest(request));
-  return due;
+export async function expireRequests(transaction: Bun.SQL, now: number): Promise<void> {
+  for (const request of await readOverdueRequests(transaction, now)) {
+    await saveRequest(transaction, expireRequest(request), now);
+  }
 }

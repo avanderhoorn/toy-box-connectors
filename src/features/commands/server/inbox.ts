@@ -24,7 +24,6 @@ import {
 } from "@commands/model/slackText";
 import { judgeSharedFile } from "@files/server/read";
 import type { ChannelLink } from "@links/server/database";
-import { oweDisplays } from "@outbox/server/displays";
 import { serveRequest } from "@requests/model/lifecycle";
 import { readActiveRequests, saveRequest, type StoredRequest } from "@requests/server/database";
 import { readSlackPersonName } from "@slackapi/server/users";
@@ -53,19 +52,15 @@ export function inboxCommand({
 }: InboxCommandOptions): CommandHandler<"inbox"> {
   return async ({ limit }, { channelId, at }) => {
     const inbox = await database.write(async (transaction): Promise<Inbox> => {
-      const opened: StoredRequest[] = [];
       const link = await readCallerLink(transaction, channelId);
       const waiting = inboxOrder(await readActiveRequests(transaction, link.id));
       const requests: InboxRequest[] = [];
       for (const request of waiting.slice(0, limit)) {
         requests.push(await readInboxRequest(transaction, link, request, workspaceUrl()));
         if (isPending(request)) {
-          await saveRequest(transaction, serveRequest(request, at));
-          if (request.state === "open") opened.push(request);
+          await saveRequest(transaction, serveRequest(request, at), at);
         }
       }
-      // A request read for the first time shows 🏃, owed with the change that marks it seen.
-      await oweDisplays(transaction, opened, "working", at);
       return {
         channel: link.channel,
         linkStatus: link.status,

@@ -4,7 +4,7 @@
 // until Slack confirms it does. A newer display replaces an older one and starts it over, so it
 // repairs whatever an earlier one missed. A row names no link, so unlinking can't drop one.
 
-import { displayOf, type Display, type Standing } from "../model/reactions";
+import type { Display } from "../model/reactions";
 
 /** A request, as far as its message in Slack goes. */
 export type MarkedRequest = { channelId: string; sourceTs: string };
@@ -16,14 +16,13 @@ export type OwedDisplay = MarkedRequest & {
   owedAt: number;
 };
 
-/** Owes each request's message the display `standing` names, due at once. */
+/** Owes each request's message `shows`, due at once. */
 export async function oweDisplays(
   tx: Bun.SQL,
   requests: readonly MarkedRequest[],
-  standing: Standing,
+  shows: Display,
   now: number,
 ): Promise<void> {
-  const shows = displayOf(standing);
   for (const { channelId, sourceTs } of requests)
     await tx`
       INSERT INTO reaction_displays (channel_id, ts, shows, due_at, owed_at)

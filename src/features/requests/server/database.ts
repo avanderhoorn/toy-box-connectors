@@ -1,8 +1,11 @@
+import { displayChange } from "@outbox/model/reactions";
+import { oweDisplays } from "@outbox/server/displays";
 import {
   canMove,
   isActive,
   requestLifetimeMs,
   requestStates,
+  wasRead,
   type Request,
   type RequestAttention,
   type RequestReason,
@@ -13,7 +16,8 @@ import type { SlackTs } from "@slackapi/model/ts";
 // Stored requests.
 //
 // A request's row changes only by saving what a lifecycle function returned for it, in the
-// transaction of whatever caused the change. A message belongs to at most one request.
+// transaction of whatever caused the change, which owes its message's reactions the same way. A
+// message belongs to at most one request.
 
 /** A request and the ID the lead sees it by. */
 export type StoredRequest = Request & { id: number };
@@ -121,10 +125,22 @@ export async function insertRequest(
   return requestFromRow(row!);
 }
 
-/** Saves what a lifecycle function returned for a stored request. */
-export async function saveRequest(transaction: Bun.SQL, request: StoredRequest): Promise<void> {
+/**
+ * Saves what a lifecycle function returned for a stored request, and owes its message the display
+ * the change calls for, in the same write.
+ */
+export async function saveRequest(
+  transaction: Bun.SQL,
+  request: StoredRequest,
+  now: number,
+): Promise<void> {
   const { id, ...rest } = request;
+  const [before] = await transaction<Pick<Request, "state">[]>`
+    SELECT state FROM requests WHERE id = ${id}
+  `;
   await transaction`UPDATE requests SET ${transaction(requestColumns(rest))} WHERE id = ${id}`;
+  const shows = displayChange(before!, request);
+  if (shows !== null) await oweDisplays(transaction, [request], shows, now);
 }
 
 /** Makes a message one of a request's, taking it from any request it belonged to. */
@@ -176,8 +192,17 @@ function requestColumns(request: Request): Omit<RequestRow, "id"> {
   };
 }
 
-/** Deletes a link's requests, along with which messages each held and its reply. */
-export async function deleteLinkRequests(transaction: Bun.SQL, linkId: string): Promise<void> {
+/**
+ * Deletes a link's requests, along with which messages each held and its reply. Each the lead read
+ * ends unanswered, so it owes 👀 back first, since the display outlives the row.
+ */
+export async function deleteLinkRequests(
+  transaction: Bun.SQL,
+  linkId: string,
+  now: number,
+): Promise<void> {
+  const read = (await readActiveRequests(transaction, linkId)).filter(wasRead);
+  await oweDisplays(transaction, read, "eyes", now);
   await transaction`DELETE FROM requests WHERE link_id = ${linkId}`;
 }
 

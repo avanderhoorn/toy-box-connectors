@@ -1,8 +1,7 @@
 import { readOwnTextBefore, type StoredVersion } from "@activity/server/ledger";
-import { oweDisplays } from "@outbox/server/displays";
 import { classify, type ClassifyLink } from "@requests/model/classify";
 import { asksQuestion } from "@requests/model/courtesy";
-import { isActive, openRequest, wasRead } from "@requests/model/lifecycle";
+import { isActive, openRequest } from "@requests/model/lifecycle";
 import type { SlackMessage } from "@slackapi/model/messages";
 import { compareTs, type SlackTs } from "@slackapi/model/ts";
 import {
@@ -19,8 +18,7 @@ import { cancelStoredRequest, changeStoredRequest } from "./lifecycle";
 // A new message is classified. An edit changes the request its message belongs to, or cancels the
 // request whose mention it removed, and asks again only when it adds a mention to a message no
 // active request has. Once the lead answers, edits change nothing. Deleting a request's source
-// cancels the request, and deleting one of its other messages changes it. A request the lead read
-// that a mention's removal cancels owes 👀 back, in the same transaction.
+// cancels the request, and deleting one of its other messages changes it.
 
 /** The link settings intake reads. */
 export type IntakeLink = ClassifyLink & { id: string };
@@ -45,8 +43,7 @@ export async function takeMessage(
   if (current !== null && isActive(current.state)) {
     if (current.state === "answering") return false;
     if (current.reason === "mention" && current.sourceTs === ts && !message.mentionsBot) {
-      await cancelStoredRequest(transaction, current, "mention_removed");
-      await oweDisplays(transaction, [current].filter(wasRead), "released", now);
+      await cancelStoredRequest(transaction, current, "mention_removed", now);
       return true;
     }
     return changeStoredRequest(transaction, current, now);
@@ -106,7 +103,7 @@ export async function takeDelete(
   const request = await readMessageRequest(transaction, channelId, ts);
   if (request === null || !isActive(request.state)) return false;
   if (request.sourceTs === ts) {
-    await cancelStoredRequest(transaction, request, "source_deleted");
+    await cancelStoredRequest(transaction, request, "source_deleted", now);
     return true;
   }
   return changeStoredRequest(transaction, request, now);

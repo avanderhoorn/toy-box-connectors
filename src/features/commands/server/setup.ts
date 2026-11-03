@@ -27,9 +27,7 @@ import {
   type ChannelLink,
 } from "@links/server/database";
 import { approveLink, deleteLink, pauseLink } from "@links/server/status";
-import { oweDisplays } from "@outbox/server/displays";
 import { failQueuedItems } from "@outbox/server/database";
-import { wasRead } from "@requests/model/lifecycle";
 import { deleteLinkRequests, readActiveRequests } from "@requests/server/database";
 import { cancelStoredRequest } from "@requests/server/lifecycle";
 import type { WebClient } from "@slack/web-api";
@@ -94,12 +92,9 @@ export function unlinkCommand({ database }: SetupCommandOptions): CommandHandler
   return async (_input, { channelId, at }) => {
     const link = await database.write(async (transaction) => {
       const link = await readCallerLink(transaction, channelId);
-      // Owed before the link's rows go, since the 👀 each owes outlives them.
-      const read = (await readActiveRequests(transaction, link.id)).filter(wasRead);
-      await oweDisplays(transaction, read, "released", at);
       await failQueuedItems(transaction, link.id, "unlinked", at);
       await deleteLinkActivity(transaction, link);
-      await deleteLinkRequests(transaction, link.id);
+      await deleteLinkRequests(transaction, link.id, at);
       await deleteLink(transaction, link.id);
       await forgetUnallowedPeople(transaction);
       return link;
@@ -161,9 +156,8 @@ export function denyCommand({ database }: SetupCommandOptions): CommandHandler<"
         denied.has(request.requesterUserId),
       );
       for (const request of asked) {
-        await cancelStoredRequest(transaction, request, "requester_denied");
+        await cancelStoredRequest(transaction, request, "requester_denied", at);
       }
-      await oweDisplays(transaction, asked.filter(wasRead), "released", at);
       return { link, cancelled: asked.length };
     });
     const text = `They can't ask the lead to act from ${link.channel} now.`;

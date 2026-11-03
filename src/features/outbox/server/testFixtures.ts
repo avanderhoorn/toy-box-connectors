@@ -10,7 +10,7 @@ import { createBotClient } from "@slackapi/server/botClient";
 import { createStoredInstallation } from "@slackapi/server/testFixtures";
 import { startFakeSlack } from "../../../../tests/fakes/slack";
 import type { PostImage } from "../model/payload";
-import type { Standing } from "../model/reactions";
+import type { Display } from "../model/reactions";
 import { renderMarkdown } from "../model/rendering";
 import { queuePost, queueReply, readOutboxItem } from "./database";
 import { oweDisplays, readDueDisplays } from "./displays";
@@ -171,9 +171,9 @@ export async function createOutboxWorld(asked: Partial<Request> = {}) {
     read: (id: string) => database.read((sql) => readOutboxItem(sql, id)),
     /** The deletes the bridge owes Slack by now. */
     owed: () => database.read((sql) => readDueDeletions(sql, now())),
-    /** Owes the request's message the display `standing` names, as the bridge does when it changes. */
-    oweDisplay: (standing: Standing) =>
-      database.write((tx) => oweDisplays(tx, [request], standing, now())),
+    /** Owes the request's message `shows`, as the bridge does when it changes. */
+    oweDisplay: (shows: Display) =>
+      database.write((tx) => oweDisplays(tx, [request], shows, now())),
     post: createPostDelivery(database, bot, { now }).post,
   };
 }

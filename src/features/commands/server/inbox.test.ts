@@ -4,8 +4,6 @@ import { openTestDatabase } from "@bridge/server/testFixtures";
 import { createStoredLink } from "@links/server/testFixtures";
 import { failQueuedItem, queueReply } from "@outbox/server/database";
 import { readOwedDisplays } from "@outbox/server/testFixtures";
-import { dismissRequest, serveRequest } from "@requests/model/lifecycle";
-import { saveRequest } from "@requests/server/database";
 import { createStoredRequest } from "@requests/server/testFixtures";
 import { askMessage, sharedFile } from "@slackapi/model/testFixtures";
 import { inboxCommand } from "./inbox";
@@ -21,20 +19,22 @@ test("shows changed requests first, up to its limit, and owes 🏃 only for thos
   const database = await openTestDatabase();
   await createStoredLink(database);
   await createStoredLink(database, "other");
-  const read = await createStoredRequest(database, askedAt(1));
+  const read = { state: "seen", touchedAt: 5 } as const;
+  await createStoredRequest(database, { ...askedAt(1), ...read });
   await createStoredRequest(database, { ...askedAt(2), changedAt: 30 });
-  const updated = await createStoredRequest(database, askedAt(3));
-  const dismissed = await createStoredRequest(database, askedAt(4));
-  await createStoredRequest(database, { ...askedAt(5), linkId: "other", channelId: "C-other" });
-  await database.write(async (transaction) => {
-    await saveRequest(transaction, serveRequest(read, 5));
-    await saveRequest(transaction, {
-      ...serveRequest(updated, 5),
-      attention: "updated",
-      changedAt: 20,
-    });
-    await saveRequest(transaction, dismissRequest(serveRequest(dismissed, 5), "Done"));
+  await createStoredRequest(database, {
+    ...askedAt(3),
+    ...read,
+    attention: "updated",
+    changedAt: 20,
   });
+  await createStoredRequest(database, {
+    ...askedAt(4),
+    ...read,
+    state: "dismissed",
+    closedReason: "Done",
+  });
+  await createStoredRequest(database, { ...askedAt(5), linkId: "other", channelId: "C-other" });
   const inbox = inboxCommand({ database, workspaceUrl: () => null });
 
   const first = await inbox({ limit: 1 }, { ...LEAD, at: 1_000 });

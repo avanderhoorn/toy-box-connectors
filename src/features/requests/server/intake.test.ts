@@ -71,7 +71,7 @@ function advance(database: BridgeDatabase, state: "seen" | "answering" | "answer
     let request = serveRequest((await readRequest(transaction, 1))!, now);
     if (state !== "seen") request = beginAnswer(request, now);
     if (state === "answered") request = confirmAnswer(request);
-    await saveRequest(transaction, request);
+    await saveRequest(transaction, request, now);
   });
 }
 
@@ -104,6 +104,7 @@ test("losing its mention cancels a request, and losing its question cancels it a
   await advance(deleted, "answering");
   expect(await takeDeleteOf(deleted, ask)).toBe(true);
   expect(await requestOf(deleted, ask)).toMatchObject({ closedReason: "source_deleted" });
+  expect(await readOwedDisplays(deleted)).toMatchObject([{ sourceTs: ask.ts, shows: "eyes" }]);
   expect(await deleted.read((sql) => sql`SELECT text FROM messages`)).toEqual([{ text: null }]);
 });
 

@@ -252,7 +252,7 @@ test("a reply Slack refuses owes its image's delete, and goes out again showing 
   // The inbox gives the request back to the lead, which replies again with a new chart.
   await world.database.write(async (tx) => {
     const request = await readRequest(tx, world.request.id);
-    await saveRequest(tx, serveRequest(request!, world.now()));
+    await saveRequest(tx, serveRequest(request!, world.now()), world.now());
   });
   const retried = await world.queue("Build minutes.", ["F-2"]);
   expect(await world.post(retried.id)).toMatchObject({ item: { id: refused.id, state: "sent" } });

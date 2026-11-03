@@ -10,7 +10,6 @@
 
 import type { BridgeDatabase } from "@bridge/server/database";
 import { oweDisplays } from "@outbox/server/displays";
-import { wasRead } from "@requests/model/lifecycle";
 import { expireRequests } from "@requests/server/lifecycle";
 import { REQUESTS_COMMAND, type RoutineRunOutcome } from "@toybox/model";
 import { decideWake, defaultWakeTimings, unreadRequests, type WakeTimings } from "@wakes/model";
@@ -85,8 +84,7 @@ export function startWakeScheduler(
     clearTimeout(timer);
     const at = now();
     await database.write(async (transaction) => {
-      const expired = await expireRequests(transaction, at);
-      await oweDisplays(transaction, expired.filter(wasRead), "released", at);
+      await expireRequests(transaction, at);
       await pruneWakes(transaction, at);
     });
     let next = at + MAX_WAIT;
@@ -104,7 +102,7 @@ export function startWakeScheduler(
         // 🏃 inbox owed, and one that ended meanwhile isn't owed at all.
         if (outcome !== "ran") return;
         const current = (await readLinkWakes(transaction)).find(({ id }) => id === link.id);
-        await oweDisplays(transaction, current ? unreadRequests(current) : [], "woken", now());
+        await oweDisplays(transaction, current ? unreadRequests(current) : [], "eyes", now());
       });
       if (outcome !== "ran") {
         log(`Couldn't wake the lead of Toy Box channel ${link.channelId}: ${unwoken[outcome]}.`);

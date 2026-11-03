@@ -5,14 +5,13 @@
 // request ends with neither once it's answered, and goes back to 👀 if it ends unanswered after the
 // lead read it, so 🏃 never lingers on what nobody works on.
 //
-// Each standing names everything its message shows, so the newest one wins however many before it
-// Slack missed, and the calls that bring a message to what it shows never depend on what it showed.
+// What a message shows follows from where its request stands, so whatever changes a request owes
+// the display the change calls for, and a display names everything its message shows, so the newest
+// one wins however many before it Slack missed.
 
 import type { SlackCall } from "@slackapi/server/botClient";
+import { isActive, wasRead, type Request } from "@requests/model/lifecycle";
 import { isSlackFault } from "./delivery";
-
-/** Where a request stands for whoever asked. */
-export type Standing = "woken" | "working" | "answered" | "released";
 
 /** Everything a request's message shows: 👀, 🏃 or neither. */
 export type Display = "eyes" | "runner" | "bare";
@@ -23,17 +22,18 @@ export type ReactionChange = {
   name: "eyes" | "runner";
 };
 
-/** What a request's message shows at a standing. */
-export function displayOf(standing: Standing): Display {
-  switch (standing) {
-    case "woken":
-    case "released":
-      return "eyes";
-    case "working":
-      return "runner";
-    case "answered":
-      return "bare";
-  }
+/**
+ * The display a change to a request owes its message, or null when what it shows stays right. The
+ * lead's first read shows 🏃, an answer shows neither, and an end the lead read unanswered shows 👀.
+ * One that ends before the lead read it keeps whatever a wake gave it.
+ */
+export function displayChange(
+  before: Pick<Request, "state">,
+  after: Pick<Request, "state">,
+): Display | null {
+  if (after.state === "answered") return "bare";
+  if (wasRead(after)) return wasRead(before) ? null : "runner";
+  return wasRead(before) && !isActive(after.state) ? "eyes" : null;
 }
 
 /**

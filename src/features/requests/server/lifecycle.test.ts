@@ -17,10 +17,8 @@ test("requests that waited their lifetime on the lead expire, but not one whose 
   const active = async () =>
     (await database.read((sql) => readActiveRequests(sql, "link"))).map((request) => request.state);
   expect(await active()).toEqual(["open", "seen", "answering"]);
-  const expired = async (now: number) => (await expire(now)).map(({ state }) => state);
-  expect(await expired(requestLifetimeMs - 1)).toEqual([]);
-  // They come back as they were, so the caller can tell the lead read one.
-  expect(await expired(requestLifetimeMs)).toEqual(["open", "seen"]);
+  await expire(requestLifetimeMs - 1);
+  expect(await active()).toEqual(["open", "seen", "answering"]);
+  await expire(requestLifetimeMs);
   expect(await active()).toEqual(["answering"]);
-  expect(await expired(requestLifetimeMs)).toEqual([]);
 });

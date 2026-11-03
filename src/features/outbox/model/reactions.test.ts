@@ -1,22 +1,31 @@
 import { expect, test } from "bun:test";
 import type { SlackCall } from "@slackapi/server/botClient";
-import {
-  displayOf,
-  judgeReaction,
-  reactionChanges,
-  type Display,
-  type Standing,
-} from "./reactions";
+import type { RequestState } from "@requests/model/lifecycle";
+import { displayChange, judgeReaction, reactionChanges } from "./reactions";
 
-test("each standing shows one display, and answered shows neither reaction", () => {
-  const shows: Record<Standing, Display> = {
-    woken: "eyes",
-    released: "eyes",
-    working: "runner",
-    answered: "bare",
-  };
-  for (const [standing, display] of Object.entries(shows))
-    expect(displayOf(standing as Standing)).toBe(display);
+test("a request shows 🏃 once read, neither once answered, and 👀 again if it ends unanswered", () => {
+  const change = (before: RequestState, after: RequestState) =>
+    displayChange({ state: before }, { state: after });
+  expect(change("open", "seen")).toBe("runner");
+  expect(change("answering", "answered")).toBe("bare");
+  for (const after of ["dismissed", "cancelled", "expired"] as const)
+    expect(change("seen", after)).toBe("eyes");
+  expect(change("answering", "cancelled")).toBe("eyes");
+});
+
+test("a change that leaves what a request's message should show owes nothing", () => {
+  const change = (before: RequestState, after: RequestState) =>
+    displayChange({ state: before }, { state: after });
+  // An edit, a reread, queueing a reply and a refused one all leave 🏃 or what a wake gave.
+  for (const [before, after] of [
+    ["open", "open"],
+    ["seen", "seen"],
+    ["seen", "answering"],
+    ["answering", "seen"],
+  ] as const)
+    expect(change(before, after)).toBeNull();
+  // One that ends before the lead read it keeps whatever a wake gave it.
+  for (const after of ["cancelled", "expired"] as const) expect(change("open", after)).toBeNull();
 });
 
 test("a display adds what it shows before it removes what it doesn't", () => {

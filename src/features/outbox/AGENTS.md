@@ -48,17 +48,17 @@ client, waits for verified Slack readiness, and serializes coalesced command pok
 one-second fallback timer. Stop drains the current pass before storage closes.
 
 A request's message shows 👀 or 🏃 or neither, and the bridge owes Slack that display in
-`reaction_displays`, one row per message that says what it should show. `displayOf` maps a
-standing to it: woken and released show 👀, working shows 🏃 and answered shows neither. The
-wake scheduler owes woken once Toy Box runs a wake, for the requests no lead had read. Inbox owes
-working for the requests it serves for the first time. Whatever ends a request the lead read
-unanswered, which is a dismissal, an expiry, a denial, an unlink or a mention edited out, owes
-released. A reply settled as sent, by posting or by reconciliation proving it landed, owes
-answered, so the message ends with neither even after a lost removal. A refused or unknown
-reply, a post or publication even in the request's thread, a request that ends before the lead
-read it, and an edit or follow-up, a reminder, a pause or a suspension leave the display as it is.
-Each is owed in the write that changes the request, so a stop or crash never separates them, and
-a newer display replaces an older one still owed and its backoff.
+`reaction_displays`, one row per message that says what it should show. Saving a request owes
+the display `displayChange` reads off its change: the lead's first read shows 🏃, an answer shows
+neither, and an end the lead read unanswered, by any path, shows 👀. Unlinking owes 👀 to each
+request the lead read before it deletes them. Beyond the request's own changes, the wake
+scheduler owes 👀 once Toy Box runs a wake, for the requests no lead had read, and a reply
+proven sent after its request was cancelled owes neither, so the message ends bare even after a
+lost removal. A refused or unknown reply, a post or publication even in the request's thread, a
+request that ends before the lead read it, and an edit or follow-up, a reminder, a pause or a
+suspension leave the display as it is. Each is owed in the write that changes the request, so a
+stop or crash never separates them, and a newer display replaces an older one still owed and its
+backoff.
 
 `reactionChanges` orders the calls that bring a message to a display. A display adds what it shows
 before it removes the rest, so a message is never bare mid-swap and never shows both at rest.

@@ -3,7 +3,6 @@
 
 import type { BridgeDatabase } from "@bridge/server/database";
 import { CommandRefusedError } from "@commands/model/protocol";
-import { oweDisplays } from "@outbox/server/displays";
 import { dismissRequest, RequestStateError } from "@requests/model/lifecycle";
 import { saveRequest } from "@requests/server/database";
 import { readCallerLink, readLinkRequest, SEE_INBOX } from "./link";
@@ -19,13 +18,11 @@ export function dismissCommand({ database }: DismissCommandOptions): CommandHand
       const link = await readCallerLink(transaction, channelId);
       const request = await readLinkRequest(transaction, link, id);
       try {
-        await saveRequest(transaction, dismissRequest(request, reason));
+        await saveRequest(transaction, dismissRequest(request, reason), at);
       } catch (error) {
         if (!(error instanceof RequestStateError)) throw error;
         throw new CommandRefusedError(`r${id} wasn't dismissed. ${error.message} ${SEE_INBOX}`);
       }
-      // Only a request the lead read can be dismissed, and it goes back to 👀.
-      await oweDisplays(transaction, [request], "released", at);
     });
     return { result: { request: `r${id}`, state: "dismissed" }, text: `Dismissed r${id}.` };
   };

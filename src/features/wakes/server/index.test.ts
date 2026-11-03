@@ -88,6 +88,7 @@ test("doesn't owe 👀 to a request the lead read while Toy Box ran its wake", a
       await saveRequest(
         transaction,
         serveRequest((await readRequest(transaction, asked.id))!, NOW),
+        NOW,
       );
     });
     return "ran" as const;
@@ -97,7 +98,7 @@ test("doesn't owe 👀 to a request the lead read while Toy Box ran its wake", a
   await running.promise;
   // Stopping waits for the pass, so what it owes would be in by now.
   await scheduler.stop();
-  expect(await readOwedDisplays(database)).toEqual([]);
+  expect(await readOwedDisplays(database)).toMatchObject([{ shows: "runner" }]);
 });
 
 test("owes 👀 back to the requests the lead read that expired unanswered, and not the ones it never read", async () => {

@@ -88,7 +88,7 @@ export async function queueReply(
     throw new OutboxRefusedError("This request's link isn't active.");
   const { payload, hash } = rendered(input.text, [], input.images);
   try {
-    await saveRequest(tx, beginAnswer(request, now));
+    await saveRequest(tx, beginAnswer(request, now), now);
   } catch (error) {
     if (!(error instanceof RequestStateError)) throw error;
     throw new OutboxRefusedError(error.message);
@@ -422,10 +422,12 @@ async function settleRequest(tx: Bun.SQL, item: OutboxItem, now: number): Promis
   if (item.kind !== "reply" || item.requestId === null) return;
   const request = await readRequest(tx, item.requestId);
   if (request === null) return;
-  if (item.state === "sent") await oweDisplays(tx, [request], "answered", now);
-  if (request.state !== "answering") return;
-  if (item.state === "sent") await saveRequest(tx, confirmAnswer(request));
-  if (item.state === "failed") await saveRequest(tx, returnToSeen(request, now));
+  if (request.state !== "answering") {
+    if (item.state === "sent") await oweDisplays(tx, [request], "bare", now);
+    return;
+  }
+  if (item.state === "sent") await saveRequest(tx, confirmAnswer(request), now);
+  if (item.state === "failed") await saveRequest(tx, returnToSeen(request, now), now);
 }
 
 async function retryFailed(
