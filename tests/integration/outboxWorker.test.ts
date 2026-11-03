@@ -253,17 +253,21 @@ test("displays owed while Slack isn't ready leave only the newest to show once i
 });
 
 test("a display owed before the bridge stopped lands once a new worker starts over its database", async () => {
+  let worker: OutboxWorker | undefined;
+  const errors: unknown[] = [];
+  // Registered before the world's, so the worker stops before the database closes.
+  onTestFinished(async () => {
+    await worker?.stop();
+    expect(errors).toEqual([]);
+  });
   const world = await createOutboxWorld();
   await world.oweDisplay("eyes");
-  const run = startOutboxWorker(world.database, world.bot, {
+  worker = startOutboxWorker(world.database, world.bot, {
     ready: () => true,
     onChange: () => {},
-    onError: (error) => {
-      throw error;
-    },
+    onError: (error) => errors.push(error),
     now: world.now,
   });
-  onTestFinished(() => run.stop());
 
   await waitFor(() =>
     expect(world.slack.reactionNames("C-link", world.request.sourceTs)).toEqual(["eyes"]),
@@ -273,7 +277,13 @@ test("a display owed before the bridge stopped lands once a new worker starts ov
 
 /** A worker whose first 👀 call, which Slack answers as `unanswered` says, owes `working` while out. */
 async function overtakenWhileCalling(unanswered: boolean) {
+  let worker: OutboxWorker | undefined;
   const errors: unknown[] = [];
+  // Registered before the world's, so the worker stops before the database closes.
+  onTestFinished(async () => {
+    await worker?.stop();
+    expect(errors).toEqual([]);
+  });
   const world = await createOutboxWorld();
   await world.oweDisplay("eyes");
   let overtaken = false;
@@ -287,15 +297,11 @@ async function overtakenWhileCalling(unanswered: boolean) {
       return unanswered ? { kind: "unknown", detail: "timed out" } : outcome;
     },
   };
-  const worker = startOutboxWorker(world.database, bot, {
+  worker = startOutboxWorker(world.database, bot, {
     ready: () => true,
     onChange: () => {},
     onError: (error) => errors.push(error),
     now: world.now,
-  });
-  onTestFinished(async () => {
-    await worker.stop();
-    expect(errors).toEqual([]);
   });
   await waitFor(() =>
     expect(world.slack.reactionNames("C-link", world.request.sourceTs)).toEqual(["runner"]),
@@ -374,7 +380,13 @@ test("a newer display replaces one waiting out its backoff, and starts over at o
 });
 
 test("a pass posts first, then tries one display Slack leaves unanswered, then deletes what's due", async () => {
+  let worker: OutboxWorker | undefined;
   const errors: unknown[] = [];
+  // Registered before the world's, so the worker stops before the database closes.
+  onTestFinished(async () => {
+    await worker?.stop();
+    expect(errors).toEqual([]);
+  });
   const world = await createOutboxWorld();
   const second = await createStoredRequest(world.database, { sourceTs: "1700000300.000100" });
   const post = await world.queuePost();
@@ -383,15 +395,11 @@ test("a pass posts first, then tries one display Slack leaves unanswered, then d
     await oweFileDeletes(tx, ["F-owed"], world.now(), world.now());
   });
   world.slack.failNext("reactions.add", { status: 503 });
-  const worker = startOutboxWorker(world.database, world.bot, {
+  worker = startOutboxWorker(world.database, world.bot, {
     ready: () => true,
     onChange: () => {},
     onError: (error) => errors.push(error),
     now: world.now,
-  });
-  onTestFinished(async () => {
-    await worker.stop();
-    expect(errors).toEqual([]);
   });
 
   const methods = () => world.slack.calls.map((call) => call.method);
@@ -450,20 +458,22 @@ test("a call Slack fails on its side is tried again like one it leaves unanswere
 
 test("a display Slack never answers is given up after 30 days, and logged", async () => {
   const logged = captureLog();
+  let worker: OutboxWorker | undefined;
   const errors: unknown[] = [];
+  // Registered before the world's, so the worker stops before the database closes.
+  onTestFinished(async () => {
+    await worker?.stop();
+    expect(errors).toEqual([]);
+  });
   const world = await createOutboxWorld();
   await world.oweDisplay("eyes");
   for (let attempt = 0; attempt < 20; attempt++)
     world.slack.failNext("reactions.add", { status: 503 });
-  const worker = startOutboxWorker(world.database, world.bot, {
+  worker = startOutboxWorker(world.database, world.bot, {
     ready: () => true,
     onChange: () => {},
     onError: (error) => errors.push(error),
     now: world.now,
-  });
-  onTestFinished(async () => {
-    await worker.stop();
-    expect(errors).toEqual([]);
   });
   await waitFor(async () =>
     expect(await readOwedDisplays(world.database)).toMatchObject([{ attempts: 1 }]),
